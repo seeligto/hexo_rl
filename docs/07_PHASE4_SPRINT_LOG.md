@@ -2946,3 +2946,16 @@ A0 landed (evalgate wave + 20 per-variant `opponents.bootstrap_anchor.encoding:`
 - **Instrument corrections landed:** v3.1 gate amendment (C1–C3 authoritative; disagree descriptive), anchor-incumbent re-stamp precondition (g2), fire-rate read location. Artifacts rsynced local (`reports/d_ws3v3/` + 4 ckpt dirs).
 
 **run2_mw_fresh LAUNCHED 2026-07-05 (~16:50 UTC, vast 5080, $0.23/hr ≈ $84/15.3d):** seeding OFF per handshake (THIN-STILL ≠ GENERALIZES; verdict on crippled-lineage net = non-conclusive against mechanism; seeding banked as mid-run intervention if held-out trap-flip plateaus). Anchor = `_ls`-stamped mint; `_ls` mixing corpus (fresh-bootstrap regime — r2 warm-start yellow flag noted, first suspect if 5k/25k conversion gates read low); 5k probe gate = first mandatory stop.
+
+### §D-PRELAUNCH SealBot-cost tuning (2026-07-06, run2 live-ops)
+
+**Measured (vast + laptop):** the SealBot eval phase is the DOMINANT eval cost — 3.45h/100 games on vast (SealBot depth-5 ≈ 4s/move). `time_limit` is NOT the lever: depth-5 finishes in 0.6–6.9s (never hits 10s or 60s — 10s and 60s measured byte-identical); depth-6 uncapped is ~40s/move and depth-6@10s CAPS at 10.00s/move every move (2.65× depth-5 for a partial extra ply) → **depth-6 is a cost trap, kept at 5**.
+
+**Changes (commit a95a70e):**
+- Deploy SealBot arm DROPPED (`deploy_strength.sealbot_games: 0`; new knob, 0=off). It was reported-only — `sealbot_wr` is NOT in `decide_promotion` (gate = distinct-game bootstrap CI-lower > 0 AND wr_confirm ≥ 0.55 over the pooled screen+confirm vs-best games) — so dropping is promotion-neutral. Saves ~confirm_n SealBot games/deploy-round.
+- Deploy `confirm_n` 200→100 (pooled 180 vs-best games; ample for a CI-lower gate).
+- Normal-eval `sealbot.n_games` 100→50 (halves the 3.45h/round phase; Wilson95 hw ~14pp still a fine WR trajectory).
+- Deploy stride kept at 4 (every 100k) — promotion granularity is a deliberate training lever (operator call).
+- Projected runtime ~17d → **~13–14d**.
+
+**MANUAL follow-up owed:** deploy no longer runs SealBot-vs-deploy-head. If the promotion trajectory or SealBot WR looks off at a milestone, run an OFFLINE SealBot-vs-deploy-head check (depth 5, or a one-off depth-6 rough read) — re-enable in-loop via `sealbot_games>0` only if it becomes load-bearing. SealBot WR (normal eval, every 25k, now n=50) remains the promotion-independent true-north.
