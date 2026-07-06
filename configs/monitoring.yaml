@@ -37,7 +37,11 @@ run_feed:
   # run identity (was hardcoded at d1m_monitor.py:149 + 1431-1433)
   host: vast                          # ssh host alias (D1M_HOST)
   repo: /workspace/hexo_rl            # remote repo root (D1M_REPO)
-  default_log_path: logs/d1m/d1m_gumbel_m16_n150.jsonl  # run-log path, relative to repo (D1M_LOG)
+  # Current live run. Named via `--run-name run2_mw_fresh`, so this path is
+  # STABLE across restarts (always the latest events of the active run). Override
+  # any other log with the D1M_LOG env var. (Was the retired D-1M run:
+  # logs/d1m/d1m_gumbel_m16_n150.jsonl.)
+  default_log_path: logs/run2_mw_fresh.jsonl  # run-log path, relative to repo (D1M_LOG)
   encoding: v6_live2_ls               # run encoding -> derived entropy upper ref (D1M_ENCODING)
   # sealbot_slope CI knobs (load-bearing — VERBATIM from d1m_monitor.py)
   sealbot_slope_min_points: 5         # K — false-green guard; < K -> neutral
