@@ -186,7 +186,13 @@ eval_interval: 25000
 eval_pipeline:
   opponents:
     best_checkpoint: { enabled: true,  stride: 1, n_games: 200, model_sims: 64, opponent_sims: 64 }
-    sealbot:         { enabled: true,  stride: 1, n_games: 100 }
+    # n_games 100 -> 50 (D-PRELAUNCH live-ops 2026-07-06): the SealBot phase is
+    # the dominant eval cost — MEASURED 3.45h/100 games on vast (SealBot depth-5
+    # ~4s/move; time_limit is NOT the driver — depth-6@10s always caps at 10s/move
+    # = 2.65x depth-5 for a partial ply, so depth-6 is a cost trap, kept at 5).
+    # 50 games/25k round keeps a fine WR trajectory (Wilson95 hw ~14pp) at half the
+    # cost (~5.75d -> ~2.9d over the run). SealBot WR is the true-north signal.
+    sealbot:         { enabled: true,  stride: 1, n_games: 50 }
     random:          { enabled: true,  stride: 1, n_games: 20  }
     # Anchor's OWN declared encoding (D-EVALGATE deep-merge trap, design doc
     # §1.2) — never the candidate's. bootstrap_model_v6_live2_8300.pt is
@@ -218,9 +224,19 @@ eval_pipeline:
     # ad-hoc mid-investigation harness, D-DECIDE A2). Reads the SAME
     # (gumbel_m, n_sims_full, c_visit, c_scale) this run trains under — no
     # silent proxy-regime substitution (D-LOCALIZE "triple miss" lesson).
-    # All other deploy_strength.* keys left at configs/eval.yaml base
-    # defaults (screen_n:80, confirm_n:200, sealbot_max_depth:5, n_boot:1000,
-    # min_distinct_per_pair:10).
+    # Other deploy_strength.* keys at configs/eval.yaml base defaults
+    # (screen_n:80, sealbot_max_depth:5, n_boot:1000, min_distinct_per_pair:10).
+    #
+    # confirm_n: 100 (was base 200) — the promotion gate is the distinct-game
+    # bootstrap CI-lower > 0 + WR>=0.55 over the pooled screen(80)+confirm vs-best
+    # games; 180 pooled games is ample for a CI-lower gate (D-PRELAUNCH 2026-07-06).
+    #
+    # sealbot_games: 0 — DROP the SealBot external-bar arm. It is NOT in the
+    # promotion decision (sealbot_wr is reported-only) and was the dominant
+    # deploy-round cost (~confirm_n games of SealBot depth-5, hours/round). Run a
+    # MANUAL SealBot check offline at a milestone if the promotion trajectory looks
+    # off (see memory deploy-strength-inloop-cost / sprint-log §D-PRELAUNCH). The
+    # knob is live (deploy_strength_eval.py) so re-enabling = set sealbot_games>0.
     #
     # stride: 4 → deploy gate runs every 100k steps (round_idx = step//eval_interval,
     # fires when round_idx % 4 == 0 → 100k/200k/…; step-based, restart-safe). ADDED
@@ -236,6 +252,8 @@ eval_pipeline:
     deploy_strength:
       enabled: true
       stride: 4
+      confirm_n: 100
+      sealbot_games: 0
   gating:
     # Fresh-launch incumbent pin (D-LOOPFIX W2) — asserts best_model.pt
     # resolves to the intended bootstrap anchor at launch. MUST be

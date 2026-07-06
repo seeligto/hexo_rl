@@ -270,3 +270,75 @@ def test_pipeline_blocks_when_deploy_strength_crashes_no_puct_fallback(
     assert result["promoted"] is False, (
         "crashed deploy gate must block, never fall back to the PUCT wr_best gate"
     )
+
+
+# ── (5) SealBot external-bar arm is droppable (sealbot_games=0) ────────────────
+# The arm is NOT in the promotion gate (sealbot_wr reported-only) and is the
+# dominant deploy-round cost (SealBot depth-5 ~4s/move). D-PRELAUNCH run2 drops it.
+
+
+def test_sealbot_games_defaults_to_confirm_n_and_honours_override() -> None:
+    d_default = DeployStrengthConfig.from_cfg({"confirm_n": 200}, promotion_winrate=0.55)
+    assert d_default.sealbot_games == 200, "default back-compat = confirm_n"
+    d_zero = DeployStrengthConfig.from_cfg(
+        {"confirm_n": 100, "sealbot_games": 0}, promotion_winrate=0.55)
+    assert d_zero.sealbot_games == 0, "explicit 0 drops the arm"
+    d_small = DeployStrengthConfig.from_cfg(
+        {"confirm_n": 100, "sealbot_games": 50}, promotion_winrate=0.55)
+    assert d_small.sealbot_games == 50, "decoupled from confirm_n"
+
+
+def _run_evaluator_recording_pairs(sealbot_games: int):
+    """Run DeployStrengthEvaluator.run with _play_pair + aggregation stubbed so no
+    real games play. Returns (result, list of (label_a,label_b,n_games) played)."""
+    from unittest.mock import patch
+    import hexo_rl.eval.deploy_strength_eval as dse
+
+    model, spec = _tiny_model()
+    config = {
+        "encoding": "v6",
+        "selfplay": {"gumbel_m": 16, "c_visit": 50.0, "c_scale": 1.0,
+                     "playout_cap": {"n_sims_full": 32}},
+        "mcts": {"c_puct": 1.5},
+    }
+    deploy_cfg = {"screen_n": 8, "confirm_n": 8, "sealbot_games": sealbot_games,
+                  "screen_confirm_lo": 0.0}  # force escalation
+    calls: list = []
+
+    def fake_play_pair(bot_a, bot_b, label_a, label_b, enc, n_games, *a, **k):
+        calls.append((label_a, label_b, n_games))
+        # winner alternates so cand wins enough to escalate + clear
+        return [{"p1": label_a if gi % 2 == 0 else label_b,
+                 "p2": label_b if gi % 2 == 0 else label_a,
+                 "winner": "p1" if gi % 2 == 0 else "p2",  # cand wins each
+                 "plies": 4, "moves": [[0, 0]], "head_fired": True}
+                for gi in range(n_games)]
+
+    with patch.object(dse, "_play_pair", side_effect=fake_play_pair), \
+         patch.object(dse, "aggregate_games",
+                      return_value={"rungs": [{"label": "cand", "elo": 10.0},
+                                              {"label": "best", "elo": 0.0}]}), \
+         patch.object(dse, "bootstrap_ratings_ci", return_value={"cand": (1.0, 20.0)}), \
+         patch.object(dse, "effective_n_guard",
+                      return_value={"low_power_warning": False, "copy_multiplier": 1.0}), \
+         patch.object(dse, "distinct_per_pair", return_value={("best", "cand"): 8}):
+        ev = dse.DeployStrengthEvaluator(model, torch.device("cpu"), config,
+                                         deploy_cfg=deploy_cfg, promotion_winrate=0.55)
+        res = ev.run(model)
+    return res, calls
+
+
+def test_run_skips_sealbot_arm_when_zero() -> None:
+    res, calls = _run_evaluator_recording_pairs(sealbot_games=0)
+    seal_calls = [c for c in calls if "sealbot" in (c[0], c[1])]
+    assert seal_calls == [], "sealbot pair must NOT be played when sealbot_games=0"
+    assert res.sealbot_wr is None, "sealbot_wr must be None when arm dropped"
+    # promotion path still runs on the vs-best games (screen + confirm played)
+    assert res.confirmed is True
+
+
+def test_run_plays_sealbot_arm_when_positive() -> None:
+    res, calls = _run_evaluator_recording_pairs(sealbot_games=6)
+    seal_calls = [c for c in calls if "sealbot" in (c[0], c[1])]
+    assert len(seal_calls) == 1 and seal_calls[0][2] == 6, "sealbot arm plays sealbot_games"
+    assert res.sealbot_wr is not None

@@ -203,6 +203,7 @@ class DeployStrengthConfig:
     screen_confirm_hi: float
     opening_plies: int
     sealbot_max_depth: int
+    sealbot_games: int
     n_boot: int
     seed_base: int
     min_distinct_per_pair: int
@@ -224,6 +225,13 @@ class DeployStrengthConfig:
             screen_confirm_hi=hi,
             opening_plies=int(deploy_cfg.get("opening_plies", 4)),
             sealbot_max_depth=int(deploy_cfg.get("sealbot_max_depth", 5)),
+            # SealBot external-bar game count. 0 = SKIP the arm entirely (it is
+            # NOT in the promotion gate — sealbot_wr is reported-only — and is the
+            # dominant deploy-round cost: SealBot depth-5 ~4s/move measured, so
+            # ~confirm_n games ≈ hours). Default back-compat = confirm_n. Run a
+            # manual SealBot check offline at a milestone if the promotion
+            # trajectory looks off (see memory deploy-strength-inloop-cost).
+            sealbot_games=int(deploy_cfg.get("sealbot_games", confirm_n)),
             n_boot=int(deploy_cfg.get("n_boot", 1000)),
             seed_base=int(deploy_cfg.get("seed_base", 20260625)),
             min_distinct_per_pair=int(deploy_cfg.get("min_distinct_per_pair", 10)),
@@ -447,12 +455,19 @@ class DeployStrengthEvaluator:
         dpp = distinct_per_pair(pooled, labels)
         dpp_min = min(dpp.values()) if dpp else None
 
-        # ── External bar (fixed-depth SealBot) ────────────────────────────────
-        seal_games = _play_pair(
-            self._cand, self._sealbot(), "cand", "sealbot", self.encoding_name,
-            d.confirm_n, d.opening_plies, d.seed_base + 104729,
-        )
-        sealbot_wr, _, _, _ = _wr_for_label(seal_games, "cand")
+        # ── External bar (fixed-depth SealBot) — SKIPPED when sealbot_games == 0.
+        # NOT in the promotion gate below (sealbot_wr is reported-only), and the
+        # dominant deploy-round cost, so it is droppable without touching the
+        # promotion decision. Uses its OWN game count (sealbot_games), decoupled
+        # from confirm_n. ──
+        if d.sealbot_games > 0:
+            seal_games = _play_pair(
+                self._cand, self._sealbot(), "cand", "sealbot", self.encoding_name,
+                d.sealbot_games, d.opening_plies, d.seed_base + 104729,
+            )
+            sealbot_wr, _, _, _ = _wr_for_label(seal_games, "cand")
+        else:
+            sealbot_wr = None
 
         head_frac_all = (
             sum(1 for g in pooled if g["head_fired"]) / len(pooled) if pooled else 0.0
