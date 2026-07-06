@@ -49,6 +49,8 @@ run_feed:
   sealbot_min_rise: 0.03              # +3pp effect-size floor over the window
   sealbot_fallback_sigma: 0.12        # conservative per-point sigma when CI absent
   # parse sampling / binning (mirror the REMOTE collector constants)
-  bin_width: 30000                    # step-bucket width for binned trajectories
+  bin_width: 12500                    # step-bucket width for binned trajectories
+                                      # (12.5k = half the 25k eval/signature cadence
+                                      #  -> 2 trajectory points per eval round; was 30000)
   ts_sample: 200                      # sample every Nth train_step (value-bce trajectory)
   gc_sample: 50                       # sample every Nth game_complete (colony trajectory)
