@@ -425,6 +425,7 @@ class RunFeedSnapshot:
     rate_effective: float = 0.0
     rate_recent: float = 0.0
     eval_rounds: List[Dict[str, Any]] = field(default_factory=list)
+    eval_phases: List[Dict[str, Any]] = field(default_factory=list)
     fwt: List[Dict[str, Any]] = field(default_factory=list)
     vspread_last: Optional[Dict[str, Any]] = None
     vspread_canary_last: Optional[Dict[str, Any]] = None
@@ -450,6 +451,7 @@ class RunFeedSnapshot:
             "rate_effective": self.rate_effective,
             "rate_recent": self.rate_recent,
             "eval_rounds": self.eval_rounds,
+            "eval_phases": self.eval_phases,
             "fwt": self.fwt,
             "vspread_last": self.vspread_last,
             "vspread_canary_last": self.vspread_canary_last,
@@ -493,6 +495,7 @@ def parse_feed(records: Iterable[dict], bin_width: int = 30000,
 
     summ: List[dict] = []
     rounds: List[dict] = []
+    evphases: List[dict] = []
     fwt: List[dict] = []
     vspread: List[dict] = []
     vsc: List[dict] = []
@@ -514,6 +517,8 @@ def parse_feed(records: Iterable[dict], bin_width: int = 30000,
                 summ.append(d)
             elif ev == "evaluation_round_complete":
                 rounds.append(d)
+            elif ev == "evaluation_games_complete":
+                evphases.append(d)
             elif ev == "forced_win_trend":
                 fwt.append(d)
             elif ev == "value_spread_alert":
@@ -583,6 +588,24 @@ def parse_feed(records: Iterable[dict], bin_width: int = 30000,
             if len(colony_recent) >= 500:
                 break
     colony_recent_mean = (sum(colony_recent) / len(colony_recent)) if colony_recent else None
+
+    # per-phase eval WRs (evaluation_games_complete has no step field — map by ts).
+    # Surfaces sealbot/best_arena/random WR as each phase LANDS, even mid-round or
+    # on an interrupted round (evaluation_round_complete only fires at round END).
+    # Step is the WALL-CLOCK training step at phase completion (eval runs
+    # concurrently), so it reads ~a fraction past the evaluated checkpoint's step.
+    eval_phases_out = []
+    for d in evphases:
+        try:
+            eval_phases_out.append({
+                "step": step_at(_record_ts(d)),
+                "phase": d.get("phase"),
+                "wr": d.get("winrate"),
+                "n": d.get("n_games"),
+            })
+        except Exception:
+            pass
+    eval_phases_out = eval_phases_out[-12:]  # recent tail only
 
     # map each forced_win_trend ts -> step (no step field in event)
     fwt_out = []
@@ -734,6 +757,7 @@ def parse_feed(records: Iterable[dict], bin_width: int = 30000,
         rate_effective=effective,
         rate_recent=recent,
         eval_rounds=rounds,
+        eval_phases=eval_phases_out,
         fwt=fwt_out,
         vspread_last=vspread[-1] if vspread else None,
         vspread_canary_last=vsc[-1] if vsc else None,
@@ -760,6 +784,7 @@ def parse_feed(records: Iterable[dict], bin_width: int = 30000,
 _DECISION_EVENT_SUBSTRINGS = (
     "train_step_summary",
     "evaluation_round_complete",
+    "evaluation_games_complete",  # per-phase WRs — visible mid-round / on interrupted rounds
     "forced_win_trend",
     "value_spread",
     "startup",
@@ -794,7 +819,8 @@ _REMOTE_SUBSAMPLE_AWK = (
     '/train_step_summary/            { a++; if (a % TS == 1) print; la=$0; next }\n'
     '/"event": "train_step"/         { b++; if (b % TS == 1) print; lb=$0; next }\n'
     '/"event": "game_complete"/      { c++; if (c % GC == 1) print; lc=$0; next }\n'
-    '/evaluation_round_complete/ || /forced_win_trend/ || /value_spread/ '
+    '/evaluation_round_complete/ || /evaluation_games_complete/ '
+    '|| /forced_win_trend/ || /value_spread/ '
     '|| /startup/                    { print; next }\n'
     'END { if (la != "") print la; if (lb != "") print lb; if (lc != "") print lc }\n'
 )

@@ -3,6 +3,7 @@
   "colony_recent_n": 300,
   "encoding": "v6_live2_ls",
   "eval_overhead_frac": 0.057947019867549666,
+  "eval_phases": [],
   "eval_rounds": [
     {
       "ci_best": [

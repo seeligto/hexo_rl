@@ -417,6 +417,7 @@ def build(data, show_help, use_charts, cfg, default_encoding):
     total = data.get("total_steps") or 1000000
     step = ls.get("step", 0)
     rounds = data.get("eval_rounds") or []
+    eval_phases = data.get("eval_phases") or []
     fwt = data.get("fwt") or []
     traj = data.get("traj") or []
     # policy-entropy upper reference = ln(policy_logit_count), DERIVED at runtime
@@ -511,10 +512,38 @@ def build(data, show_help, use_charts, cfg, default_encoding):
                        style="italic " + (sb_slope["style"] or "dim"))
         body = Group(st, sb_note)
     else:
-        body = Text("no eval rounds yet (first at step %s; now at %d)"
+        body = Text("no COMPLETED eval rounds yet (evaluation_round_complete fires at "
+                    "round END; first at step %s; now at %d)"
                     % ("25,000" if _is_run2 else "30,000", step),
                     style="dim")
-    panels.append(Panel(body, title="strength (eval rounds)", border_style="magenta"))
+    # Per-phase live view — surfaces sealbot/best_arena/random WR as each phase
+    # LANDS (evaluation_games_complete), so an in-progress or interrupted round is
+    # visible before the round-summary event. Grouped by round (a `random` phase
+    # starts a new round); step ~ the checkpoint step (random completes ~fast).
+    if eval_phases:
+        groups = []
+        cur = None
+        for p in eval_phases:
+            if cur is None or p.get("phase") == "random":
+                cur = {"step": p.get("step"), "phases": {}}
+                groups.append(cur)
+            cur["phases"][p.get("phase")] = p.get("wr")
+        pt = Table(title=None, expand=True, show_edge=False)
+        for c in ("~step", "random", "sealbot", "best_arena"):
+            pt.add_column(c, justify="right")
+        for g in groups[-4:]:
+            ph = g["phases"]
+            pt.add_row(
+                "~%s" % f'{g["step"]:,}' if g.get("step") is not None else "?",
+                fmt(ph.get("random"), 2),
+                Text(fmt(ph.get("sealbot"), 3), style=cls("wr_sealbot", ph.get("sealbot"))),
+                fmt(ph.get("best_arena"), 3),
+            )
+        pnote = Text("per-phase (evaluation_games_complete) — live as each phase lands; "
+                     "step ~checkpoint. SealBot WR is the true-north signal.",
+                     style="italic dim")
+        body = Group(body, pt, pnote) if rounds else Group(pt, pnote)
+    panels.append(Panel(body, title="strength (eval rounds + live per-phase)", border_style="magenta"))
 
     # ---- coherence cluster (HEADLINE) ----
     coh = Table.grid(padding=(0, 1))
