@@ -185,15 +185,24 @@ mixing:
 eval_interval: 25000
 eval_pipeline:
   opponents:
-    best_checkpoint: { enabled: true,  stride: 1, n_games: 200, model_sims: 64, opponent_sims: 64 }
+    # NORMAL-EVAL STRIDE 2 (D-PRELAUNCH live-ops 2026-07-07): eval overhead measured
+    # ~46-56% of wall (eval rounds 4-7h, ~back-to-back at every-25k). Striding the
+    # normal opponents to every 50k (round_idx = step//eval_interval, run when
+    # round_idx % 2 == 0 -> 50k/100k/150k/200k) ~halves normal-eval overhead
+    # (~56%->~38%, ~1.5-2d saved). deploy_strength stays stride 4 (100k/200k) so
+    # promotion cadence is unchanged and ALWAYS coincides with a normal round (full
+    # SealBot/best_arena monitoring AT the promotion checkpoint). Odd rounds
+    # (25k/75k/125k/175k) are empty (all strided out). SealBot WR read as a trend
+    # over rounds — 50k resolution is ample; hard-abort safety reads every step.
+    best_checkpoint: { enabled: true,  stride: 2, n_games: 200, model_sims: 64, opponent_sims: 64 }
     # n_games 100 -> 50 (D-PRELAUNCH live-ops 2026-07-06): the SealBot phase is
     # the dominant eval cost — MEASURED 3.45h/100 games on vast (SealBot depth-5
     # ~4s/move; time_limit is NOT the driver — depth-6@10s always caps at 10s/move
     # = 2.65x depth-5 for a partial ply, so depth-6 is a cost trap, kept at 5).
     # 50 games/25k round keeps a fine WR trajectory (Wilson95 hw ~14pp) at half the
     # cost (~5.75d -> ~2.9d over the run). SealBot WR is the true-north signal.
-    sealbot:         { enabled: true,  stride: 1, n_games: 50 }
-    random:          { enabled: true,  stride: 1, n_games: 20  }
+    sealbot:         { enabled: true,  stride: 2, n_games: 50 }
+    random:          { enabled: true,  stride: 2, n_games: 20  }
     # Anchor's OWN declared encoding (D-EVALGATE deep-merge trap, design doc
     # §1.2) — never the candidate's. bootstrap_model_v6_live2_8300.pt is
     # itself v6_live2-stamped (single-window shape, shared wire signature).
@@ -218,7 +227,7 @@ eval_pipeline:
     # per that memo + offwindow_probe.py's adv_reference="current" empirical
     # resolution, 2026-06-28). Do NOT add a control-arm contrast read in-loop
     # until that bug is fixed.
-    offwindow_adversary: { enabled: true, stride: 1, n_games: 100, arm: "exploit", model_sims: 128 }
+    offwindow_adversary: { enabled: true, stride: 2, n_games: 100, arm: "exploit", model_sims: 128 }
     # BUNDLE item (design doc §3.3) — pinned ON from step 0, unlike every
     # prior v6_live2_ls variant (which only got a deploy-matched read via an
     # ad-hoc mid-investigation harness, D-DECIDE A2). Reads the SAME
