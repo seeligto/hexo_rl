@@ -255,11 +255,14 @@ eval_pipeline:
       confirm_n: 100
       sealbot_games: 0
   gating:
-    # Fresh-launch incumbent pin (D-LOOPFIX W2) — asserts best_model.pt
-    # resolves to the intended bootstrap anchor at launch. MUST be
-    # cleared/repointed on any resume after the first promotion (it will
-    # legitimately hard-fail otherwise — see design doc §4).
-    expected_anchor_sha256: "ebf2ed39fd64db525864aeade75972372da9418cc8179347afc8cecb60ba6db8"
+    # Fresh-launch incumbent pin (D-LOOPFIX W2) — asserted best_model.pt = the
+    # bootstrap anchor at the FRESH launch. CLEARED 2026-07-07 after the FIRST
+    # PROMOTION (100k deploy round PROMOTE, applied at the 125k boundary:
+    # best_model.pt bootstrap ebf2ed39… -> 4844f67c…). Post-promotion best_model
+    # legitimately advances every promoted deploy round, so a fixed sha pin would
+    # hard-fail resolve_anchor on any resume — a resume now correctly loads
+    # whatever best_model.pt has advanced to. Re-enable only for a fresh restart.
+    # expected_anchor_sha256: "ebf2ed39fd64db525864aeade75972372da9418cc8179347afc8cecb60ba6db8"
     promotion_winrate: 0.55
     require_ci_above_half: true
     bootstrap_floor:
