@@ -901,3 +901,90 @@ def read_remote_ssh(host: str, repo: str, log: str, ts_sample: int = 200,
         except Exception:
             continue
     return out
+
+
+# Sentinel lines delimiting the live-tip block in read_live_tip's remote output.
+_TIP_NOW = "###TIP_NOW###"
+_TIP_FILE = "###TIP_FILE###"
+
+
+def read_live_tip(host: str, repo: str, log: str, timeout: int = 30) -> Optional[dict]:
+    """Cheap probe of the ACTUALLY-LIVE run tip — robust to resumes + clock skew.
+
+    The heavy ``read_remote_ssh`` subsamples and, over a multi-file glob, its
+    END-block captures the LAST FILE's tail (an archived restart segment), not the
+    live log's — so the reported step/last-event lag the true tip by up to
+    ts_sample×log_interval steps and look "disconnected" right after a resume.
+    This helper instead: (1) resolves the LIVE log = newest-mtime glob member (so a
+    resume that rotates/re-creates the log is followed automatically), (2) tails its
+    true-last train_step_summary + train_step (un-subsampled), and (3) reads the
+    REMOTE clock so "last event ago" is computed vast-clock-relative (the vast box
+    runs ~2h behind real UTC — a laptop-now minus vast-ts age is inflated by the
+    skew and falsely reads as stale). Returns None on any failure (caller falls
+    back to the parsed snapshot); never raises."""
+    g = log if any(ch in log for ch in "*?[") else "'%s'" % log
+    # date +%s.%N (remote epoch) ; newest-mtime member ; its last summary + train_step
+    # NB: sentinels MUST be single-quoted in the echo — a bare `###...` is a shell
+    # COMMENT (# starts a comment at word start) and would print nothing.
+    remote = (
+        "cd '%s' && echo '%s' && date +%%s.%%N && "
+        "F=$(ls -t %s 2>/dev/null | head -1) && echo '%s' && echo \"$F\" && "
+        "tail -c 400000 \"$F\" 2>/dev/null | grep '\"train_step_summary\"' | tail -1 && "
+        "tail -c 400000 \"$F\" 2>/dev/null | grep '\"event\": \"train_step\"' | tail -1"
+        % (repo, _TIP_NOW, g, _TIP_FILE)
+    )
+    cmd = ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=15", host, remote]
+    try:
+        p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+    except Exception:  # noqa: BLE001
+        return None
+    if p.returncode != 0:
+        return None
+    now_epoch = None
+    live_file = None
+    summary = None
+    train = None
+    lines = [ln.strip() for ln in p.stdout.splitlines() if ln.strip()]
+    i = 0
+    while i < len(lines):
+        ln = lines[i]
+        if ln == _TIP_NOW and i + 1 < len(lines):
+            try:
+                now_epoch = float(lines[i + 1])
+            except Exception:
+                pass
+            i += 2
+            continue
+        if ln == _TIP_FILE and i + 1 < len(lines):
+            live_file = lines[i + 1]
+            i += 2
+            continue
+        if ln.startswith("{"):
+            try:
+                d = json.loads(ln)
+                ev = d.get("event")
+                if ev == "train_step_summary":
+                    summary = d
+                elif ev == "train_step":
+                    train = d
+            except Exception:
+                pass
+        i += 1
+    if now_epoch is None and summary is None and train is None:
+        return None
+    # last-event age in the REMOTE clock frame (skew-immune)
+    age = None
+    tip = summary or train
+    if now_epoch is not None and tip is not None and tip.get("timestamp"):
+        try:
+            ts = _record_ts(tip).timestamp()
+            age = max(0.0, now_epoch - ts)
+        except Exception:
+            pass
+    return {
+        "live_file": live_file,
+        "live_step": (tip.get("step") if tip else None),
+        "last_summary": summary,
+        "last_train": train,
+        "age_sec": age,
+    }

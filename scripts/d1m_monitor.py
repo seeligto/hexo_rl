@@ -47,6 +47,7 @@ from hexo_rl.monitoring.run_feed_reader import (  # noqa: E402
     depth_health,
     load_run_feed_config,
     parse_feed,
+    read_live_tip,
     read_remote_ssh,
     resolve_run_target,
     sealbot_point_sigmas,
@@ -314,6 +315,23 @@ def fetch(cfg, host, repo, log):
     snap = parse_feed(records, bin_width=cfg.bin_width, ts_sample=1, gc_sample=1)
     out = snap.as_dict()
     out["log"] = log  # run identity for run-specific panels (e.g. run2 curriculum)
+    # LIVE-TIP override (resume- + clock-skew-robust): the glob read subsamples and
+    # its END-block captures the last FILE's tail (an archived restart segment), so
+    # the step/last-event lag the true tip after a resume. read_live_tip resolves the
+    # newest-mtime log, tails its true-latest summary/train_step un-subsampled, and
+    # reads the REMOTE clock for a skew-free age. Override the header/step fields with
+    # it; the trajectory/eval panels keep the full-history glob parse.
+    tip = read_live_tip(host, repo, log)
+    if tip:
+        out["live_tip"] = tip
+        _ts = tip.get("last_summary")
+        if _ts and out.get("last_summary") and _ts.get("step", -1) >= (out["last_summary"].get("step", -1)):
+            out["last_summary"] = _ts
+        elif _ts and not out.get("last_summary"):
+            out["last_summary"] = _ts
+        _tt = tip.get("last_train")
+        if _tt and out.get("last_train") and _tt.get("step", -1) >= (out["last_train"].get("step", -1)):
+            out["last_train"] = _tt
     return out
 
 
@@ -826,17 +844,31 @@ def build(data, show_help, use_charts, cfg, default_encoding):
 def header(host, log, data):
     from rich.text import Text
     age = ""
-    ls = (data or {}).get("last_summary") or {}
-    t = ls.get("timestamp")
-    if t:
-        try:
-            dt = datetime.fromisoformat(t.replace("Z", "+00:00"))
-            secs = (datetime.now(dt.tzinfo) - dt).total_seconds()
-            age = "  (last event %.0fs ago)" % secs
-        except Exception:
-            pass
-    return Text("D-1M monitor  %s:%s%s   %s" % (
-        host, log, age, datetime.now().strftime("%H:%M:%S")), style="bold")
+    tip = (data or {}).get("live_tip") or {}
+    # PREFER the live-tip age (computed vast-clock-relative -> immune to the remote
+    # clock skew that inflates a laptop-now minus vast-ts age). Fall back to the
+    # skew-prone laptop-vs-log-ts only when the tip probe failed.
+    if tip.get("age_sec") is not None:
+        age = "  (last event %.0fs ago)" % tip["age_sec"]
+    else:
+        ls = (data or {}).get("last_summary") or {}
+        t = ls.get("timestamp")
+        if t:
+            try:
+                dt = datetime.fromisoformat(t.replace("Z", "+00:00"))
+                secs = (datetime.now(dt.tzinfo) - dt).total_seconds()
+                age = "  (last event %.0fs ago, laptop-clock)" % secs
+            except Exception:
+                pass
+    # Show which restart segment is live (basename) so a resume that rotates the
+    # log is visible at a glance.
+    live = ""
+    lf = tip.get("live_file")
+    if lf:
+        import os as _os
+        live = "  live=%s" % _os.path.basename(lf)
+    return Text("D-1M monitor  %s:%s%s%s   %s" % (
+        host, log, live, age, datetime.now().strftime("%H:%M:%S")), style="bold")
 
 
 def run_live(args, cfg, host, repo, log, default_encoding):
