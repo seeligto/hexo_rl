@@ -387,6 +387,7 @@ class Evaluator:
         model_sims: int | None = None,
         opponent_sims: int | None = None,
         opponent_encoding: str | None = None,
+        batched: bool = False,
     ) -> EvalResult:
         """Play n_games against another model and return EvalResult.
 
@@ -399,6 +400,14 @@ class Evaluator:
         loader returned, NOT ``opponent_model.encoding`` — ``_build_model_from_spec``
         stamps a hardcoded ``"v6"``/``"v8"`` there, so a v6w25 anchor mis-reports.
         ``None`` ⇒ same encoding as this model (the same-encoding champion case).
+
+        ``batched`` (eval-cost lever) routes the round through ``evaluate_batched``
+        (cross-game MCTS batching of THIS model's leaves; the opponent still plays
+        serially per game). Aggregate-equivalent to the serial path (G4), NOT
+        byte-identical — default OFF so gated runs keep the serial transcript; opt in
+        via ``opponents.best_checkpoint.batched: true`` and bench serial-vs-batched on
+        the target hardware. Partial win by construction (model-vs-model batches one
+        side only).
         """
         current_sims = self.sealbot_model_sims if model_sims is None else int(model_sims)
         other_sims = self.sealbot_model_sims if opponent_sims is None else int(opponent_sims)
@@ -410,8 +419,23 @@ class Evaluator:
             opponent_config = self.config
         _opp_enc = _normalize_encoding_name(opponent_config.get("encoding"))
         _opp_c_puct = float(opponent_config.get("mcts", opponent_config).get("c_puct", DEFAULT_C_PUCT))
+        _opp_base = getattr(opponent_model, "_orig_mod", opponent_model)
+
+        if batched:
+            # Fresh opponent bot per concurrent game (each needs its own MCTS state).
+            def _opponent_factory() -> BotProtocol:
+                return build_model_bot(
+                    _opp_base, _lookup_encoding(_opp_enc), self.device, n_sims=other_sims,
+                    temperature=self._eval_temperature, c_puct=_opp_c_puct,
+                    encoding_label=_opp_enc, config=opponent_config,
+                )
+
+            return self.evaluate_batched(
+                _opponent_factory, n_games, current_sims, phase="best_arena",
+            )
+
         opponent_player = build_model_bot(
-            getattr(opponent_model, "_orig_mod", opponent_model),
+            _opp_base,
             _lookup_encoding(_opp_enc), self.device, n_sims=other_sims,
             temperature=self._eval_temperature, c_puct=_opp_c_puct,
             encoding_label=_opp_enc, config=opponent_config,

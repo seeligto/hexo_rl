@@ -356,8 +356,12 @@ def _run_best(ctx: _RunnerContext) -> None:
     n = int(pipeline.best_cfg.get("n_games", 200))
     sims = pipeline.best_cfg.get("model_sims")
     opp_sims = pipeline.best_cfg.get("opponent_sims")
+    # Eval-cost lever (opt-in): route the model-vs-model round through the cross-game
+    # batched path. Default OFF → serial transcript unchanged for gated runs.
+    batched = bool(pipeline.best_cfg.get("batched", False))
     er = ctx.evaluator.evaluate_vs_model(
         ctx.best_model, n_games=n, model_sims=sims, opponent_sims=opp_sims,
+        batched=batched,
     )
     ci_lo, ci_hi = _binomial_ci(er.win_count, n)
 
