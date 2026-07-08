@@ -30,6 +30,7 @@ import structlog
 if TYPE_CHECKING:
     from hexo_rl.diagnostics.forced_win_detector import ForcedWinTrend
 
+from hexo_rl.eval.eval_board import resolve_eval_radius
 from hexo_rl.eval.result_types import EvalRoundResult
 from hexo_rl.monitoring.alert_rules import (
     check_robustness_abort,
@@ -512,6 +513,20 @@ class StepCoordinator:
             if step >= entry["step"]:
                 current_radius = entry["radius"]
         return current_radius
+
+    def _resolve_eval_radius(self) -> int | None:
+        """Radius the eval/promotion boards run under this round (D-SHRIMP S4b).
+
+        Default: the SAME curriculum radius self-play uses (``self._current_radius``,
+        resolved from the one ``legal_move_radius_schedule``) — eval and self-play share
+        a single source and cannot drift. Configurable escape hatch:
+        ``evaluation.legal_move_radius`` (int) pins a fixed yardstick regardless of the
+        curriculum stage. Resolution goes through ``resolve_eval_radius`` so the
+        connection stays explicit and unit-tested.
+        """
+        eval_cfg = self.full_config.get("evaluation", self.full_config.get("eval", {}))
+        override = eval_cfg.get("legal_move_radius") if isinstance(eval_cfg, dict) else None
+        return resolve_eval_radius(self._current_radius, override)
 
     # ── Read-only properties ─────────────────────────────────────────────────
 
@@ -1201,6 +1216,7 @@ class StepCoordinator:
                         _best: Any = self.best_model,
                         _cfg: dict[str, Any] = self.full_config,
                         _best_step: int | None = self._best_model_step,
+                        _radius: int | None = self._resolve_eval_radius(),
                     ) -> None:
                         try:
                             # L4: run_evaluation sets result["step"] itself; the
@@ -1210,6 +1226,7 @@ class StepCoordinator:
                             result: EvalRoundResult = eval_pipeline.run_evaluation(
                                 _model, _step, _best, full_config=_cfg,
                                 best_model_step=_best_step,
+                                current_radius=_radius,
                             )
                             # §D-LOOPFIX W1 — record the round wall-clock so the
                             # final-drain budget is sized from a real measurement.
@@ -1541,6 +1558,7 @@ class StepCoordinator:
                     full_config=self.full_config,
                     best_model_step=self._best_model_step,
                     ignore_stride=True,
+                    current_radius=self._resolve_eval_radius(),
                 )
             except Exception:
                 import traceback

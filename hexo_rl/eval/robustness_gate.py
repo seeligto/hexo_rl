@@ -83,12 +83,16 @@ def evaluate_robustness_gate(
     encoding: str,
     spec: Any,
     cfg: RobustnessGateConfig,
+    legal_move_radius: int | None = None,
 ) -> Dict[str, Any]:
     """Run the off-window adversary (exploit + control arms) vs ``model_player`` and
     return the gate verdict. ``encoding`` is the checkpoint's loaded label; a mismatch
     with ``cfg.encoding`` is a hard error unless ``cfg.force_spec_mismatch``.
 
     Measurement reuses ``offwindow_probe.run_adversary_games`` (single source).
+    ``legal_move_radius`` (D-SHRIMP S4b) keeps this offline/standalone gate on the same
+    curriculum-radius schema as the in-loop paths — pass the run's current radius when a
+    caller wires it in (no in-loop caller today; defaults to the registry radius).
     """
     if cfg.encoding is not None and cfg.encoding != encoding and not cfg.force_spec_mismatch:
         raise ValueError(
@@ -103,6 +107,7 @@ def evaluate_robustness_gate(
         summary, _recs = run_adversary_games(
             model_player, encoding, spec, arm, cfg.n_per_arm, cfg.sims,
             opening_plies=cfg.opening_plies, seed_base=cfg.seed_base,
+            legal_move_radius=legal_move_radius,
         )
         summaries[arm] = summary
 

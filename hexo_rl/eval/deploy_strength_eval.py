@@ -42,8 +42,8 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 import numpy as np
 import torch
 
-from engine import Board
 from hexo_rl.bootstrap.bot_protocol import BotProtocol
+from hexo_rl.eval.eval_board import make_eval_board
 from hexo_rl.encoding import lookup as _lookup_encoding
 from hexo_rl.encoding import normalize_encoding_name as _normalize_encoding
 from hexo_rl.env.game_state import GameState
@@ -254,6 +254,7 @@ def _play_one_game(
     opening_plies: int,
     seed: int,
     max_plies: int = 200,
+    legal_move_radius: int | None = None,
 ) -> Dict[str, Any]:
     """One game on the encoding-correct board, capturing the full move list + winner in
     the (p1, p2, winner, moves) record shape ``round_robin`` aggregate/dedup consume.
@@ -263,7 +264,7 @@ def _play_one_game(
     deploy head decides. ``head_fired`` confirms a net move was actually played by the
     head (validity gate: no silent all-opening game)."""
     rng = np.random.default_rng(seed)
-    board = Board.with_encoding_name(_normalize_encoding(encoding_name))
+    board = make_eval_board(_normalize_encoding(encoding_name), legal_move_radius)
     state = GameState.from_board(board)
     moves: List[List[int]] = []
     ply = 0
@@ -300,6 +301,7 @@ def _play_pair(
     n_games: int,
     opening_plies: int,
     seed_base: int,
+    legal_move_radius: int | None = None,
 ) -> List[Dict[str, Any]]:
     """Color-balanced paired games between two bots; half A=P1, half A=P2."""
     games: List[Dict[str, Any]] = []
@@ -316,6 +318,7 @@ def _play_pair(
             _play_one_game(
                 p1b, p2b, p1l, p2l, encoding_name,
                 opening_plies=opening_plies, seed=seed,
+                legal_move_radius=legal_move_radius,
             )
         )
     return games
@@ -370,9 +373,14 @@ class DeployStrengthEvaluator:
         config: Dict[str, Any],
         deploy_cfg: Dict[str, Any],
         promotion_winrate: float,
+        legal_move_radius: int | None = None,
     ) -> None:
         self.device = device
         self.config = config
+        # D-SHRIMP S4b — curriculum-current radius (None = registry default), threaded
+        # into every deploy-gate game board so the promotion decision matches the
+        # legal-move regime self-play trains under.
+        self._legal_move_radius = legal_move_radius
         self.encoding_name = _normalize_encoding(config.get("encoding"))
         # §D-PFIT WS1: decode in the encoding's TRAINED action space. legal_set_scatter_max
         # encodings (v6_live2_ls) train + in-loop-eval under the MULTI-WINDOW no-drop head;
@@ -413,6 +421,7 @@ class DeployStrengthEvaluator:
         screen_games = _play_pair(
             self._cand, best_bot, "cand", "best", self.encoding_name,
             d.screen_n, d.opening_plies, d.seed_base,
+            legal_move_radius=self._legal_move_radius,
         )
         wr_screen, _, _, _ = _wr_for_label(screen_games, "cand")
         head_frac = (
@@ -440,6 +449,7 @@ class DeployStrengthEvaluator:
         confirm_games = _play_pair(
             self._cand, best_bot, "cand", "best", self.encoding_name,
             d.confirm_n, d.opening_plies, d.seed_base + 7919,
+            legal_move_radius=self._legal_move_radius,
         )
         # Pool screen+confirm games for the BT/bootstrap (both deploy-head, same pair).
         pooled = list(screen_games) + list(confirm_games)
@@ -464,6 +474,7 @@ class DeployStrengthEvaluator:
             seal_games = _play_pair(
                 self._cand, self._sealbot(), "cand", "sealbot", self.encoding_name,
                 d.sealbot_games, d.opening_plies, d.seed_base + 104729,
+                legal_move_radius=self._legal_move_radius,
             )
             sealbot_wr, _, _, _ = _wr_for_label(seal_games, "cand")
         else:

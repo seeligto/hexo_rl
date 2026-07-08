@@ -111,6 +111,7 @@ def run_batched_games(
     max_plies: int = 200,
     opening_plies: int = 0,
     batch_size: int = 8,
+    legal_move_radius: int | None = None,
 ) -> List[Dict[str, Any]]:
     """Play games concurrently, batching their MCTS leaves through ``infer_fn``.
 
@@ -120,7 +121,9 @@ def run_batched_games(
     G1 test). Results are scattered back to each game by explicit index — never by leaf
     arrival order. Returns one record dict per setup, in setup order.
     """
-    from engine import Board, MCTSTree
+    from engine import MCTSTree
+
+    from hexo_rl.eval.eval_board import make_eval_board
 
     spec = _lookup_encoding(_norm(encoding))
     board_size = spec.board_size
@@ -130,7 +133,7 @@ def run_batched_games(
     for seed, model_side in setups:
         rng_np = np.random.default_rng(seed)
         rng_py = random.Random(seed)
-        board = Board.with_encoding_name(encoding)
+        board = make_eval_board(encoding, legal_move_radius)
         tree = MCTSTree(c_puct)
         coro = _game_coro(
             board, tree, model_side, opponent_factory(), model_sims, batch_size,
@@ -185,6 +188,7 @@ def batched_evaluate(
     max_plies: int = 200,
     opening_plies: int = 0,
     colony_centroid_threshold: float = 0.0,
+    legal_move_radius: int | None = None,
 ):
     """Drop-in faster replacement for Evaluator.evaluate: plays ``n_games`` vs an
     opponent (one fresh opponent per game) with the model's MCTS batched across games.
@@ -211,6 +215,7 @@ def batched_evaluate(
         setups, engine.infer_batch,
         opponent_factory=opponent_factory, encoding=encoding, model_sims=model_sims,
         temperature=temperature, c_puct=c_puct, max_plies=max_plies, opening_plies=opening_plies,
+        legal_move_radius=legal_move_radius,
     )
 
     win_count = 0

@@ -253,6 +253,7 @@ class EvalPipeline:
         full_config: dict[str, Any] | None = None,
         best_model_step: int | None = None,
         ignore_stride: bool = False,
+        current_radius: int | None = None,
     ) -> EvalRoundResult:
         """Run a full evaluation round.
 
@@ -270,6 +271,10 @@ class EvalPipeline:
                 this so the FINAL checkpoint gets a full-battery, promotion-capable
                 read — pre-fix the stride-4 nnue / offwindow_adversary phases got
                 ZERO reads across a 50k run (Objective-A coverage gap).
+            current_radius: curriculum-current legal_move_radius for this round
+                (D-SHRIMP S4b) — resolved by ``StepCoordinator`` from the SAME
+                ``legal_move_radius_schedule`` self-play uses (optionally pinned by
+                ``evaluation.legal_move_radius``). None → keep the registry default.
 
         Returns:
             Dict with keys: promoted (bool), win_rates, ratings.
@@ -300,7 +305,9 @@ class EvalPipeline:
         eval_section.setdefault("eval_seed_base", self.cfg.get("eval_seed_base", DEFAULT_EVAL_SEED_BASE))
         config_for_eval["evaluation"] = eval_section
 
-        evaluator = Evaluator(current_model, self.device, config_for_eval)
+        evaluator = Evaluator(
+            current_model, self.device, config_for_eval, legal_move_radius=current_radius
+        )
 
         # Register current checkpoint
         ckpt_name = f"checkpoint_{train_step}"
@@ -351,6 +358,7 @@ class EvalPipeline:
             best_model_step=best_model_step,
             results=results,
             should_run=_should_run,
+            current_radius=current_radius,
         )
         for spec in OPPONENTS:
             # §D-1M F2/F5 (Arm-C) — isolate each opponent: a crash in one

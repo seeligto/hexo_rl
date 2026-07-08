@@ -13,7 +13,9 @@ from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
 import torch
 
-from engine import Board, MCTSTree
+from engine import MCTSTree
+
+from hexo_rl.eval.eval_board import make_eval_board
 from hexo_rl.bootstrap.bot_protocol import BotProtocol
 from hexo_rl.env.game_state import GameState
 from hexo_rl.eval.colony_detection import is_colony_win
@@ -137,10 +139,20 @@ class ModelPlayer(BotProtocol):
 class Evaluator:
     """Benchmarking agent against baseline bots via dependency injection."""
 
-    def __init__(self, model: HexTacToeNet, device: torch.device, config: Dict[str, Any]):
+    def __init__(
+        self,
+        model: HexTacToeNet,
+        device: torch.device,
+        config: Dict[str, Any],
+        legal_move_radius: int | None = None,
+    ):
         self.model = getattr(model, "_orig_mod", model)
         self.device = device
         self.config = config
+        # D-SHRIMP S4b: curriculum-current legal_move_radius (None = registry default).
+        # Threaded into every eval board so the promotion gate scores the model under
+        # the SAME legal-move regime self-play trains under. See eval_board.py.
+        self.legal_move_radius = legal_move_radius
         eval_cfg = config.get("evaluation", config.get("eval", {}))
         self.random_model_sims = int(eval_cfg.get("random_model_sims", DEFAULT_EVALUATOR_RANDOM_MODEL_SIMS))
         self.sealbot_model_sims = int(eval_cfg.get("sealbot_model_sims", DEFAULT_EVALUATOR_SEALBOT_MODEL_SIMS))
@@ -203,7 +215,7 @@ class Evaluator:
             np.random.seed(self._eval_seed_base + i)
             random.seed(self._eval_seed_base + i)
             encoding_name = _normalize_encoding_name(self.config.get("encoding"))
-            board = Board.with_encoding_name(encoding_name)
+            board = make_eval_board(encoding_name, self.legal_move_radius)
             state = GameState.from_board(board)
             model_player_side = 1 if i % 2 == 0 else -1
             ply = 0
@@ -270,6 +282,7 @@ class Evaluator:
             temperature=self._eval_temperature, seed_base=self._eval_seed_base,
             opening_plies=self._eval_random_opening_plies,
             colony_centroid_threshold=self.colony_centroid_threshold,
+            legal_move_radius=self.legal_move_radius,
         )
         log.info("evaluation_games_complete", phase=phase, n_games=n_games,
                  model_sims=model_sims, winrate=res.win_rate, win_count=res.win_count,
@@ -343,6 +356,7 @@ class Evaluator:
         summary, _recs = run_adversary_games(
             model_player, encoding, spec, arm, int(n_games), int(model_sims or self.sealbot_model_sims),
             opening_plies=int(opening_plies), seed_base=self._eval_seed_base,
+            legal_move_radius=self.legal_move_radius,
         )
         return summary
 

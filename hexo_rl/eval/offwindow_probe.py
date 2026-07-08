@@ -13,7 +13,7 @@ from typing import Any
 
 import numpy as np
 
-from engine import Board
+from hexo_rl.eval.eval_board import make_eval_board
 from hexo_rl.bots.offwindow_adversary_bot import OffWindowAdversaryBot
 from hexo_rl.bots.offwindow_geom import HEX_AXES
 from hexo_rl.diagnostics.forced_win_detector import cheb, is_off_window, window_center
@@ -72,7 +72,7 @@ def oneturn_win_cells(board: Any, side: int) -> list[tuple[int, int]]:
 
 
 def play_game(model_bot, adversary, board_enc, adv_side, spec, sims, max_plies, opening_plies, rng,
-              adv_reference: str = "current"):
+              adv_reference: str = "current", legal_move_radius=None):
     """One adversary-vs-model game. Returns a per-game record dict.
 
     ``adv_reference`` selects the board the adversary's ``_is_off()`` classifies off-window
@@ -88,7 +88,7 @@ def play_game(model_bot, adversary, board_enc, adv_side, spec, sims, max_plies, 
         the diagnostic. The exploit==control CONTRAST collapse under "current" (centroid-shifting
         defenders) is a known artifact; the ABSOLUTE off_window_forced rate is the load-bearing,
         contrast-independent metric. The detector below is UNCHANGED either way."""
-    board = Board.with_encoding_name(board_enc)
+    board = make_eval_board(board_enc, legal_move_radius)
     state = GameState.from_board(board)
     model_bot.reset()
     adversary.reset()
@@ -188,9 +188,13 @@ def summarize(arm: str, recs: list[dict]) -> dict:
 
 
 def run_adversary_games(model_bot, encoding, spec, arm, n_games, sims, *,
-                        max_plies=150, opening_plies=6, seed_base=0):
+                        max_plies=150, opening_plies=6, seed_base=0,
+                        legal_move_radius=None):
     """Run ``n_games`` adversary(arm)-vs-model games (alternating colors + axes) and
-    return (summary, per-game records). ``model_bot`` is a ready ModelPlayer."""
+    return (summary, per-game records). ``model_bot`` is a ready ModelPlayer.
+
+    ``legal_move_radius`` (D-SHRIMP S4b) threads the curriculum-current radius into
+    every game board so the robustness sub-gate scores under the trained regime."""
     recs = []
     for gi in range(n_games):
         seed = seed_base + gi
@@ -201,7 +205,7 @@ def run_adversary_games(model_bot, encoding, spec, arm, n_games, sims, *,
         axis = HEX_AXES[gi % len(HEX_AXES)]
         adversary = OffWindowAdversaryBot(arm=arm, encoding=encoding, axis=axis, seed=seed)
         rec = play_game(model_bot, adversary, encoding, adv_side, spec, sims,
-                        max_plies, opening_plies, rng)
+                        max_plies, opening_plies, rng, legal_move_radius=legal_move_radius)
         rec.update({"arm": arm, "game": gi, "seed": seed, "axis": list(axis)})
         recs.append(rec)
     return summarize(arm, recs), recs

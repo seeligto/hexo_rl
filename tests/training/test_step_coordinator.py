@@ -577,7 +577,7 @@ def test_eval_snapshot_captures_at_kickoff_not_drain(patch_orchestrator_helpers)
     captured: dict[str, Any] = {}
     captured_event = threading.Event()
 
-    def slow_run_eval(model, step, best, *, full_config, best_model_step):
+    def slow_run_eval(model, step, best, *, full_config, best_model_step, **_kwargs):
         captured["model"] = model
         captured["best"] = best
         captured["best_model_step"] = best_model_step
@@ -837,7 +837,7 @@ def test_flush_drains_inflight_final_boundary_eval():
     """
     started = threading.Event()
 
-    def _run_evaluation(model, step, best, full_config=None, best_model_step=None):
+    def _run_evaluation(model, step, best, full_config=None, best_model_step=None, **_kwargs):
         started.set()
         time.sleep(0.2)  # still mid-eval at the immediate post-loop flush
         return {"promoted": False, "step": int(step), "wr_sealbot": 0.3, "eval_games": 10}
@@ -900,7 +900,7 @@ def test_eval_thread_crash_is_loud_and_flagged_not_silent() -> None:
     distinct, queryable broken-eval signal."""
     crashed = threading.Event()
 
-    def _run_evaluation(model, step, best, full_config=None, best_model_step=None):
+    def _run_evaluation(model, step, best, full_config=None, best_model_step=None, **_kwargs):
         try:
             raise RuntimeError("eval blew up (anchor load / OOM / encoding mismatch)")
         finally:

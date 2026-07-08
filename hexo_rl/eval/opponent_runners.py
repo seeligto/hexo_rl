@@ -71,6 +71,10 @@ class _RunnerContext:
     best_model_step: int | None
     results: EvalRoundResult
     should_run: Callable[[str, dict[str, Any]], bool]
+    # D-SHRIMP S4b — curriculum-current legal_move_radius for this round (None = registry
+    # default). Threaded into the deploy-gate boards; the Evaluator carries its own copy
+    # for the other opponents. See hexo_rl/eval/eval_board.py.
+    current_radius: int | None = None
 
 
 @dataclass(frozen=True)
@@ -425,6 +429,7 @@ def _run_deploy_strength(ctx: _RunnerContext) -> None:
     evaluator = DeployStrengthEvaluator(
         ctx.evaluator.model, ctx.evaluator.device, ctx.evaluator.config,
         deploy_cfg=cfg, promotion_winrate=promotion_winrate,
+        legal_move_radius=ctx.current_radius,
     )
     res = evaluator.run(ctx.best_model)
     ctx.results["deploy_strength_wr_screen"] = res.wr_screen  # type: ignore[typeddict-unknown-key]
