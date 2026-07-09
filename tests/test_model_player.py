@@ -74,11 +74,11 @@ def test_temperature_sampling_varies_with_seed(
 # ── Test 2: opening plies bypass ModelPlayer ──────────────────────────────────
 
 @patch("hexo_rl.eval.evaluator.GameState")
-@patch("hexo_rl.eval.evaluator.Board")
+@patch("hexo_rl.eval.evaluator.make_eval_board")
 @patch("hexo_rl.eval.evaluator.ModelPlayer")
 def test_random_opening_plies_skips_model(
     mock_mp_cls: MagicMock,
-    mock_board_cls: MagicMock,
+    mock_make_board: MagicMock,
     mock_gs_cls: MagicMock,
 ) -> None:
     """With opening_plies > game length, ModelPlayer.get_move() is never called.
@@ -99,7 +99,7 @@ def test_random_opening_plies_skips_model(
     mock_board.legal_moves.return_value = [(0, 0), (1, 0), (2, 0)]
     mock_board.current_player = 1
     mock_board.winner.return_value = 0  # draw → skips colony-win check
-    mock_board_cls.return_value = mock_board
+    mock_make_board.return_value = mock_board
 
     # Each apply_move increments the counter; return fresh mock state each time
     def make_state() -> MagicMock:
