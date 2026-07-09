@@ -87,9 +87,11 @@ def _collect_witnesses(tree: MCTSTree, board: Board, improved: np.ndarray) -> Di
     unvisited_mass = 0.0
     child_q: Dict[Tuple[int, int], float] = {}      # coord -> root-perspective Q (visited only)
     child_visits: Dict[Tuple[int, int], int] = {}
-    for (q, r), _pool, _prior, visits, q_value in children:
+    child_prior: Dict[Tuple[int, int], float] = {}  # coord -> root policy prior (D-VETO ranking)
+    for (q, r), _pool, prior, visits, q_value in children:
         coord = (int(q), int(r))
         child_visits[coord] = int(visits)
+        child_prior[coord] = float(prior)
         if visits > 0:
             child_q[coord] = float(q_value)
         else:
@@ -102,6 +104,7 @@ def _collect_witnesses(tree: MCTSTree, board: Board, improved: np.ndarray) -> Di
         "n_children": len(children),
         "child_q": child_q,
         "child_visits": child_visits,
+        "child_prior": child_prior,
     }
 
 

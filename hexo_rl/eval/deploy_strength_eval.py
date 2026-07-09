@@ -48,6 +48,7 @@ from hexo_rl.encoding import lookup as _lookup_encoding
 from hexo_rl.encoding import normalize_encoding_name as _normalize_encoding
 from hexo_rl.env.game_state import GameState
 from hexo_rl.eval.gumbel_search_py import run_gumbel_on_board
+from hexo_rl.eval.turn_veto import TurnVeto
 from hexo_rl.eval.defender_dispatch import needs_no_drop_bot
 from hexo_rl.eval.round_robin import (
     aggregate_games,
@@ -122,6 +123,7 @@ class DeployHeadBot(BotProtocol):
         label: str,
         seed: int = 0,
         legal_set: bool = False,
+        veto: bool = False,
     ) -> None:
         self._engine = engine
         self._m = int(knobs["gumbel_m"])
@@ -130,6 +132,12 @@ class DeployHeadBot(BotProtocol):
         self._c_scale = float(knobs["c_scale"])
         self._c_puct = float(knobs["c_puct"])
         self._label = label
+        # D-VETO V1: opt-in provably-sound one-turn tactical veto (deploy/arena only). OFF by
+        # default → get_move is byte-identical to the pre-veto head. When on, the SH-winner is
+        # post-filtered by TurnVeto: a candidate that provably loses to a one-turn opponent
+        # completion is refused for a sound alternative (ranked candidate, else a directly
+        # computed hitting cell); a proven-lost position no-ops to the net's move unchanged.
+        self._veto = TurnVeto() if veto else None
         # §D-DECODE Track 2: when True, the deploy Gumbel-SH head expands over the
         # MULTI-WINDOW no-drop legal-set action space (off-window saving cells get a
         # child — the structural off-window-defense fix). Default False keeps the
@@ -161,14 +169,42 @@ class DeployHeadBot(BotProtocol):
             if not legal:
                 raise RuntimeError("DeployHeadBot: no legal moves on board")
             return legal[0]
-        return (int(played[0]), int(played[1]))
+        played = (int(played[0]), int(played[1]))
+        if self._veto is None:
+            return played
+        return self._apply_veto(played, out, rust_board)
+
+    def _apply_veto(
+        self, played: Tuple[int, int], out: Dict[str, Any], rust_board: object
+    ) -> Tuple[int, int]:
+        """Filter the SH-winner through the sound one-turn veto. Ranking = the SH winner
+        first (the move the head would play), then the other root children by
+        (visits desc, prior desc, coord) — the search's own preference order over the
+        root action space (which under ``legal_set`` includes off-window cells)."""
+        legal_cells = {(int(q), int(r)) for (q, r) in rust_board.legal_moves()}
+        visits = out.get("child_visits", {})
+        priors = out.get("child_prior", {})
+        others = sorted(
+            (c for c in visits.keys() if c != played),
+            key=lambda c: (-visits.get(c, 0), -priors.get(c, 0.0), c),
+        )
+        ranked = [played] + others
+        occ = {(int(q), int(r)): int(p) for (q, r, p) in rust_board.get_stones()}
+        us = int(rust_board.current_player)
+        res = self._veto.decide(
+            occ, us, -us, int(rust_board.moves_remaining), ranked,
+            legal_pred=legal_cells.__contains__, inner_choice=played,
+        )
+        return res.move
 
     def reset(self) -> None:
-        """Stateless (g=0 deterministic, RNG x0 at the root) — no per-game carry-over."""
+        """Stateless (g=0 deterministic, RNG x0 at the root) — no per-game carry-over. The
+        veto is likewise stateless (board-derived); its counters accumulate across the run."""
 
     def name(self) -> str:
         tag = ",ls" if self._legal_set else ""
-        return f"deploy_head({self._label},m{self._m},n{self._n_sims}{tag})"
+        vtag = ",veto" if self._veto is not None else ""
+        return f"deploy_head({self._label},m{self._m},n{self._n_sims}{tag}{vtag})"
 
 
 @dataclass(frozen=True)
