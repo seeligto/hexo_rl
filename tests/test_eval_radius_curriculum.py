@@ -80,3 +80,85 @@ class TestEvaluatorThreading:
 
         ev = Evaluator(object(), torch.device("cpu"), {"encoding": _ENC})
         assert ev.legal_move_radius is None
+
+
+# ── D-WATCHGUARD WP3(A) — live-run boundary guard ────────────────────────────
+#
+# The tests above pin the seam functions in isolation. They do NOT pin the thing
+# a live run actually depends on: that the COMPOSED config (base yamls + variant)
+# driven through the REAL StepCoordinator resolvers yields an eval board whose
+# radius equals the self-play curriculum radius at every stage boundary.
+#
+# tests/test_radius_curriculum.py:47 re-implements ``_resolve_radius`` for its
+# unit tests. A re-implementation cannot catch divergence between itself and the
+# method the eval loop calls — so this guard drives the real method objects and
+# reads the radius back off a real engine Board.
+#
+# run2_mw_fresh crosses 200000 (r=4→5) and 400000 (r=5→6). At r=5 the curriculum
+# radius coincides with the v6_live2_ls registry default, so a regression that
+# re-pinned eval to the registry would be INVISIBLE for the whole 200k–400k
+# stage and would silently reappear at 400000. Hence the boundary cases.
+
+_LIVE_VARIANT = "configs/variants/run2_mw_fresh.yaml"
+_BASE_CONFIGS = (  # mirrors the path list in scripts/train.py
+    "configs/model.yaml", "configs/training.yaml",
+    "configs/selfplay.yaml", "configs/game_replay.yaml",
+    "configs/monitoring.yaml", "configs/monitors.yaml",
+)
+
+
+class TestComposedConfigDrivesEvalRadius:
+    """Real config compose → real StepCoordinator resolvers → real engine Board."""
+
+    @staticmethod
+    def _eval_board_radius_at(cfg: dict, step: int) -> int:
+        from hexo_rl.training.step_coordinator import StepCoordinator
+
+        class _Shim:
+            """Carries only the attributes the two real methods read off ``self``."""
+
+        shim = _Shim()
+        shim.full_config = cfg
+        # Unbound REAL methods — not a copy of their logic.
+        shim._current_radius = StepCoordinator._resolve_radius(shim, step)
+        eval_radius = StepCoordinator._resolve_eval_radius(shim)
+        return make_eval_board(_ENC, eval_radius).legal_move_radius()
+
+    @pytest.fixture(scope="class")
+    def cfg(self) -> dict:
+        from hexo_rl.utils.config import load_config
+
+        return load_config(*_BASE_CONFIGS, _LIVE_VARIANT)
+
+    def test_no_fixed_yardstick_override_pins_eval(self, cfg: dict) -> None:
+        # If someone sets evaluation.legal_move_radius, eval STOPS tracking the
+        # curriculum. That is a legal choice, but it must be a deliberate one.
+        eval_cfg = cfg.get("evaluation", cfg.get("eval", {}))
+        override = eval_cfg.get("legal_move_radius") if isinstance(eval_cfg, dict) else None
+        assert override is None, (
+            "run2_mw_fresh pins a fixed eval yardstick; eval no longer tracks the "
+            "§174 curriculum. Intentional? Then update this guard."
+        )
+
+    def test_eval_radius_equals_curriculum_at_every_scheduled_stage(self, cfg: dict) -> None:
+        schedule = cfg["selfplay"]["legal_move_radius_schedule"]
+        assert schedule, "run2_mw_fresh lost its legal_move_radius_schedule"
+        for entry in schedule:
+            step, radius = int(entry["step"]), int(entry["radius"])
+            assert self._eval_board_radius_at(cfg, step) == radius, (
+                f"eval board radius != curriculum radius at step {step}"
+            )
+
+    def test_eval_radius_holds_just_below_each_boundary(self, cfg: dict) -> None:
+        schedule = cfg["selfplay"]["legal_move_radius_schedule"]
+        for prev, nxt in zip(schedule, schedule[1:]):
+            step = int(nxt["step"]) - 1
+            assert self._eval_board_radius_at(cfg, step) == int(prev["radius"]), (
+                f"eval board radius jumped early at step {step}"
+            )
+
+    def test_400k_boundary_advances_eval_off_the_registry_default(self, cfg: dict) -> None:
+        # The canary. r=5 == _REGISTRY_DEFAULT, so 200k–400k cannot discriminate
+        # "tracks the curriculum" from "pinned to the registry". 400k can.
+        assert self._eval_board_radius_at(cfg, 399_999) == _REGISTRY_DEFAULT
+        assert self._eval_board_radius_at(cfg, 400_000) == 6
