@@ -530,6 +530,30 @@ def load_checkpoint(
                 msg="Model architecture changed (new parameters added) — "
                     "optimizer restarted from scratch for new params.",
             )
+        # CONFRES S1: the resume LR is checkpoint-STATE-owned (restored above) — a declared
+        # variant lr that differs from the checkpoint's baked lr is silently DROPPED (the v2-LR
+        # strike). Make it LOUD (precedence unchanged). `fallback_config` holds the operator's
+        # declared lr; `config["lr"]` is the checkpoint's baked initial lr (lr is resume-owned,
+        # excluded from config_overrides, so config["lr"] == ckpt["config"]["lr"]).
+        from hexo_rl.config.resolve.lr import resolve_lr_provenance
+        _lr_prov = resolve_lr_provenance(
+            declared=(fallback_config or {}).get("lr"),
+            baked=config.get("lr"),
+            effective=(
+                trainer.optimizer.param_groups[0]["lr"]
+                if trainer.optimizer.param_groups else None
+            ),
+        )
+        if _lr_prov.override_ignored:
+            log.warning(
+                "lr_declared_override_ignored_on_full_resume",
+                declared=_lr_prov.declared,
+                checkpoint_baked=_lr_prov.baked,
+                effective=_lr_prov.effective,
+                msg="declared lr differs from the checkpoint's baked lr and is IGNORED on a "
+                    "full-checkpoint resume (LR is checkpoint-state-owned); strip to weights-only "
+                    "to apply the declared lr.",
+            )
         trainer.scaler.load_state_dict(ckpt["scaler_state"])
         if trainer.scheduler is not None:
             ckpt_scheduler_state = ckpt.get("scheduler_state")
