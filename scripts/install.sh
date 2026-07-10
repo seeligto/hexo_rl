@@ -201,8 +201,18 @@ ok "Python dependencies installed"
 
 # ── [7/10] Git submodules ─────────────────────────────────────────────────────
 step 7 "Updating git submodules..."
-git submodule update --init --recursive
-ok "Submodules up to date"
+# GIT_TERMINAL_PROMPT=0: never block on a credential prompt. A private/auth-gated
+# submodule (e.g. hammerhead) on a clean box without access must fail fast and be
+# skipped with a warning, not hang the whole install. Public eval-critical
+# submodules (sealbot) are then ensured explicitly.
+if GIT_TERMINAL_PROMPT=0 git submodule update --init --recursive; then
+    ok "Submodules up to date"
+else
+    warn "Some submodules skipped (likely private/auth-gated, e.g. hammerhead) — non-fatal"
+    GIT_TERMINAL_PROMPT=0 git submodule update --init vendor/bots/sealbot \
+        && ok "sealbot submodule present" \
+        || warn "sealbot submodule init FAILED — eval opponents will be unavailable"
+fi
 
 # ── [8/10] Build engine ───────────────────────────────────────────────────────
 step 8 "Building Rust engine extension..."
