@@ -298,11 +298,37 @@ RESUME_CHECKPOINT_OWNED_KEYS: frozenset = frozenset({
 })
 
 
+def compute_declared_keys(layers: "list[dict] | None") -> frozenset:
+    """Top-level keys the OPERATOR declared in a ``--config`` or ``variant`` layer (CONFRES F1/B3).
+
+    A key present in a layer whose ``kind`` is ``"config"`` or ``"variant"`` is an operator
+    DECLARATION — including an explicit ``key: null`` (B3: an explicit null is a declaration that
+    overrides, to null). A key present only in a ``base`` layer is INHERITED, not a declaration, so
+    it DEFERS to a checkpoint-baked value on resume (F1(A)).
+
+    Classification reuses ``run_config._is_declaration_layer`` (the same kind-aware rule the
+    provenance resolver uses) so the two surfaces cannot disagree about what "declared" means.
+    ``None``/empty layers → empty set (fresh clones + hand-built call sites without layers).
+    """
+    if not layers:
+        return frozenset()
+    from hexo_rl.config.resolve.run_config import _is_declaration_layer
+
+    declared: set = set()
+    for layer in layers:
+        if _is_declaration_layer(layer):
+            raw = layer.get("raw") or {}
+            if isinstance(raw, dict):
+                declared.update(raw.keys())
+    return frozenset(declared)
+
+
 def build_resume_config_overrides(
     combined_config: dict,
     *,
     override_scheduler_horizon: bool = False,
     allow_fresh_scheduler: bool = False,
+    declared_keys: "frozenset | set | None" = None,
 ) -> dict:
     """Build the resume ``config_overrides`` so the launch variant wins.
 
@@ -319,13 +345,20 @@ def build_resume_config_overrides(
     the checkpoint scheduler_state's T_max is restored untouched
     (tests/test_scheduler_resume.py negative pin).
 
-    ``None``-valued launch keys are skipped so a stray null cannot nuke a real
-    checkpoint value.
+    B3 null semantics (CONFRES 6b) — the null-skip is now PROVENANCE-AWARE:
+    a ``None`` that the operator EXPLICITLY declared (``key in declared_keys``)
+    TRAVELS (it is a declaration that overrides the baked value to null); a
+    ``None`` merely inherited from a base layer is a default and is SKIPPED so a
+    stray null cannot nuke a real checkpoint value. Absent ``declared_keys``
+    (hand-built call sites) → every null skipped, preserving the pre-6b
+    behaviour byte-for-byte.
     """
+    declared: frozenset = frozenset(declared_keys or ())
     overrides: dict = {
         key: val
         for key, val in combined_config.items()
-        if key not in RESUME_CHECKPOINT_OWNED_KEYS and val is not None
+        if key not in RESUME_CHECKPOINT_OWNED_KEYS
+        and (val is not None or key in declared)
     }
     # torch_compile always travels with a concrete value (pre-E0 default path:
     # a weights-only resume needs an explicit flag, not an absent key).
@@ -484,13 +517,18 @@ def init_trainer(
     res_blocks: int,
     filters: int,
     log: "structlog.stdlib.BoundLogger",
+    declared_keys: "frozenset | set | None" = None,
 ) -> tuple[Trainer, int]:
     """Build / resume a Trainer; returns (trainer, possibly-updated board_size).
 
     On resume, board_size may be re-resolved from the registry after
     propagating ckpt-baked encoding back into combined_config.
 
-    Mirrors ``scripts/train.py::main`` lines 291-379 verbatim.
+    ``declared_keys`` (CONFRES F1(A)) is the operator-declaration set threaded into the resume
+    override apply: a base-inherited override that the checkpoint also baked DEFERS to the baked
+    value; a declared key still wins. ``None`` preserves the pre-6b behaviour.
+
+    Mirrors ``scripts/train.py::main`` lines 291-379 verbatim (F1 threading is 6b-additive).
     """
     from hexo_rl.encoding import resolve_from_config as _registry_resolve
 
@@ -511,6 +549,7 @@ def init_trainer(
             combined_config,
             override_scheduler_horizon=bool(args.override_scheduler_horizon),
             allow_fresh_scheduler=bool(args.allow_fresh_scheduler),
+            declared_keys=declared_keys,
         )
 
         trainer = Trainer.load_checkpoint(
@@ -519,6 +558,7 @@ def init_trainer(
             device=device,
             fallback_config=combined_config,
             config_overrides=config_overrides,
+            declared_keys=declared_keys,
         )
         # Propagate the ckpt-resolved encoding back into the local config
         # dicts so downstream selfplay surfaces (pool, worker, lifecycle,

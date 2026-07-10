@@ -174,10 +174,13 @@ def test_resume_ckpt_stamp_and_effective_lr_captured(recorder, tmp_path):
     enc = payload["knobs"]["encoding"]
     assert enc["value"] == "v6_live2_ls"
     assert enc["source"] == "checkpoint"
-    # effective lr flowed from the live optimizer param_group into the LR provenance (a frozen
-    # LrProvenance dataclass carried as the knob value).
-    lr_prov = payload["knobs"]["lr"]["value"]
-    assert lr_prov.effective == pytest.approx(0.0018569)
+    # effective lr flowed from the live optimizer param_group into the LR provenance. CONFRES 6b
+    # renders the lr knob's event value as a NESTED DICT (was a repr string of the LrProvenance
+    # dataclass) so the JSONL forensic artifact is structured; the in-memory lr_provenance()
+    # accessor still returns the dataclass.
+    lr_val = payload["knobs"]["lr"]["value"]
+    assert isinstance(lr_val, dict)
+    assert lr_val["effective"] == pytest.approx(0.0018569)
 
 
 def test_empty_param_groups_guarded(recorder):
@@ -186,8 +189,9 @@ def test_empty_param_groups_guarded(recorder):
     payload = orchestrator.build_and_emit_resolved_config(
         layers, merged, registry_spec={}, trainer=trainer, args=_args(), log=_log(),
     )
-    # No crash; lr effective is None (no state blob available).
-    assert payload["knobs"]["lr"]["value"].effective is None
+    # No crash; lr effective is None (no state blob available). CONFRES 6b: the lr knob's event
+    # value renders as a nested dict.
+    assert payload["knobs"]["lr"]["value"]["effective"] is None
 
 
 # ── BYTE-PURE: resolver conflict does NOT abort the launch (6a-ii, not 6b) ────

@@ -201,8 +201,13 @@ def main() -> None:
     )
 
     # ── Trainer (resume or fresh) ─────────────────────────────────────────────
+    # CONFRES F1(A): the operator-declaration set (keys present in --config/variant layers, incl
+    # explicit nulls) so a resume base-inherited override defers to the checkpoint-baked value while
+    # a declared knob still wins. Fresh runs ignore it (init_trainer's resume branch consumes it).
+    _declared_keys = _orchestrator.compute_declared_keys(_config_layers)
     trainer, board_size = _orchestrator.init_trainer(
         args, combined_config, device, board_size, res_blocks, filters, log,
+        declared_keys=_declared_keys,
     )
 
     # ── CONFRES 6a-ii: emit the resolved_config provenance event ──────────────

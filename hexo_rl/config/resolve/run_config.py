@@ -50,6 +50,25 @@ _VALID_FAMILIES = frozenset(
 )
 
 
+def _render_event_value(value: Any) -> Any:
+    """Render a knob value for the JSONL ``resolved_config`` event.
+
+    The ``lr`` knob's value is an ``LrProvenance`` dataclass — serialise it as a NESTED DICT
+    (``{"declared","baked","effective","override_ignored"}``) so the forensic artifact is
+    structured, not an opaque repr string. Every other value renders verbatim. The in-memory
+    ``lr_provenance()`` accessor still returns the dataclass (it reads ``._values["lr"].value``,
+    which this does NOT mutate).
+    """
+    if isinstance(value, LrProvenance):
+        return {
+            "declared": value.declared,
+            "baked": value.baked,
+            "effective": value.effective,
+            "override_ignored": value.override_ignored,
+        }
+    return value
+
+
 class ConfigConflictError(ValueError):
     """Two PRESENT, differing values for a raise-on-conflict knob (I2, design §2/§3).
 
@@ -97,7 +116,7 @@ class ResolvedValue:
 
     def as_event_dict(self) -> dict:
         d = {
-            "value": self.value,
+            "value": _render_event_value(self.value),
             "source": self.source,
             "precedence_family": self.precedence_family,
             "inputs_seen": dict(self.inputs_seen),
