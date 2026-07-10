@@ -467,17 +467,21 @@ def run_arm(
         ga = next(g for g in pair if g["head_as_p1"])
         gb = next(g for g in pair if not g["head_as_p1"])
 
-        # Integrity: shared opening prefix + head fired
+        # Integrity: shared opening prefix + head fired. The opening length is taken FROM the
+        # book (len(want)), not the module BOOK_PLIES default — so a 1-ply first-turn book
+        # (WP5) or any n-ply book verifies against its own prefix. Byte-identical for the
+        # 3-ply books (len(want)==BOOK_PLIES==3).
         want = (openings[idx]["moves"] if isinstance(openings[idx], dict) else openings[idx])
+        n_open = len(want)
         shared = (
-            ga["moves"][:BOOK_PLIES] == want
-            and gb["moves"][:BOOK_PLIES] == want
+            ga["moves"][:n_open] == want
+            and gb["moves"][:n_open] == want
         )
         if not shared or not (ga["head_fired"] and gb["head_fired"]):
             bad_pairs += 1
 
         for g in (ga, gb):
-            sk = suffix_key(g, BOOK_PLIES)
+            sk = suffix_key(g, n_open)
             if sk in suffixes:
                 if idx not in suffix_collisions:
                     suffix_collisions.append(idx)

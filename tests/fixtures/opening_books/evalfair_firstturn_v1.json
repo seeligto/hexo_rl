@@ -1,0 +1,88 @@
+{
+ "book_id": "evalfair_firstturn_v1",
+ "seed": 20260710,
+ "radius_stage": 4,
+ "sampler_commit": "wp5",
+ "openings": [
+  {
+   "id": 0,
+   "moves": [
+    [
+     0,
+     2
+    ]
+   ],
+   "rng_seed": null
+  },
+  {
+   "id": 1,
+   "moves": [
+    [
+     1,
+     2
+    ]
+   ],
+   "rng_seed": null
+  },
+  {
+   "id": 2,
+   "moves": [
+    [
+     -2,
+     0
+    ]
+   ],
+   "rng_seed": null
+  },
+  {
+   "id": 3,
+   "moves": [
+    [
+     1,
+     1
+    ]
+   ],
+   "rng_seed": null
+  },
+  {
+   "id": 4,
+   "moves": [
+    [
+     1,
+     0
+    ]
+   ],
+   "rng_seed": null
+  },
+  {
+   "id": 5,
+   "moves": [
+    [
+     0,
+     1
+    ]
+   ],
+   "rng_seed": null
+  },
+  {
+   "id": 6,
+   "moves": [
+    [
+     0,
+     -1
+    ]
+   ],
+   "rng_seed": null
+  },
+  {
+   "id": 7,
+   "moves": [
+    [
+     2,
+     -1
+    ]
+   ],
+   "rng_seed": null
+  }
+ ]
+}

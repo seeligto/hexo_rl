@@ -1,0 +1,13 @@
+{
+ "book_id": "evalfair_canonical_v1",
+ "seed": 0,
+ "radius_stage": 4,
+ "sampler_commit": "wp5",
+ "openings": [
+  {
+   "id": 0,
+   "moves": [],
+   "rng_seed": null
+  }
+ ]
+}
