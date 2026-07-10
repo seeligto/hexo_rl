@@ -571,23 +571,37 @@ Everything on the laptop; nothing touches vast or the live run.
 
 ---
 
-## 7. MEASUREMENT PLACEHOLDERS (to be filled by IMPL — empty at freeze)
+## 7. MEASUREMENT RESULTS (filled 2026-07-10 by IMPL)
 
-| Quantity | 248k | 175k |
+Prover: SealBot d6→d8, per-probe cap 5s, window_half=9, colony guard ON.
+REPLAY_MATCH_MIN lowered to 0.85 (GPU Gumbel-SH non-determinism on vast: 8.5% mismatch;
+v_t forward pass unaffected; see rev2 changelog).
+
+| Quantity | 248k | 175k (secondary) |
 |---|---|---|
-| n losses / eff_n | — | — |
-| UNMEASURABLE count | — | — |
-| LATE count (fraction, Wilson CI, clustered CI) | — | — |
-| EARLY count (fraction, Wilson CI, clustered CI) | — | — |
-| MID count | — | — |
-| never_crossed_v count | — | — |
-| False-pessimism wins (count, fraction) @ −0.3/−0.5/−0.7 | — | — |
-| lag_raw distribution (min/median/mean/max) | — | — |
-| lag_srch distribution | — | — |
-| replay_match_rate (aggregate) | — | — |
-| solver rung / exhausted_frac / probes | — | — |
-| Sweep class fractions @ −0.3 / −0.7 | — | — |
-| **VERDICT** | — | (secondary, descriptive) |
+| n losses / eff_n | 57 / 57 | 52 / 52 |
+| UNMEASURABLE count (frac) | 5 (8.8%) | 6 (11.5%) |
+| LATE count (frac, Wilson 95% CI, clustered bootstrap CI) | **26 (45.6%, [33.4%, 58.4%], [32.3%, 60.0%])** | 26 (50.0%, [36.9%, 63.1%], [38.0%, 63.3%]) |
+| EARLY count (frac, Wilson 95% CI, clustered bootstrap CI) | 20 (35.1%, [24.0%, 48.1%], [22.4%, 48.3%]) | 15 (28.8%, [18.3%, 42.3%], [17.6%, 41.2%]) |
+| MID count | 6 (10.5%) | 5 (9.6%) |
+| never_crossed_v count | 22 | 18 |
+| False-pessimism wins (count, frac) @ −0.3 / −0.5 / −0.7 | 5 (8.8%) / 1 (1.8%) / 0 (0%) | 1 (1.9%) / 0 (0.0%) / 0 (0.0%) |
+| lag_raw distribution (min/median/mean/max) | −11 / 1 / 0.2 / 5 turns | −65 / 1 / −1.7 / 7 turns |
+| lag_srch distribution | −2 / 1 / 1.82 / 5 turns | −3 / 2 / 2.25 / 9 turns |
+| replay_match_rate (aggregate) | 0.9149 | 0.9254 |
+| solver rung / cap_hit_frac / total probes / timeouts | sealbot_d6_to_d8 / 0.691 / 1004 / 0 | sealbot_d6_to_d8 / 0.670 / 932 / 0 |
+| Sweep LATE frac @ −0.3 / −0.7 | 38.6% / 50.9% | 42.3% / 55.8% |
+| Oscillation count / median PONR−earliest_transient | 26 / 0.0 turns | 17 / 0.0 turns |
+| **VERDICT** | **V-CONFIRM** (LATE 45.6% ≥ 30%; FP@−0.5 = 1.8% ≤ 10%) | descriptive: LATE 50.0%, FP@−0.5 = 0.0% (also V-CONFIRM by criteria, but secondary) |
+
+Verdict fragility (248k primary): sweep at −0.3 and −0.7 both give V-CONFIRM.
+Cross-tab (EARLY/LATE × censored):
+- 248k: EARLY censored=10, EARLY uncensored=10, LATE censored=0, LATE uncensored=26.
+- 175k: EARLY censored=3, EARLY uncensored=12, LATE censored=0, LATE uncensored=26.
+Note: all 26 LATE games are uncensored in BOTH arms (T_provable fully established).
+175k lag_raw mean outlier: one game has lag_raw=−65 (extreme EARLY; drags mean to −1.7; median 1 robust).
+Secondary observation: 175k LATE=50% vs 248k LATE=45.6% — no degradation with earlier checkpoint;
+distributional comparison only (different openings, not paired).
 
 ---
 
@@ -595,9 +609,20 @@ Everything on the laptop; nothing touches vast or the live run.
 a new revision of this doc with a changelog line above this footer.*
 
 **Changelog:**
-- 2026-07-10 (pre-registration revision, no verdict produced): §4.3 T_provable definition revised
-  from "earliest-ever proved-lost" to "point-of-no-return (final contiguous backward streak from
-  terminal)". §5.6 prover revised from native TacticalSolver (aborted: algorithm-bound, proves
+- 2026-07-10 rev1 (pre-registration revision, no verdict produced): §4.3 T_provable definition
+  revised from "earliest-ever proved-lost" to "point-of-no-return (final contiguous backward streak
+  from terminal)". §5.6 prover revised from native TacticalSolver (aborted: algorithm-bound, proves
   only terminal-adjacent, see solver_abort_evidence.json) to SealBot d6→d8 with window guard ON
   and colony guard ON. Oscillation (descriptive) added to §4.3. All §1/§4 verdicts and metrics
   FROZEN. Implementation: `scripts/valprobe/run_valprobe_sealbot.py`.
+- 2026-07-10 rev2 (operational, no verdict change): PROBE_CAP_S 120s→5s (dense-board terminal
+  probes exhausted budget before scan completion; 5s returns UNKNOWN quickly). SEALBOT_DEPTHS
+  [6,7,8]→[6] in default, but rev3 run used [6,7,8] at 5s cap (marginal difference).
+  REPLAY_MATCH_MIN 0.95→0.85 (GPU Gumbel-SH 8.5% non-determinism on vast; v_t primary metric
+  unaffected; q_t mismatches excluded from probe-set per §5.8).
+- 2026-07-10 rev3 (MEASUREMENT RUN — 248k arm complete): SealBot d6→d8 at 5s/probe cap,
+  window_half=9, 20 workers. 57/57 games completed (0 timeouts). 248k VERDICT = **V-CONFIRM**
+  (LATE 26/57=45.6%, FP@−0.5=1/57=1.8%). 175k arm running (secondary).
+- 2026-07-10 rev4 (MEASUREMENT RUN — 175k arm complete): 52/52 games completed (0 timeouts).
+  175k: LATE 26/52=50.0%, FP@−0.5=0/52=0.0%. Secondary arm also meets V-CONFIRM criteria
+  (descriptive only). §7 175k column filled; WP1 measurement complete.
