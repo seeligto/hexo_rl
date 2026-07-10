@@ -24,9 +24,8 @@ from hexo_rl.eval.defaults import (
     DEFAULT_COLONY_CENTROID_THRESHOLD,
     DEFAULT_EVAL_SEED_BASE,
     DEFAULT_EVAL_TEMPERATURE,
-    DEFAULT_EVALUATOR_RANDOM_MODEL_SIMS,
-    DEFAULT_EVALUATOR_SEALBOT_MODEL_SIMS,
 )
+from hexo_rl.config.resolve.nsims import resolve_eval_model_sims
 from hexo_rl.model.network import HexTacToeNet
 from hexo_rl.selfplay.inference import LocalInferenceEngine
 from hexo_rl.encoding import lookup as _lookup_encoding
@@ -154,8 +153,8 @@ class Evaluator:
         # the SAME legal-move regime self-play trains under. See eval_board.py.
         self.legal_move_radius = legal_move_radius
         eval_cfg = config.get("evaluation", config.get("eval", {}))
-        self.random_model_sims = int(eval_cfg.get("random_model_sims", DEFAULT_EVALUATOR_RANDOM_MODEL_SIMS))
-        self.sealbot_model_sims = int(eval_cfg.get("sealbot_model_sims", DEFAULT_EVALUATOR_SEALBOT_MODEL_SIMS))
+        self.random_model_sims = resolve_eval_model_sims("random", eval_cfg.get("random_model_sims"))
+        self.sealbot_model_sims = resolve_eval_model_sims("sealbot", eval_cfg.get("sealbot_model_sims"))
         self.progress_every = max(1, int(eval_cfg.get("progress_every", 1)))
         self.colony_centroid_threshold = float(
             eval_cfg.get("colony_centroid_threshold", DEFAULT_COLONY_CENTROID_THRESHOLD)

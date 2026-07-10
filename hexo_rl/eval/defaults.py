@@ -13,32 +13,22 @@ constants are the fallbacks the code uses when the YAML does not pin the
 key — they MUST stay byte-for-byte aligned with prior inline literals so
 no behavior changes for existing variants.
 
-Two of the canonical purposes have intentionally distinct evaluator-side
-fallbacks (``random_model_sims``, ``sealbot_model_sims``): the pipeline
-merges its 96/128 values into the evaluation section before the Evaluator
-runs, so the Evaluator's 100/200 fallbacks only fire on direct
-instantiation paths (notably tests).  Both sets are exposed here so each
-prod site imports its own constant rather than inlining the literal.
+The eval ``model_sims`` defaults formerly lived here as TWO divergent sets (96/128
+pipeline vs 100/200 evaluator-direct); CONFRES P5 collapsed them into one authority at
+``hexo_rl.config.resolve.nsims`` (the 100/200 set was dead — no production path or test
+depended on it). The remaining constants below are single-valued eval defaults not yet
+migrated to a resolver.
 """
 
 from __future__ import annotations
 
-# ── EvalPipeline.run_evaluation setdefault block (lines 216–224) ───────
-# These six are the SSR16 set: defaults the pipeline injects into the
-# ``evaluation`` config section before constructing the Evaluator.
-DEFAULT_RANDOM_MODEL_SIMS: int = 96
-DEFAULT_SEALBOT_MODEL_SIMS: int = 128
+# ── EvalPipeline.run_evaluation setdefault block ──────────────────────
+# Defaults the pipeline injects into the ``evaluation`` config section
+# before constructing the Evaluator. (model_sims moved to resolve/nsims.py — P5.)
 DEFAULT_COLONY_CENTROID_THRESHOLD: float = 6.0
 DEFAULT_EVAL_TEMPERATURE: float = 0.5
 DEFAULT_EVAL_RANDOM_OPENING_PLIES: int = 4
 DEFAULT_EVAL_SEED_BASE: int = 42
-
-# ── Evaluator direct-init fallbacks ────────────────────────────────────
-# Used when Evaluator is instantiated without an upstream pipeline merge
-# (tests, ad-hoc scripts).  Distinct from the pipeline values by design —
-# do NOT collapse onto DEFAULT_*_MODEL_SIMS above.
-DEFAULT_EVALUATOR_RANDOM_MODEL_SIMS: int = 100
-DEFAULT_EVALUATOR_SEALBOT_MODEL_SIMS: int = 200
 
 # ── MCTS exploration constant for ModelPlayer ─────────────────────────
 # Mirrored from ``mcts.c_puct`` in the live config when present.
