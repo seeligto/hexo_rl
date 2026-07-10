@@ -325,6 +325,11 @@ def init_trainer(
     from hexo_rl.encoding import resolve_from_config as _registry_resolve
 
     if args.checkpoint:
+        # CONFRES P3: validate the resolved bootstrap/resume checkpoint exists at LAUNCH
+        # (before Trainer.load_checkpoint's torch.load) so a stale Makefile BOOTSTRAP default
+        # or a typo'd --checkpoint fails loudly + informatively, not deep in loading.
+        from hexo_rl.config.resolve.bootstrap import resolve_bootstrap
+        resolve_bootstrap(args.checkpoint)
         # D-FULLSPEC E0: invert the resume precedence — seed config_overrides
         # from the full combined_config (variant = operator intent, wins over
         # the checkpoint-baked config) minus the checkpoint-owned EXCLUDE-set.
