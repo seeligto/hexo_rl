@@ -1,0 +1,36 @@
+{
+  "distinct_start": 41,
+  "distinct_final": 153,
+  "target": 200,
+  "batches_run": 3,
+  "shortfall": 47,
+  "batch_log": [
+    {
+      "batch_idx": 0,
+      "book_id": "evalfair_r5_wp2_b0",
+      "n_games": 128,
+      "card1_raw": 45,
+      "card1_added": 45,
+      "distinct_total": 86,
+      "wall_min": 18.8
+    },
+    {
+      "batch_idx": 1,
+      "book_id": "evalfair_r5_wp2_b1",
+      "n_games": 128,
+      "card1_raw": 43,
+      "card1_added": 43,
+      "distinct_total": 129,
+      "wall_min": 18.3
+    },
+    {
+      "batch_idx": 2,
+      "book_id": "evalfair_r5_wp2_b2",
+      "n_games": 128,
+      "card1_raw": 24,
+      "card1_added": 24,
+      "distinct_total": 153,
+      "wall_min": 17.8
+    }
+  ]
+}
