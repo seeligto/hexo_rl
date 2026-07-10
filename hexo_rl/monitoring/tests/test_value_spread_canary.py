@@ -167,7 +167,8 @@ def test_fire_canary_emit_failure_does_not_propagate(monkeypatch):
 def test_load_alt_bank_sha_and_shape():
     bank = load_alt_bank()
     assert bank.sha == ALT_BANK_SHA256
-    assert bank.states.shape == (40, 8, 19, 19)
+    # WP3-C2: bank rebuilt under v6_live2_ls — 4 planes, not 8.
+    assert bank.states.shape == (40, 4, 19, 19)
     n_col = int((bank.classes == "colony").sum())
     n_ext = int((bank.classes == "extension").sum())
     assert n_col == 20

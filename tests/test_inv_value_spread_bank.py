@@ -27,10 +27,11 @@ ALT_FIXTURE = REPO / "tests" / "fixtures" / "value_spread_bank_alt.json"
 # FU-1 anchor — also pinned in hexo_rl/monitoring/value_spread_canary.py and
 # audit/structural/05_fu1_value_spread_ladder.md.
 EXPECTED_SHA = "934204713620d171743820aea6907cf4e117ca97c69e50052b991a3fdcc23991"
-# PR-C / L48 A3 alt bank anchor — pinned in fixture `meta.sha256`,
-# scripts/diagnosis/track_a/a3_h_bank.py, and
-# hexo_rl/monitoring/value_spread_canary.py.
-EXPECTED_ALT_SHA = "a68b810f27d31a51e06173bfcd3e2d88d8f3275c7773a63b37aafb3fe25a20ff"
+# WP3-C2: alt bank regenerated under v6_live2_ls (4-plane). Original A3 bank
+# was 8-plane v6; in_channels=4 != 8 triggered 227/227 skip. New anchor
+# drawn from bootstrap_corpus_v6_live2_ls.npz, same seed/classifier.
+# Pinned in fixture meta.sha256 and hexo_rl/monitoring/value_spread_canary.py.
+EXPECTED_ALT_SHA = "e01ff810805c26aca0deccd4994a2537df7bbbd259f3c7cfe31dc6529f908147"
 
 
 def _bank_sha(positions: list[dict]) -> str:

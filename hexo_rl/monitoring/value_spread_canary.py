@@ -18,9 +18,16 @@ gate.
 
 PR-C / L48 (`docs/07_PHASE4_SPRINT_LOG.md` §S181-AUDIT). Track A A3
 confirmed T3 amplifies ~3× vs an alt bank drawn from real bot-corpus
-positions (Pearson r=0.27). Alt anchor V_spread = +0.212; alt gates are
-T3/3: WARN < +0.10, SOFT-ABORT < +0.07. The dual-bank canary computes
-BOTH and SOFT-ABORTs if either bank crosses.
+positions (Pearson r=0.27). Original A3 alt bank was 8-plane v6.
+
+WP3-C2 (2026-07-10): alt bank rebuilt under v6_live2_ls (4-plane) from
+`bootstrap_corpus_v6_live2_ls.npz` — original 8-plane bank caused
+in_channels=4 != alt_planes=8 → 227/227 skip (all NaN) across run2.
+New alt anchor V_spread = +0.292 (run2_bootstrap_v6_live2_ls.pt, step 0).
+Alt gates (percentile-basis: step-0 anchor only; calibrate on run2 series
+once it emits): WARN < +0.10, SOFT-ABORT < +0.07. Gates retained from
+A3 calibration — new anchor (+0.292) is comfortably above both gates.
+The dual-bank canary computes BOTH and SOFT-ABORTs if either bank crosses.
 
 This module forwards the value head on:
   * the frozen 40-position T3 bank (`tests/fixtures/value_spread_bank.json`)
@@ -56,13 +63,15 @@ _ALT_FIXTURE_PATH = _REPO / "tests" / "fixtures" / "value_spread_bank_alt.json"
 # FU-1 anchor bank SHA — the fixture MUST hash to this. Drift = STOP.
 BANK_SHA256 = "934204713620d171743820aea6907cf4e117ca97c69e50052b991a3fdcc23991"
 # PR-C / L48 — A3 alt bank fixture SHA (`meta.sha256`). Drift = STOP.
-ALT_BANK_SHA256 = "a68b810f27d31a51e06173bfcd3e2d88d8f3275c7773a63b37aafb3fe25a20ff"
+ALT_BANK_SHA256 = "e01ff810805c26aca0deccd4994a2537df7bbbd259f3c7cfe31dc6529f908147"
 
 # FU-1 / skeleton FU-2 gate. T3 anchor V_spread = +0.617; healthy stays high.
 WARN_THRESHOLD = 0.30        # WARNING below this (T3)
 SOFT_ABORT_THRESHOLD = 0.20  # SOFT-ABORT signal below this (T3 FU-2 abort gate)
-# PR-C / L48 — alt bank scaled gates (T3 amplifies ~3× per A3 Pearson r=0.27).
-# Alt anchor V_spread = +0.212; gates set at T3/3.
+# PR-C / L48 — alt bank gates (A3 calibration: T3/3). WP3-C2: bank rebuilt
+# under v6_live2_ls (4-plane); new anchor V_spread = +0.292 at step 0. Gates
+# retained — anchor is 4.2× above abort gate (0.292/0.07); conservative hold.
+# Re-calibrate once run2 emits a spread series (percentile-based, not imported).
 ALT_WARN_THRESHOLD = 0.10
 ALT_SOFT_ABORT_THRESHOLD = 0.07
 
@@ -202,10 +211,11 @@ def compute_value_spread(
 # ── Alt bank (PR-C / L48) ────────────────────────────────────────────────
 @dataclass
 class _AltBank:
-    """Realized 40-position alt bank: pre-built (8, 19, 19) state tensors
-    drawn from real bot-corpus positions (A3 builder)."""
+    """Realized 40-position alt bank: pre-built (C, 19, 19) state tensors
+    drawn from real bot-corpus positions (A3 builder). WP3-C2: rebuilt under
+    v6_live2_ls — C=4 (was C=8 for v6, which caused 227/227 skip in run2)."""
 
-    states: np.ndarray   # (40, 8, 19, 19) float32
+    states: np.ndarray   # (40, C, 19, 19) float32 — C matches live encoding
     classes: np.ndarray  # (40,) object/str — "colony" | "extension"
     sha: str
 
