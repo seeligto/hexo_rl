@@ -93,7 +93,7 @@ def load_train_config(args: argparse.Namespace) -> tuple[dict, list[dict]]:
     the layers return is CONFRES-additive.
     """
     from hexo_rl.utils.config import load_config
-    from hexo_rl.config.resolve.run_config import capture_config_layers
+    from hexo_rl.config.resolve.run_config import assert_layers_reconstruct, capture_config_layers
 
     base_paths, config_override, variant_path = _build_load_paths(args)
 
@@ -136,6 +136,12 @@ def load_train_config(args: argparse.Namespace) -> tuple[dict, list[dict]]:
     config = load_config(*load_paths)
     # CONFRES F2: kind-tagged raw layer chain from the SAME single path source.
     layers = capture_config_layers(base_paths, config_override, variant_path)
+    # F2 invariant at LOAD time, where `config` is PRISTINE (== merged_layers(layers) by
+    # construction: same files, same order, same deep-merge). Asserted HERE (not at emission)
+    # so it cannot false-fail against a `config` that legitimate downstream transforms mutate
+    # (mixing/buffer <auto>-path expansion, encoding back-prop). A real dedup/order bug in
+    # _build_load_paths raises here, loudly, at launch.
+    assert_layers_reconstruct(layers, config)
     return config, layers
 
 
@@ -445,17 +451,15 @@ def build_and_emit_resolved_config(
     """
     from hexo_rl.config.resolve.run_config import (
         ConfigConflictError,
-        assert_layers_reconstruct,
         resolve_preload_config,
         resolve_run_config,
     )
 
     cli = vars(args)
 
-    # F2 launch-time sanity check: the raw layers must reconstruct the merged config. If this
-    # raises, it is a real bug in the single load_paths source — let it raise loudly (prompt step 1).
-    assert_layers_reconstruct(layers, merged_config)
-
+    # (The F2 invariant is asserted at LOAD time in load_train_config, against the PRISTINE config
+    # — NOT here, where `merged_config` may reflect legitimate downstream transforms like
+    # mixing/buffer <auto>-path expansion or resume encoding back-prop.)
     # Phase-A: launch-only knobs (no checkpoint ingestion — value emitted IS what the run used).
     preload = resolve_preload_config(layers, cli=cli)
 

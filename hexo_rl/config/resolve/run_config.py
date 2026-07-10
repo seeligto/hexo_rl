@@ -461,11 +461,12 @@ def resolve_run_config(
     ``require`` names knobs that MUST resolve from a real source (not merely their compat default):
     a required knob whose only source is ``default`` → ``ValueError`` at build (M7/I5).
 
-    F2 invariant asserted first (``merge(variant_layers) == combined_config``). Missing a required
-    knob → ``ValueError`` at build (M7/I5).
+    Missing a required knob → ``ValueError`` at build (M7/I5). (The F2 invariant
+    ``merge(variant_layers) == combined_config`` is asserted at LOAD time by the launch caller
+    against the PRISTINE config — NOT here, where ``combined_config`` may reflect legitimate
+    downstream transforms like mixing/buffer ``<auto>``-path expansion or resume encoding
+    back-prop.)
     """
-    assert_layers_reconstruct(variant_layers, combined_config)
-
     values: dict[str, ResolvedValue] = {}
 
     # encoding (raise-on-conflict, I1/I2/B5a) — REQUIRED (M7).
