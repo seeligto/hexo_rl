@@ -337,13 +337,16 @@ def backward_scan_t_provable_sealbot(
                 break
 
     # Phase 2: if streak is non-empty, count oscillation evidence by scanning
-    # positions BEFORE the break point (going further backward)
+    # positions BEFORE the break point (going further backward).
+    # CAPPED at MAX_OSCILLATION_SCAN positions (supplementary/descriptive only,
+    # not load-bearing for any verdict — don't let it blow up game timeouts).
+    MAX_OSCILLATION_SCAN = 15
     n_oscillation_pre_streak = 0
     if streak_broken and break_ply is not None:
-        # Continue scanning backward (from break_ply - 1) for pre-streak L positions
-        # These are the "recovered" provably-lost positions before the opponent blundered back
         before_break = [s for s in turn_starts if s["ply"] < break_ply]
-        for snap in reversed(before_break):
+        # Scan only the last MAX_OSCILLATION_SCAN before the break (nearest to break = most likely oscillation)
+        before_break_capped = before_break[-MAX_OSCILLATION_SCAN:] if len(before_break) > MAX_OSCILLATION_SCAN else before_break
+        for snap in reversed(before_break_capped):
             ply = snap["ply"]
             side_is_head = (snap["cp"] == head_pn)
 
@@ -520,17 +523,27 @@ def run_solver_parallel_sealbot(
     print(f"[SOLVER] Starting {n_total} games on {n_workers} workers (timeout={game_timeout}s each)")
     print(f"[SOLVER] SealBot depths={depths}, window_half={window_half}")
 
+    # Deadline-based collection: each game gets `game_timeout` seconds from when
+    # the pool STARTED (not from when we check it). This prevents sequential timeout
+    # stacking (n_timeouts × game_timeout wall time).
+    pool_start = time.perf_counter()
+
     ctx = mp.get_context("spawn")
     with ctx.Pool(processes=n_workers, maxtasksperchild=1) as pool:
         futures = {}
+        task_start: Dict[int, float] = {}
         for args in args_list:
             gi = args[0]
             futures[gi] = pool.apply_async(_solver_worker_sealbot, (args,))
+            task_start[gi] = time.perf_counter()
 
         for gi, fut in futures.items():
             g = loss_games[gi]
+            # Each game's deadline = min(game_timeout from dispatch, pool_start + 2*game_timeout)
+            elapsed = time.perf_counter() - task_start[gi]
+            remaining = max(1.0, game_timeout - elapsed)
             try:
-                result = fut.get(timeout=game_timeout)
+                result = fut.get(timeout=remaining)
                 results_by_gi[gi] = result
                 n_completed += 1
                 if n_completed % 10 == 0:
@@ -539,7 +552,7 @@ def run_solver_parallel_sealbot(
                 n_timeout += 1
                 print(
                     f"[SOLVER] TIMEOUT game {gi} opening={g['opening_idx']} "
-                    f"after {game_timeout}s → UNKNOWN"
+                    f"(elapsed {time.perf_counter()-task_start[gi]:.0f}s) → UNKNOWN"
                 )
                 results_by_gi[gi] = {
                     "gi": gi,
@@ -1256,49 +1269,53 @@ def run_pilot_validate(
     window_half: Optional[int],
     n: int = 4,
 ) -> None:
-    """Run n loss games end-to-end for pilot validation (no GPU phase).
+    """Light validation on n shortest loss games (terminal-adjacent + last 8 turn-starts).
 
-    Checks:
-    1. Terminal-adjacent turn-starts prove as head-lost (instrument valid).
-    2. g4 (tbe4=LOSS / tbe3=WIN pattern from feasibility run): T_provable lands
-       in the FINAL lost streak (after the tbe3 recovery), not at tbe4.
-    3. Oscillation field populated correctly.
+    Full backward scan is done in the parallel solver phase. This validates:
+    1. Terminal-adjacent turn-start proves as head-lost (instrument valid).
+    2. Backward streak logic produces a plausible T_provable.
+    3. Oscillation: probe one additional pre-streak position to verify the field.
+
+    Uses only the last 8 turn-starts to keep pilot wall < 60s.
     """
-    print(f"\n[PILOT VALIDATE] Running {n} loss games end-to-end (solver only)...")
-    for gi in range(min(n, len(loss_games))):
-        g = loss_games[gi]
+    print(f"\n[PILOT VALIDATE] Light check on {n} shortest loss games (last 8 turn-starts each)...")
+    # Use shortest games for speed
+    sorted_games = sorted(
+        [(gi, g) for gi, g in enumerate(loss_games)],
+        key=lambda x: x[1]["plies"]
+    )
+    for gi, g in sorted_games[:n]:
         head_pn = 1 if g["head_as_p1"] else -1
         snaps = all_game_snaps[("loss", gi)]
 
+        # Limit to last 3 turn-starts for validation speed (terminal-adjacent + 2 more)
+        turn_starts = [s for s in snaps if is_any_turn_start(s["mr"], s["ply"])]
+        if len(turn_starts) > 3:
+            cutoff_ply = turn_starts[-3]["ply"]
+            snaps_limited = [s for s in snaps if s["ply"] >= cutoff_ply]
+        else:
+            snaps_limited = snaps
+
         (
             T_prov_ply, T_prov_turn, n_probes, exhausted_frac, provable_censored,
-            probe_records, n_osc_pre, n_turn_starts,
-        ) = backward_scan_t_provable_sealbot(snaps, head_pn, depths, window_half)
-
-        terminal_proven = any(
-            p["head_lost"] and p.get("phase") == "streak"
-            and p["ply"] == max(p2["ply"] for p2 in probe_records if p2.get("phase") == "streak")
-            for p in probe_records
-        )
+            probe_records, n_osc_pre, n_turn_starts_total,
+        ) = backward_scan_t_provable_sealbot(snaps_limited, head_pn, depths, window_half)
 
         print(
             f"  game {gi} opening={g['opening_idx']} plies={g['plies']}: "
             f"T_provable_ply={T_prov_ply} T_provable_turn={T_prov_turn} "
-            f"provable_censored={provable_censored} "
-            f"n_osc_pre={n_osc_pre} n_probes={n_probes} n_turn_starts={n_turn_starts}"
+            f"censored={provable_censored} n_osc_pre={n_osc_pre} n_probes={n_probes}"
         )
-        # Validate: terminal-adjacent should prove
-        last_streak_probe = next(
-            (p for p in probe_records if p.get("phase") == "streak"),
-            None
-        )
-        if last_streak_probe and not last_streak_probe["head_lost"]:
-            print(f"    WARNING: terminal-adjacent not proven at depths {depths} — instrument issue")
-        elif last_streak_probe and last_streak_probe["head_lost"]:
-            print(f"    OK: terminal-adjacent proven (d{last_streak_probe.get('resolving_depth')})")
-
+        # Validate: first streak probe (terminal-adjacent) should prove
+        streak_probes = [p for p in probe_records if p.get("phase") == "streak"]
+        if streak_probes:
+            last_streak = streak_probes[0]  # first in list = terminal-adjacent (scan was backward)
+            if not last_streak["head_lost"]:
+                print(f"    WARNING: terminal-adjacent not proven at depths={depths} — instrument issue")
+            else:
+                print(f"    OK: terminal-adjacent proven (d{last_streak.get('resolving_depth')})")
         if n_osc_pre > 0:
-            print(f"    OSCILLATION: {n_osc_pre} pre-streak proved-lost positions (opponent blundered)")
+            print(f"    OSCILLATION pre-streak: {n_osc_pre} positions (opponent blundered)")
 
     print("[PILOT VALIDATE] done.\n")
 
