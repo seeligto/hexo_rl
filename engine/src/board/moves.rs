@@ -360,10 +360,85 @@ impl Board {
     /// The threat-creating move set behind a threat-space search; lets the search
     /// narrow branching to forcing moves and reach deep mates cheaply.
     ///
-    /// Computed in-engine (a single scratch clone, mutate-probe per legal cell) so a
-    /// Python caller pays ONE FFI hop, not one clone per candidate. O(legal²) worst
-    /// case but gated to the legal set. Sorted/deterministic.
+    /// **Fast implementation (Tier 1):** enumerates candidates FROM player-stone
+    /// neighborhoods instead of scanning all legal cells.
+    ///
+    /// For each player stone, iterate the 6 length-6 windows per axis containing
+    /// it. A window with exactly 4 existing player stones + 2 empties (no opponent)
+    /// yields 2 candidate empties: playing either one creates a win-in-1. Dedup
+    /// candidates, intersect with `legal_moves_set()`, return sorted.
+    ///
+    /// Output is IDENTICAL to the linear scan (equivalence asserted by fuzz test
+    /// `threat_moves_equivalence_fuzz`). Complexity: O(stones × 3 × 6 × 6) vs
+    /// the old O(legal × 3 × 6 × 6); early-game stones ≪ legal cells → 10–100×
+    /// fewer HashMap probes in practice.
+    ///
+    /// Computed in-engine so a Python caller pays ONE FFI hop. Sorted/deterministic.
     pub fn threat_moves(&self, player: Player) -> Vec<(i32, i32)> {
+        let pcell = match player {
+            Player::One => Cell::P1,
+            Player::Two => Cell::P2,
+        };
+        let legal = self.legal_moves_set();
+
+        // Collect candidates from player-stone windows.
+        let mut candidates: FxHashSet<(i32, i32)> = FxHashSet::default();
+
+        for (&(sq, sr), &sc) in &self.cells {
+            if sc != pcell {
+                continue;
+            }
+            // For each axis, walk the 6 windows that contain stone (sq, sr).
+            // Window starting at offset s means the stone is at position (-s) within
+            // the window: s ∈ -5..=0.
+            for &(dq, dr) in &HEX_AXES {
+                for s in -5..=0i32 {
+                    let mut pcount = 0usize; // existing player stones in window
+                    let mut ecount = 0usize; // empty cells in window
+                    let mut dead = false;
+                    let mut empties = [(0i32, 0i32); 2];
+                    // Window base: (sq - (s + -s)*dq, ...) no — window starts at
+                    // (sq + s*dq, sr + s*dr) and runs for 6 steps.
+                    // Stone (sq,sr) is at position (-s) inside the window (0-indexed).
+                    let wq = sq + s * dq;
+                    let wr = sr + s * dr;
+                    for i in 0..6i32 {
+                        let (q, r) = (wq + i * dq, wr + i * dr);
+                        match self.cells.get(&(q, r)).copied() {
+                            Some(c) if c == pcell => pcount += 1,
+                            None => {
+                                if ecount < 2 {
+                                    empties[ecount] = (q, r);
+                                }
+                                ecount += 1;
+                            }
+                            _ => { dead = true; break; } // opponent or over-2-empties kill
+                        }
+                    }
+                    // Window must have exactly 4 existing player stones + 2 empties.
+                    // Playing either empty → 5 player + 1 empty = win-in-1 exists.
+                    // Note: pcount counts existing stones only (c is NOT in cells).
+                    if !dead && pcount == 4 && ecount == 2 {
+                        for &e in &empties {
+                            if legal.contains(&e) {
+                                candidates.insert(e);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        let mut out: Vec<(i32, i32)> = candidates.into_iter().collect();
+        out.sort_unstable();
+        out
+    }
+
+    /// Reference (oracle) implementation of `threat_moves` — linear scan over
+    /// all legal cells. Used ONLY in tests to assert equivalence with the fast
+    /// neighborhood-enumeration version. Not compiled into release builds.
+    #[cfg(test)]
+    pub fn threat_moves_ref(&self, player: Player) -> Vec<(i32, i32)> {
         let pcell = match player {
             Player::One => Cell::P1,
             Player::Two => Cell::P2,
@@ -372,10 +447,6 @@ impl Board {
         legal.sort_unstable();
         let mut out = Vec::new();
         for &(cq, cr) in &legal {
-            // c is threat-creating iff some length-6 window THROUGH c has exactly 5
-            // player stones (counting c) + 1 empty — that empty is a NEW win-in-1 cell
-            // c just created. Requiring the window to contain c excludes pre-existing
-            // open-fives (those would not be new threats). Clone-free; O(legal·3·6·6).
             let mut is_threat = false;
             'axis: for &(dq, dr) in &HEX_AXES {
                 for s in -5..=0i32 {
@@ -392,7 +463,7 @@ impl Board {
                         match occ {
                             Some(c) if c == pcell => pcount += 1,
                             None => empties += 1,
-                            _ => { dead = true; break; } // opponent stone kills the window
+                            _ => { dead = true; break; }
                         }
                     }
                     if !dead && pcount == 5 && empties == 1 {
@@ -852,5 +923,107 @@ mod tests {
         assert_eq!(b1.terminal_value_to_move(), 1.0, "mr==1 ⇒ +1.0");
         let b2 = fwm_board(&stones, Player::One, 2);
         assert_eq!(b2.terminal_value_to_move(), -1.0, "mr==2 ⇒ -1.0");
+    }
+
+    // ── Threat-moves equivalence fuzz ─────────────────────────────────────────
+    //
+    // Pins fast `threat_moves` (neighborhood-enumeration) == oracle
+    // `threat_moves_ref` (linear scan over all legal cells) over a broad corpus.
+    //
+    // This equivalence IS the soundness guarantee: the R3 LOSS guard and
+    // candidate-completeness both depend on `threat_moves` returning an IDENTICAL
+    // set. If the sets differ on ANY board, the test fails — that divergence
+    // would be a soundness bug.
+
+    /// Build a random board by playing `n` legal moves chosen by a splitmix64 PRNG.
+    fn random_board(seed: u64, n: usize) -> Board {
+        let mut s = seed;
+        let mut board = Board::new();
+        for _ in 0..n {
+            let legal = board.legal_moves();
+            if legal.is_empty() { break; }
+            // splitmix64
+            s = s.wrapping_add(0x9e3779b97f4a7c15);
+            let mut z = s;
+            z = (z ^ (z >> 30)).wrapping_mul(0xbf58476d1ce4e5b9);
+            z = (z ^ (z >> 27)).wrapping_mul(0x94d049bb133111eb);
+            z ^= z >> 31;
+            let idx = (z as usize) % legal.len();
+            let (q, r) = legal[idx];
+            let _ = board.apply_move(q, r);
+        }
+        board
+    }
+
+    #[test]
+    fn threat_moves_equivalence_fuzz() {
+        // Cover diverse stone counts (5..=50) and densities via varying seeds.
+        // 200 random boards × 2 players = 400 equivalence checks.
+        for seed in 0u64..200 {
+            // Vary stone count so we test early/mid/late-game densities.
+            let n = 5 + ((seed * 7 + 13) % 46) as usize; // 5..50 stones
+            let board = random_board(seed.wrapping_mul(0xdeadbeef), n);
+
+            for player in [Player::One, Player::Two] {
+                let fast = board.threat_moves(player);
+                let reference = board.threat_moves_ref(player);
+                assert_eq!(
+                    fast, reference,
+                    "threat_moves diverged from threat_moves_ref on seed={seed} n={n} player={player:?}\n  fast={fast:?}\n  ref={reference:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn threat_moves_five_in_row_open_at_both_ends() {
+        // P1 has 4-in-a-row (q=0..3, r=0). Placing at q=4 or q=-1 creates a
+        // 5-stone line with 1 empty at the other end — a new win-in-1.
+        // Both cells must appear in threat_moves(P1).
+        let mut board = Board::new();
+        for q in 0..4i32 {
+            board.cells.insert((q, 0), Cell::P1);
+        }
+        board.has_stones = true;
+        board.cache_dirty.set(true);
+        // Rebuild min/max so legal_moves_set works correctly.
+        board.min_q = 0; board.max_q = 3; board.min_r = 0; board.max_r = 0;
+
+        let fast = board.threat_moves(Player::One);
+        let reference = board.threat_moves_ref(Player::One);
+        assert_eq!(fast, reference, "fast and ref must agree on 4-in-a-row position");
+        // The threat cells are those that extend to 5 stones with 1 open end:
+        // placing at q=-1 → 4 player +1 more = window (-1,0..4,0) if open, etc.
+        // Just verify equivalence here; exact cells depend on legal set.
+        assert!(!fast.is_empty(), "4-in-a-row should produce threat moves");
+    }
+
+    #[test]
+    fn threat_moves_empty_board_is_empty() {
+        // No stones → no threat moves for either player.
+        let board = Board::new();
+        assert_eq!(board.threat_moves(Player::One), board.threat_moves_ref(Player::One));
+        assert_eq!(board.threat_moves(Player::Two), board.threat_moves_ref(Player::Two));
+        assert!(board.threat_moves(Player::One).is_empty());
+        assert!(board.threat_moves(Player::Two).is_empty());
+    }
+
+    #[test]
+    fn threat_moves_opponent_blocked_window_excluded() {
+        // P1 4-in-a-row (q=0..3, r=0) with P2 stone at q=4 (blocks east end).
+        // Only q=-1 creates a threat (extends westward to 4+1=5 p1 stones open at
+        // q=-2 or q=5 depending on window). Reference oracle is ground truth.
+        let mut board = Board::new();
+        for q in 0..4i32 {
+            board.cells.insert((q, 0), Cell::P1);
+        }
+        board.cells.insert((4, 0), Cell::P2);
+        board.has_stones = true;
+        board.min_q = 0; board.max_q = 4; board.min_r = 0; board.max_r = 0;
+        board.cache_dirty.set(true);
+
+        let fast = board.threat_moves(Player::One);
+        let reference = board.threat_moves_ref(Player::One);
+        assert_eq!(fast, reference, "blocked end must be excluded consistently");
     }
 }
