@@ -32,14 +32,14 @@ LOG=$REPO/logs/valprobe_sealbot.log
 echo "[$(date -u +%H:%M:%S)] === VALPROBE WP1 SealBot START ===" | tee -a $LOG
 
 # ── ARM 248k ──────────────────────────────────────────────────────────────────
-echo "[$(date -u +%H:%M:%S)] Starting arm 248k (SealBot d6-d8, window_half=9)" | tee -a $LOG
+echo "[$(date -u +%H:%M:%S)] Starting arm 248k (SealBot d6-only, cap=5s, window_half=9)" | tee -a $LOG
 $VENV $REPO/scripts/valprobe/run_valprobe_sealbot.py \
   --arm 248k \
   --games $REPO/reports/evalfair/retro_slope/checkpoint_00248000/games.jsonl \
   --ckpt $REPO/checkpoints/run2_retro/checkpoint_00248000.pt \
   --expect-encoding v6_live2_ls \
   --out $REPO/reports/valprobe/248k/ \
-  --depths 6,7,8 \
+  --depths 6 \
   --window-half 9 \
   --workers 20 \
   --game-timeout 600 \
@@ -48,14 +48,14 @@ $VENV $REPO/scripts/valprobe/run_valprobe_sealbot.py \
 echo "[$(date -u +%H:%M:%S)] arm 248k DONE" | tee -a $LOG
 
 # ── ARM 175k ──────────────────────────────────────────────────────────────────
-echo "[$(date -u +%H:%M:%S)] Starting arm 175k (SealBot d6-d8, window_half=9)" | tee -a $LOG
+echo "[$(date -u +%H:%M:%S)] Starting arm 175k (SealBot d6-only, cap=5s, window_half=9)" | tee -a $LOG
 $VENV $REPO/scripts/valprobe/run_valprobe_sealbot.py \
   --arm 175k \
   --games $REPO/reports/evalfair/retro_slope/run2_175k/games.jsonl \
   --ckpt $REPO/scripts/arena/weights/run2_175k.pt \
   --expect-encoding v6_live2_ls \
   --out $REPO/reports/valprobe/175k/ \
-  --depths 6,7,8 \
+  --depths 6 \
   --window-half 9 \
   --workers 20 \
   --game-timeout 600 \
