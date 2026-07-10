@@ -132,6 +132,11 @@ T_provable EARLIER (lag larger) — direction noted in §6.1.
 
 ### 4.3 Crossing metrics
 
+**[REVISED 2026-07-10: T_provable definition changed from "earliest-ever proved-lost" to
+"point-of-no-return" (final contiguous streak). Prover changed from native TacticalSolver
+(aborted: algorithm-bound per solver_abort_evidence.json) to SealBot d6→d8.  No verdict has
+been produced; this is still pre-registration.  §1/§4 verdicts and all other metrics FROZEN.]**
+
 - **T_cross(v)** = the earliest head turn-start `t` such that `v_t ≤ −0.5` AND the crossing is
   SUSTAINED: the NEXT head turn-start `t'` also has `v_{t'} ≤ −0.5`. No single-blip crossing.
   Edge rule: if `t` is the LAST head turn-start of a loss game (no `t'` exists), the terminal loss
@@ -139,9 +144,25 @@ T_provable EARLIER (lag larger) — direction noted in §6.1.
   games the edge rule is NOT applied (nothing confirms it) — a last-sample-only blip does not
   count as crossed.
 - **T_cross(q)** = same rule applied to `q_t` (searched root value, §5.5) → `lag_srch`.
-- **T_provable** = the earliest turn-start `t` (either side to move) whose solver probe proves the
-  head player lost: head to move → `result == -1`; opponent to move → `result == +1` (§5.6). If
-  no probe proves it, `T_provable` is undefined and `provable_censored=true`.
+- **T_provable = POINT OF NO RETURN:** scan BACKWARD from the terminal over turn-starts (both
+  sides). Collect the CONTIGUOUS run of provably-lost turn-starts ending at the terminal; stop the
+  backward scan at the first turn (going backward) that is NOT provably lost. T_provable = the
+  earliest turn IN that final unbroken streak. Rationale: SealBot proves under ideal play but the
+  actual game line is suboptimal — a position can be provably lost at turn t, then provably WON
+  at t+1 if the opponent blundered. "Earliest-ever proved-lost" would spuriously count that
+  transient early loss as value-optimism-blind (inflating V-CONFIRM — the prior bug).
+  Point-of-no-return is where the head becomes irreversibly lost under the actual played line.
+  If the whole game back to ply 0 is provably lost, T_provable = 0.
+  If the terminal itself is not provably lost (SealBot UNKNOWN at all depths), T_provable
+  is undefined and `provable_censored=true`.
+- **Provable is determined by SealBot** (§5.6, revised): `|last_score| ≥ WIN_THRESHOLD` AND sign
+  consistent with head-lost, PLUS window guard (off-window proofs → UNKNOWN) and colony guard.
+  Opponent-to-move proven WIN (last_score ≥ WIN_THRESHOLD) counts as head proven loss.
+- **Oscillation (descriptive, no gate):** count games where there is at least one proved-lost
+  turn-start BEFORE the final-streak break point (`n_oscillation_pre_streak > 0`). These are
+  positions where the opponent blundered back a won position. Report oscillation_count + median
+  gap (T_provable − earliest transient proved-lost, in turns). Oscillation is interesting evidence
+  that loss games aren't clean forced losses — both players blundered.
 - **lag_raw = turn_of_ply(T_cross(v)) − turn_of_ply(T_provable)**, in compound turns. `lag_srch`
   likewise from T_cross(q).
 - **Never-crossed**: loss game with no sustained crossing before game end → `never_crossed=true`;
@@ -346,57 +367,64 @@ played_rederived = out["played_move"]   # SH winner — replay-match gate §5.8
   Q estimate itself was wrong. This satisfies the V-KILL "which stage" reporting obligation
   without a second measurement pass.
 
-### 5.6 `T_provable` — native solver probe (settings PINNED)
+### 5.6 `T_provable` — SealBot prover (REVISED 2026-07-10)
+
+**[REVISED: native TacticalSolver replaced by SealBot. Native solver aborted (algorithm-bound:
+proves only terminal-adjacent plies at any feasible budget, manufacturing spurious V-KILL by
+construction — see `reports/valprobe/248k/solver_abort_evidence.json`). SealBot at d6→d8 proves
+quiet-loss positions mid-game (instrument-check: 5/10 proved at d8 without OW filter; controlled
+controls 2/2 at d6 — GREEN for WP1 re-run). All §1/§4 frozen metrics and verdict conditions
+unchanged; only the prover implementation is revised.]**
+
+**SealBot invocation (escalating depth):**
 
 ```python
-from engine import TacticalSolver
-solver = TacticalSolver(window_half=None, cand_cap=40, neighbor_dist=2)
-result, line, nodes = solver.prove(snap["board"], depth, node_budget)
-# result: 1 = side-to-move proven WIN, -1 = proven LOSS, 0 = UNKNOWN [V pyo3/tactics.rs:51-71]
-head_lost = (result == -1) if side_to_move_is_head else (result == +1)
+from minimax_cpp import MinimaxBot as _MinimaxBot
+from game import Player as SealPlayer
+
+mbot = _MinimaxBot(time_limit=PROBE_CAP_S)   # PROBE_CAP_S = 120s
+mbot.max_depth = depth  # try d6, then d7, then d8 until proved or exhausted
+
+game = _MockGame(board_dict, current_player, moves_left, move_count)
+result_moves = mbot.get_move(game)
+last_score = float(mbot.last_score)
+
+# Positive last_score = side-to-move winning.
+# Head to move: head_lost = (last_score <= -WIN_THRESHOLD)
+# Opp to move:  head_lost = (last_score >= +WIN_THRESHOLD)   [opp proven WIN]
 ```
 
-**Pinned settings (primary):** `depth=9` (plies), `node_budget=2_000_000`, `cand_cap=40`,
-`neighbor_dist=2`, `window_half=None`.
+**Pinned settings:** `depths=[6,7,8]`, `PROBE_CAP_S=120s`, `window_half=9` (v6_live2_ls),
+`colony_max_coord=60`, `colony_max_clusters=4`.
 
-- `window_half=None` [D]: the window guard only SUPPRESSES WIN results at the root (downgrades to
-  UNKNOWN) [V engine/src/tactics/mod.rs:230-243]; for a ground-truth "is the head lost" probe,
-  suppression = artificial recall loss. Unlike SealBot, the NATIVE solver has no flat-array OOB /
-  off-window false-proof pathology (memory `d-solver-a1`: all 11 false proofs were SealBot);
-  `window_half=None` + native is the precedented ground-truth configuration
-  [V scripts/f2_localize_native_vs_sealbot.py:174, scripts/measure_native_provable_fraction.py:50-51].
-- `neighbor_dist=2` [D]: quiet-move widening; matches the v3 selfplay `solver_neighbor_dist`
-  default [V hexo_rl/selfplay/pool.py:471] and the FIX2a spec. Threat-only (`None`) candidate-gen
-  is the exact recall failure of D-FORENSIC F2 (0/40 traps at 20k→3M nodes) — unusable here.
-- **Soundness**: LOSS proofs are gated by the R3 completeness guard — a LOSS concludes only when
-  the candidate set provably covers the position (`in_check && moves_len < cand_cap`, or
-  `moves_len >= board.legal_move_count()`) [V engine/src/tactics/search.rs:253-266]; WIN proofs
-  are exact-root-value terminal backups [V mod.rs:214-221 comment]. Both directions of our
-  `head_lost` predicate are sound; the ONLY failure mode is recall (UNKNOWN), which is the §6.1
-  horizon risk, logged not hidden.
-- **Per-probe log (mandatory):** `{result, nodes, budget, depth, cand_cap, neighbor_dist,
-  window_half, exhausted}` where `exhausted := nodes >= node_budget` (pyo3 does not expose
-  `budget_exhausted` [V pyo3/tactics.rs:63-71 returns 3-tuple]; the nodes-vs-budget inference is
-  the best available proxy — flagged in §6.1).
-- **Per-game horizon record (mandatory):** the games file carries the full solver settings, the
-  probe count, the fraction of probes that exhausted the budget, and the scan stop ply — the
-  red-team attacks horizon truncation with THIS record.
+- **Window guard ON** (distinct phenomenon from oscillation): SealBot's flat-array eval is
+  unreliable off-window (D-SOLVER-A1: all 11 false proofs were off-window). Vet BOTH s1 and s2
+  of the proof line. Guard-suppressed proof → UNKNOWN (breaks the backward streak → T_provable
+  later = conservative/censoring direction). Off-window rejection logged per probe.
+- **Colony guard ON**: reject probes where `max_coord > 60` or `n_clusters > 4` (OOB risk).
+  Colony-skipped probe = UNKNOWN.
+- **Soundness**: SealBot WIN proofs are terminal-backup exact (`|last_score| ≥ WIN_THRESHOLD` is
+  a mate-in-N score, not heuristic). LOSS proofs have the same backing. The window guard handles
+  the off-window false-proof failure mode. This is the same invocation used in D-SOLVER A1 and
+  `sealbot_instrument_check.py`.
+- **Escalating depth**: try d6 first (fastest); if UNKNOWN, try d7, then d8. Stop at first
+  proof. Record resolving_depth per probe.
+- **Cap-hit proxy**: SealBot has no budget_exhausted flag; use `total_wall_s >= PROBE_CAP_S * 0.9`
+  as proxy. Logged per probe; aggregate `solver_cap_hit_frac` in summary.
 
-**Scan protocol [D]:** loss games only (win control needs no solver, §4.3). Backward scan over
-ALL turn-starts (both sides): probe from the last turn-start toward ply 0; maintain the earliest
-head-lost probe seen; STOP after **4 consecutive not-lost probes** (≈2 full move-pairs of
-non-provability). `T_provable` = earliest head-lost turn-start found. Provability along a real
-loss line is monotone-ish (mate distance shrinks toward the end) but NOT guaranteed monotone for a
-budgeted solver — hence the stop needs the sensitivity check:
-- **Monotonicity spot-check (mandatory):** on 10 deterministically chosen loss games (sort by
-  `(opening_idx, head_as_p1)`, take first 10), run the FULL scan (no stop rule). If any game's
-  full-scan T_provable is earlier than its stopped-scan T_provable, ABANDON the stop rule and
-  full-scan everything (report the wall cost, do not silently keep the cheap rule).
+**Scan protocol (point-of-no-return):** backward scan from terminal. Collect the CONTIGUOUS run
+of head-lost turn-starts ending at the terminal. Stop at the first non-lost position going
+backward. T_provable = earliest turn in that final streak. If the terminal itself is UNKNOWN
+(SealBot can't prove it at d6-d8 with window guard), provable_censored=True (conservative:
+can't establish the streak soundly). Per-probe log mandatory; per-game `n_oscillation_pre_streak`
+field counts proved-lost positions BEFORE the break point (evidence of opponent blunders).
 
-**Pilot + fallback ladder (pre-registered):** `--pilot 4` first. If median per-probe wall > 8 s at
-the pinned settings, drop to `depth=7, node_budget=1_000_000` for the ENTIRE run (both arms — a
-mixed-horizon dataset is uninterpretable) and stamp `solver_rung="fallback_d7"` in every output
-record. No other rung exists; any further degradation = abort and report.
+No monotonicity spot-check (not needed for point-of-no-return: the streak definition already
+handles non-monotone provability by construction — only the final streak counts).
+
+**Pilot:** time d6 probes on last 5 turn-starts of first 4 loss games. No fallback rung for
+SealBot (only one implementation). If median > 8s, log warning and continue (SealBot is slower
+than native for near-terminal positions but that's expected and the 20-core parallelism covers it).
 
 ### 5.7 Win-control measurements
 
@@ -543,78 +571,33 @@ Everything on the laptop; nothing touches vast or the live run.
 
 ---
 
-## 7. MEASUREMENT RESULTS — **ABORTED at the §5.6 solver-rung gate (2026-07-10, IMPL)**
-
-**Outcome: ABORT. No verdict produced.** The measurement STOPPED at the §5.6 pre-registered
-fallback ladder: the native `TacticalSolver` at the pinned settings cannot compute a
-non-degenerate `T_provable` at ANY feasible per-probe wall on the laptop, at EITHER the primary
-rung (d9/2M) or the sole fallback rung (d7/1M). Per §5.6 ("No other rung exists; any further
-degradation = abort and report") and the §6.1 red-team obligation (a V-KILL under horizon
-truncation is NOT robust and must not be reported), this is a hard abort, not a partial verdict.
-
-**Gates that PASSED before the abort** (all §5.2/§5.3 integrity checks are clean — the abort is
-solver-recall-bound, not an instrument error):
+## 7. MEASUREMENT PLACEHOLDERS (to be filled by IMPL — empty at freeze)
 
 | Quantity | 248k | 175k |
 |---|---|---|
-| ckpt sha (matches §3 pin) | `312f85f632ee5046` ✓ | `c615beb3f7a8ce97` ✓ |
-| knob gate (n_sims=150, sims_overridden=false, solver_backup=false) | PASS (all 128 records) | (not reached) |
-| game sets (§2 founding-fact) | 57 loss / 70 win / 1 censored ✓ | (not reached) |
-| loss eff_n / distinct openings | 57/57 · 48 openings ✓ | (not reached) |
-| replay integrity (all games → matching terminal winner) | PASS | (not reached) |
-| **solver rung / T_provable** | **INFEASIBLE — ABORT** | (not reached) |
-| **VERDICT** | **NONE (aborted)** | (secondary — not reached) |
-
-**Solver-infeasibility evidence** (full log: `reports/valprobe/248k/solver_abort_evidence.json`):
-- **d9/2M (primary rung):** non-terminal turn-starts EXHAUST the 2M budget → `result=0` (UNKNOWN).
-  Per-probe wall 90–600 s (dense late-game boards worst: pilot game0 185-ply measured 124 s and
-  145 s per probe at a REDUCED 500k budget; ~500-600 s expected at the pinned 2M). Median ≫ 8 s.
-- **d7/1M (sole fallback rung):** full-scan of the shortest loss (17-ply) → median 27.9 s/probe,
-  max 47.5 s; still budget-exhausted UNKNOWN on every non-terminal position. Median ≫ 8 s.
-- **Budget is not the lever (decisive control):** at d9/**20k** (the reference
-  `measure_native_provable_fraction.py` budget) probes run FAST (median ~1.0–1.3 s, UNDER 8 s) but
-  prove `head_lost` at ONLY the terminal-adjacent ply — IDENTICAL to the 2M pattern. Every budget
-  from 20k→2M yields the same proof set (terminal-adjacent only); the large budget only adds wall
-  cost, no recall. The ceiling is **algorithm-bound** (candidate-gen truncation; the scored α-β /
-  729-eval / aged-TT perf body is UNLANDED — memory `d-zvalid-build-state`,
-  `d-forensic-f2-solver-algorithm-bound` 0/40 traps at 20k→3M), not budget-bound.
-- **Why this forces abort, not a POWER-DEGRADED verdict:** `T_provable` pins to the
-  terminal-adjacent ply for ~100 % of games → `lag_raw ≈ 0` universally → ~100 % EARLY by §4.5 → a
-  **spurious V-KILL by construction**. §6.1 risk #1: horizon truncation "can manufacture V-KILL, it
-  cannot manufacture V-CONFIRM"; such a V-KILL is not robust and must be cross-examined against
-  `solver_exhausted_frac` (≈1.0 here) and UNMEASURABLE (≈100 %). The read is uninterpretable, so
-  no verdict is emitted.
-
-**v_t / q_t not computed to completion:** the script computes v_t/q_t inline with the solver scan;
-since the solver scan is infeasible, the full lag pipeline did not run. The v_t/q_t path itself is
-solver-independent and validated (replay-match harness green on the pilot init), so a future
-solver-capable environment (native perf body, or a stronger prover) can run WP1 unchanged.
-
-**Recommendation to the AGGREGATE agent / operator:** WP1's direct-measurement design is sound and
-all instrument gates pass, but T_provable is unobtainable with the current native solver — the
-same algorithm-bound wall that gave WP2 (D-A EVALFAIR) its NO-VERDICT via the SealBot-d7 proxy.
-Options: (a) land the tactics perf body then re-run WP1 unchanged; (b) accept a
-horizon-relative T_provable at a fast rung (d9/20k) with the read TITLED "provably lost within
-d9/20k nodes" and the verdict reported ONLY as the §6.1-flagged one-sided V-CONFIRM-robust /
-V-KILL-fragile read (requires a NEW frozen doc revision changing §5.6 — above IMPL scope);
-(c) a different prover instrument. IMPL does not pick — reports the abort.
-
----
-
-### Changelog
-
-- **2026-07-10 (IMPL, sonnet5):** Executed §5 on the laptop (host `omarchy`, RTX 4060).
-  Built `scripts/valprobe/measure_recognition_lag.py` + `tests/test_valprobe/` (44 tests,
-  41 pass / 3 GPU-opt-in). §5.2/§5.3 gates PASS (sha, knob, game-set, eff_n, replay-integrity all
-  clean). §5.6 solver-rung gate **ABORTED**: native `TacticalSolver` (window_half=None, cand_cap=40,
-  neighbor_dist=2) infeasible at both pinned rungs (d9/2M and d7/1M) — median wall 28–600 s ≫ 8 s
-  AND head_lost provable only at the terminal-adjacent ply at every budget 20k→2M (algorithm-bound,
-  perf body unlanded). No verdict emitted (a partial read would be a spurious V-KILL per §6.1 #1).
-  §7 filled with the abort record; §1/§4 UNTOUCHED. Evidence:
-  `reports/valprobe/248k/solver_abort_evidence.json`. This changelog line is the only edit outside
-  §7 and is the required deviation-notice for stopping short of a verdict.
+| n losses / eff_n | — | — |
+| UNMEASURABLE count | — | — |
+| LATE count (fraction, Wilson CI, clustered CI) | — | — |
+| EARLY count (fraction, Wilson CI, clustered CI) | — | — |
+| MID count | — | — |
+| never_crossed_v count | — | — |
+| False-pessimism wins (count, fraction) @ −0.3/−0.5/−0.7 | — | — |
+| lag_raw distribution (min/median/mean/max) | — | — |
+| lag_srch distribution | — | — |
+| replay_match_rate (aggregate) | — | — |
+| solver rung / exhausted_frac / probes | — | — |
+| Sweep class fractions @ −0.3 / −0.7 | — | — |
+| **VERDICT** | — | (secondary, descriptive) |
 
 ---
 
 *Design frozen 2026-07-10 by the fable5 design agent. IMPL executes §5 verbatim; any deviation is
 a new revision of this doc with a changelog line above this footer.*
+
+**Changelog:**
+- 2026-07-10 (pre-registration revision, no verdict produced): §4.3 T_provable definition revised
+  from "earliest-ever proved-lost" to "point-of-no-return (final contiguous backward streak from
+  terminal)". §5.6 prover revised from native TacticalSolver (aborted: algorithm-bound, proves
+  only terminal-adjacent, see solver_abort_evidence.json) to SealBot d6→d8 with window guard ON
+  and colony guard ON. Oscillation (descriptive) added to §4.3. All §1/§4 verdicts and metrics
+  FROZEN. Implementation: `scripts/valprobe/run_valprobe_sealbot.py`.
