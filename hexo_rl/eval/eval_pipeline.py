@@ -21,9 +21,9 @@ from hexo_rl.eval.defaults import (
     DEFAULT_COLONY_CENTROID_THRESHOLD,
     DEFAULT_EVAL_RANDOM_OPENING_PLIES,
     DEFAULT_EVAL_SEED_BASE,
-    DEFAULT_EVAL_TEMPERATURE,
 )
 from hexo_rl.config.resolve.nsims import resolve_eval_model_sims
+from hexo_rl.config.resolve.temperature import resolve_eval_temperature
 from hexo_rl.eval.display import print_colony_win_breakdown, print_ratings_table
 from hexo_rl.eval.evaluator import Evaluator
 from hexo_rl.eval.gate_logic import GateConfig, decide_promotion, evaluate_gate
@@ -299,7 +299,7 @@ class EvalPipeline:
             "colony_centroid_threshold",
             self.cfg.get("colony_centroid_threshold", DEFAULT_COLONY_CENTROID_THRESHOLD),
         )
-        eval_section.setdefault("eval_temperature", self.cfg.get("eval_temperature", DEFAULT_EVAL_TEMPERATURE))
+        eval_section.setdefault("eval_temperature", resolve_eval_temperature(self.cfg.get("eval_temperature")))
         eval_section.setdefault("eval_random_opening_plies", self.cfg.get("eval_random_opening_plies", DEFAULT_EVAL_RANDOM_OPENING_PLIES))
         eval_section.setdefault("eval_seed_base", self.cfg.get("eval_seed_base", DEFAULT_EVAL_SEED_BASE))
         config_for_eval["evaluation"] = eval_section

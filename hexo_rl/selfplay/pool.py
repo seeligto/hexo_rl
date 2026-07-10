@@ -40,22 +40,12 @@ from engine import ReplayBuffer
 log = structlog.get_logger()
 
 
-def resolve_playout_cap_temperature(pc: Dict[str, Any]) -> tuple[int, float]:
-    """Resolve ``(temp_threshold_compound_moves, temp_min)`` from a ``playout_cap`` dict.
-
-    Fallback = cosine-OFF ``(0, 0.5)`` — mirrors the Rust ``SelfPlayRunnerConfig``
-    default and the documented production posture: a variant that omits these keys
-    inherits a constant tau=0.5, and must NOT silently re-arm the §156/L9
-    draw-collapse cosine (the legacy fallback was the toxic 15 / 0.05). Schedule-ON
-    values (e.g. a D-TEMPDECAY probe/smoke arm) pass through unchanged.
-    (D-TEMPDECAY C1, 2026-06-12.)
-    """
-    thr = pc.get("temperature_threshold_compound_moves")
-    tmin = pc.get("temp_min")
-    return (
-        int(thr) if thr is not None else 0,       # absent OR explicit null -> OFF
-        float(tmin) if tmin is not None else 0.5,
-    )
+# CONFRES P4: the self-play temperature resolver (with the L9/§156 cosine-ban fallback) moved
+# to the temperature authority. Imported + aliased so the call site below and
+# tests/test_playout_cap_temperature.py keep their ``hexo_rl.selfplay.pool`` import path.
+from hexo_rl.config.resolve.temperature import (
+    resolve_selfplay_temperature as resolve_playout_cap_temperature,
+)
 
 
 # §176 P9 — typed snapshot dataclasses replace ad-hoc reaches into the

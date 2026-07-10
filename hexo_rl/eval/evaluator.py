@@ -23,9 +23,9 @@ from hexo_rl.eval.defaults import (
     DEFAULT_C_PUCT,
     DEFAULT_COLONY_CENTROID_THRESHOLD,
     DEFAULT_EVAL_SEED_BASE,
-    DEFAULT_EVAL_TEMPERATURE,
 )
 from hexo_rl.config.resolve.nsims import resolve_eval_model_sims
+from hexo_rl.config.resolve.temperature import resolve_eval_temperature
 from hexo_rl.model.network import HexTacToeNet
 from hexo_rl.selfplay.inference import LocalInferenceEngine
 from hexo_rl.encoding import lookup as _lookup_encoding
@@ -159,7 +159,7 @@ class Evaluator:
         self.colony_centroid_threshold = float(
             eval_cfg.get("colony_centroid_threshold", DEFAULT_COLONY_CENTROID_THRESHOLD)
         )
-        self._eval_temperature = float(eval_cfg.get("eval_temperature", DEFAULT_EVAL_TEMPERATURE))
+        self._eval_temperature = resolve_eval_temperature(eval_cfg.get("eval_temperature"))
         self._eval_random_opening_plies = int(eval_cfg.get("eval_random_opening_plies", 0))
         self._eval_seed_base = int(eval_cfg.get("eval_seed_base", DEFAULT_EVAL_SEED_BASE))
 

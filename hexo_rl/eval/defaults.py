@@ -26,7 +26,7 @@ from __future__ import annotations
 # Defaults the pipeline injects into the ``evaluation`` config section
 # before constructing the Evaluator. (model_sims moved to resolve/nsims.py — P5.)
 DEFAULT_COLONY_CENTROID_THRESHOLD: float = 6.0
-DEFAULT_EVAL_TEMPERATURE: float = 0.5
+# eval_temperature moved to resolve/temperature.py — P4.
 DEFAULT_EVAL_RANDOM_OPENING_PLIES: int = 4
 DEFAULT_EVAL_SEED_BASE: int = 42
 
