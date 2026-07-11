@@ -315,8 +315,14 @@ def load_best_model_resilient(
     candidate is tried; the eventual successful candidate is then promoted
     in-place to ``best_model.pt`` by the caller (atomic save).
     """
+    # Strip arch keys that may differ between the anchor checkpoint and the
+    # current run — the anchor must load with ITS OWN architecture, not the
+    # run's. value_head_type/n_value_bins are new (E1) and absent from scalar
+    # anchors; feeding the run's dist65 value into a weights-only scalar anchor
+    # load builds a dist65 net that then fails to load the scalar state dict.
     fallback_cfg = {k: v for k, v in config.items()
-                    if k not in ("in_channels", "input_channels")}
+                    if k not in ("in_channels", "input_channels",
+                                 "value_head_type", "n_value_bins")}
 
     # 1. Live anchor.
     if best_model_path.exists():
@@ -400,6 +406,8 @@ def resolve_anchor(
     in_channels: int,
     input_channels: Any,
     se_reduction_ratio: int,
+    value_head_type: str = "scalar",
+    n_value_bins: int = 65,
     run_id: str | None = None,
 ) -> AnchorState:
     """Resolve the best-model anchor and sync ``inf_model`` to it.
@@ -558,6 +566,8 @@ def resolve_anchor(
             board_size=board_size, res_blocks=res_blocks, filters=filters,
             in_channels=in_channels, input_channels=input_channels,
             se_reduction_ratio=se_reduction_ratio,
+            value_head_type=value_head_type,
+            n_value_bins=n_value_bins,
         ).to(device)
         # §S181-AUDIT Wave 2 — fresh anchor adopts EMA weights when enabled
         # so this rare path stays consistent with the rest of the inference
