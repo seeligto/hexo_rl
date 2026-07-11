@@ -592,6 +592,22 @@ def init_trainer(
         ):
             if _enc_key in trainer.config:
                 combined_config[_enc_key] = trainer.config[_enc_key]
+        # CONFRES F1(A) split-brain fix: back-propagate the FULL set of F1-DEFERRED keys (the exact
+        # keys F1's defer-to-baked preserved — from trainer.f1_deferred_keys, NOT a hardcoded list)
+        # from trainer.config into combined_config, so the training loop / self-play / inference
+        # EXECUTE the values F1 preserved. Without this, run_training_loop(config=combined_config)
+        # ran the launch-merge (base-default) value while the resume_base_default_deferred_to_baked
+        # WARN, the re-baked checkpoint, AND the resolved_config emission ALL reported the baked value
+        # the run did NOT execute (e.g. ply_cap_value; and amp_dtype — a numerical trainer⊥inference
+        # autocast-dtype split). The 4 encoding keys above are a subset already covered; this closes
+        # every OTHER loop-read knob. E0 is untouched (declared keys are NOT in f1_deferred_keys, so a
+        # declaration still wins in combined_config); F2 (load-time assert) + owned-key semantics are
+        # unaffected (F1 owns which keys deferred).
+        # Plain attribute access (not getattr-with-default): Trainer.__init__ always sets
+        # f1_deferred_keys, so a missing attr is a real bug we WANT to surface, not mask. Every
+        # deferred key is baked → present in trainer.config, so no membership guard is needed.
+        for _f1_key in trainer.f1_deferred_keys:
+            combined_config[_f1_key] = trainer.config[_f1_key]
         _post_prop_enc = combined_config.get("encoding")
         _post_prop_enc_name = (
             _post_prop_enc.get("version") if isinstance(_post_prop_enc, dict) else _post_prop_enc

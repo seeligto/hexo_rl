@@ -309,7 +309,7 @@ def _apply_config_overrides_f1(
     baked_config: Optional[Dict[str, Any]],
     declared_keys: Optional["frozenset | set"],
     checkpoint_path: Any,
-) -> None:
+) -> "frozenset[str]":
     """Apply ``config_overrides`` onto ``config`` with the CONFRES F1(A) defer-to-baked rule.
 
     ``config`` starts as the checkpoint-baked config (full resume) or the fallback config
@@ -329,6 +329,13 @@ def _apply_config_overrides_f1(
     ``config`` already holds the baked value for any baked K (it was copied from ``ckpt["config"]``),
     so "defer to baked" = simply DO NOT overwrite it.
 
+    Returns the FROZENSET of keys where F1 DEFERRED to the baked value (base-inherited + baked). The
+    caller (``load_checkpoint``) records this on the trainer so the orchestrator can back-propagate
+    the F1-PRESERVED values into the loop-read ``combined_config`` — closing the "split-brain" where
+    the loop / self-play / inference read the launch-merge value while the WARN + re-baked ckpt +
+    ``resolved_config`` emission all report the baked value the run does NOT execute (CONFRES F1(A)
+    back-prop fix). Determining the set HERE (not a hardcoded list downstream) keeps it exact.
+
     Launch-mechanism carve-outs (preserved verbatim per the CONFRES 6b spec — these are NOT the
     variant-wins runtime knobs F1 governs, they are launch controls ``build_resume_config_overrides``
     injects for the operator, so they must NOT defer to the baked value):
@@ -340,10 +347,11 @@ def _apply_config_overrides_f1(
         unconditionally — preserve that).
       - **allow_fresh_scheduler**: the ``--allow-fresh-scheduler`` control flag.
     """
-    # No F1 (weights-only, or no declaration set threaded) → verbatim update, byte-pure.
+    # No F1 (weights-only, or no declaration set threaded) → verbatim update, byte-pure. Nothing
+    # deferred (every override applied) so no back-prop needed.
     if baked_config is None or declared_keys is None:
         config.update(config_overrides)
-        return
+        return frozenset()
 
     # Launch-mechanism keys present in overrides came from build_resume_config_overrides' explicit
     # injection (flag / --no-compile), NOT a base-config inheritance — treat as declarations so F1
@@ -356,6 +364,7 @@ def _apply_config_overrides_f1(
     declared = frozenset(declared_keys) | {
         k for k in _LAUNCH_MECHANISM_KEYS if k in config_overrides
     }
+    deferred_keys: set[str] = set()
     for key, override_val in config_overrides.items():
         if key in declared:
             # Operator declaration wins (E0) — incl explicit null.
@@ -365,9 +374,14 @@ def _apply_config_overrides_f1(
         if key in baked_config:
             baked_val = baked_config[key]
             # DEFER to the baked value: config already holds it (copied from ckpt['config']).
-            # WARN loud when the suppressed base default differs from the baked value it defers to,
-            # so the divergence is never silent (F1).
+            # Record the defer so the caller can back-propagate the PRESERVED baked value into the
+            # loop-read config (the split-brain fix). Both the differing case (WARN below) and the
+            # silent identical case are "deferred to baked" — but only a differing case matters for
+            # back-prop, so record it only when the value actually changed from the base default.
             if override_val != baked_val:
+                deferred_keys.add(key)
+                # WARN loud when the suppressed base default differs from the baked value it defers
+                # to, so the divergence is never silent (F1).
                 log.warning(
                     "resume_base_default_deferred_to_baked",
                     knob=key,
@@ -381,10 +395,11 @@ def _apply_config_overrides_f1(
                         "override the baked value."
                     ),
                 )
-            # else: identical value; silent no-op defer.
+            # else: identical value; silent no-op defer (back-prop would be a no-op too).
         else:
             # No baked value to preserve → base default applies (unchanged).
             config[key] = override_val
+    return frozenset(deferred_keys)
 
 
 def load_checkpoint(
@@ -552,8 +567,9 @@ def load_checkpoint(
                 source="shape_inference",
             )
 
+    f1_deferred_keys: "frozenset[str]" = frozenset()
     if config_overrides:
-        _apply_config_overrides_f1(
+        f1_deferred_keys = _apply_config_overrides_f1(
             config, config_overrides, baked_config, declared_keys, checkpoint_path,
         )
         if resolved_spec is not None:
@@ -621,6 +637,9 @@ def load_checkpoint(
 
     ckpt_dir = Path(checkpoint_dir) if checkpoint_dir else Path(checkpoint_path).parent
     trainer = cls(model, config, checkpoint_dir=ckpt_dir, device=device)
+    # CONFRES F1(A) back-prop: expose the keys F1 DEFERRED to the baked value so the orchestrator can
+    # propagate the PRESERVED values into the loop-read combined_config (closing the split-brain).
+    trainer.f1_deferred_keys = f1_deferred_keys
 
     if is_full_ckpt:
         try:

@@ -322,6 +322,10 @@ class Trainer:
         scaler_enabled = self.fp16 and self.amp_dtype == torch.float16
 
         self.config = config
+        # CONFRES F1(A) back-prop: the set of keys the resume's F1 defer-to-baked preserved (empty on
+        # a fresh run / weights-only resume). load_checkpoint overwrites this with the real set so the
+        # orchestrator can back-propagate the preserved baked values into the loop-read config.
+        self.f1_deferred_keys: "frozenset[str]" = frozenset()
         self.checkpoint_dir = Path(checkpoint_dir)
         self.checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
