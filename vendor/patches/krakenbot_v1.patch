@@ -1,0 +1,48 @@
+diff --git a/mcts/tree.py b/mcts/tree.py
+index 219eb74..b2e79d2 100644
+--- a/mcts/tree.py
++++ b/mcts/tree.py
+@@ -659,7 +659,7 @@ def _expand_level2(
+     if tree._root_nearby is not None:
+         # Extend cached root nearby set with stone1's own neighbors
+         _bw = tree.board_width
+-        if _bw == BOARD_SIZE:
++        if _bw == BOARD_SIZE and tree.n_cells == N_CELLS:
+             table = _NEIGHBORS_WITHIN[MAX_CAND_DIST]
+             stone1_neighbors = table[stone1_idx]
+         else:
+@@ -674,7 +674,7 @@ def _expand_level2(
+         occ_idx = set(
+             _cell_to_idx(q, r, _bw) for q, r in tree.root_occupied
+         ) | {stone1_idx}
+-        if _bw == BOARD_SIZE:
++        if _bw == BOARD_SIZE and tree.n_cells == N_CELLS:
+             cand_indices = list(_nearby_candidates(occ_idx))
+         else:
+             _bh = tree.n_cells // _bw
+diff --git a/mcts_bot.py b/mcts_bot.py
+index 2755de8..17e2b24 100644
+--- a/mcts_bot.py
++++ b/mcts_bot.py
+@@ -27,10 +27,11 @@ class MCTSBot(Bot):
+     pair_moves = True
+ 
+     def __init__(self, time_limit=1.0, model_path=None, n_sims=200,
+-                 device=None):
++                 device=None, temperature=0.1):
+         super().__init__(time_limit)
+         self._nodes = 0
+         self.n_sims = n_sims
++        self.temperature = temperature  # passed to select_move_pair; 0 = argmax
+ 
+         if model_path is None:
+             model_path = _DEFAULT_MODEL_PATH
+@@ -141,7 +142,7 @@ class MCTSBot(Bot):
+                 return [(gq, gr)]
+             return [(gq - off_q, gr - off_r)]
+         else:
+-            (g1q, g1r), (g2q, g2r) = select_move_pair(tree, temperature=0.1)
++            (g1q, g1r), (g2q, g2r) = select_move_pair(tree, temperature=self.temperature)
+             if is_torus:
+                 return [(g1q, g1r), (g2q, g2r)]
+             return [(g1q - off_q, g1r - off_r),
