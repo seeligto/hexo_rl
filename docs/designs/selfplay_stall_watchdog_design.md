@@ -71,10 +71,15 @@ elif cfg.selfplay_stall_timeout_sec > 0:                  # frozen → check age
 **Fire action (`_fire_stall_watchdog`):**
 1. LOUD `self._logger.error("selfplay_stall_watchdog", ...)` — carries `step`,
    `games_completed`, `stalled_for_sec`, `threshold_sec`, and
-   **`eval_in_flight=self.is_eval_in_flight()`** (records the eval-wedge signature).
-2. Best-effort **CPU-only** `_try_save_buffer(..., "selfplay_stall_watchdog", ...)` — verified
-   GPU-free (`buffer_persist.try_save_buffer` writes numpy to disk, never raises, no-ops when
-   `buffer_persist` disabled). Wrapped in try/except so it can never block the exit.
+   **`eval_in_flight=self.is_eval_in_flight`** (a `@property`; records the eval-wedge signature).
+2. Best-effort **CPU-only** buffer snapshot, routed to a **distinct `.watchdog` path**
+   (`replay_buffer.bin.watchdog`) — `save_to_path` is non-atomic (in-place `File::create`) and
+   the watchdog fires in the abnormal-exit regime where an external kill (OOM / vast preempt)
+   mid-write is most likely, so writing the canonical resume buffer here could truncate and
+   corrupt the next resume. A separate path can never clobber the known-good `replay_buffer.bin`
+   (red-team finding, 2026-07-11). Wrapped in try/except (a wedged worker holding a `&mut` push
+   raises PyO3 "Already borrowed") so it can never block the exit. The restart loads the last
+   periodic checkpoint's buffer, not the `.watchdog` snapshot — the snapshot is forensic.
 3. `self._exit_fn(SELFPLAY_STALL_EXIT_CODE)` — `os._exit`, guaranteed to kill even with a
    CUDA-wedged daemon thread (a clean shutdown would try to save a checkpoint via the wedged
    GPU and hang). The last periodic checkpoint (every 500 steps) already captured state at
@@ -84,9 +89,11 @@ elif cfg.selfplay_stall_timeout_sec > 0:                  # frozen → check age
 - Config: `StepCoordinatorConfig.selfplay_stall_timeout_sec: float = 1800.0` (30 min). Far
   beyond any legitimate zero-games gap: even during a heavy 4-7h eval round self-play only
   *slows*, it does not stop (games kept completing at every prior healthy eval boundary).
-  `<= 0` disables. Default ON so the live run is protected.
-- `SELFPLAY_STALL_EXIT_CODE = 42` — distinct nonzero so the launch script's `RUN2_EXITED`
-  sentinel distinguishes a watchdog abort from other failures.
+  `<= 0` disables. Default ON so the live run is protected. A non-finite value (nan/inf) is
+  fail-safe (never fires) but silent, so `__init__` logs a `selfplay_stall_watchdog_armed`
+  event with the effective `timeout_sec` + `enabled` bool to make any misconfig visible.
+- `SELFPLAY_STALL_EXIT_CODE = 42` — a distinct nonzero code a launch/restart wrapper can key on
+  via `$?` (e.g. the run2 launch script records `$PIPESTATUS` to a `RUN2_EXITED` sentinel).
 - `StepCoordinator.__init__(..., exit_fn: Callable[[int], None] = os._exit)` — injectable so
   tests verify firing without killing pytest.
 - Init state: `self._watchdog_last_games = pool.games_completed`,
@@ -96,13 +103,30 @@ elif cfg.selfplay_stall_timeout_sec > 0:                  # frozen → check age
 
 **False-positive analysis:** the only way to legitimately produce zero new games for 30 min
 post-warmup is a full self-play starvation — itself a problem worth flagging. Warmup produces
-games (progress resets the timer). Eval rounds run self-play concurrently. The knob is
+games (progress resets the timer on the FIRST `games_completed` increment, not the full
+25k-position fill). Eval rounds run self-play concurrently. The one accepted edge (red-team,
+ruled out as a real trigger): the timer is armed from `__init__`, so a genuine cold start whose
+*first game* takes >1800s would fire spuriously — but a single self-play game taking 30 min is
+itself a defect, and this restart is warm (buffer loaded from disk, no cold start). The knob is
 operator-tunable if a legitimate long pause is ever discovered.
 
 **Tests** (`tests/training/test_step_coordinator.py`, existing FakeClock/Mock harness):
 fires after threshold with frozen games (asserts `exit_fn(42)` + loud event +
-`eval_in_flight` recorded); does not fire while games advance; `<= 0` disables; buffer-save
-attempted before exit; does not fire before threshold.
+`eval_in_flight` recorded); records `eval_in_flight=True` when an eval daemon is alive; does
+not fire while games advance; `<= 0` disables; buffer snapshot routed to the distinct
+`.watchdog` path before exit; does not fire before threshold.
+
+## 2a. Review + red-team (2026-07-11)
+
+Reviewed by two subagents. **Code-review: SHIP** (all findings MINOR/NIT). **Red-team:
+SHIP-AFTER-FIXES**, no CRITICAL/MAJOR. Applied fixes: (1) route the buffer snapshot to the
+distinct `.watchdog` path so it can never clobber the resume buffer [highest-value HARM
+finding]; (2) log `selfplay_stall_watchdog_armed` at init so a non-finite/disabled config is
+not silent [CONFIG finding]; (3) soften the exit-code comment (the `RUN2_EXITED` sentinel is
+vast-local, not a repo artifact). Ruled-out/accepted: cold-start window (pathological + warm
+restart), lock-free `games_completed` read (atomic monotonic int under the GIL, self-corrects),
+`check_producer_health` handles the *crashed*-feeder path (watchdog = livelock only, no
+overlap).
 
 ---
 

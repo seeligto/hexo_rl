@@ -191,8 +191,9 @@ DEFAULT_TERMINAL_EVAL_HARD_CAP_SEC: float = 14400.0
 # every prior healthy eval boundary). <= 0 disables. See
 # docs/designs/selfplay_stall_watchdog_design.md.
 DEFAULT_SELFPLAY_STALL_TIMEOUT_SEC: float = 1800.0
-# Distinct non-zero exit code so the launch script's RUN2_EXITED sentinel can tell
-# a watchdog abort apart from other failures.
+# Distinct non-zero exit code so a launch/restart wrapper can key on a watchdog
+# abort via $? and tell it apart from other failures (e.g. the run2 launch script
+# records $PIPESTATUS to a RUN2_EXITED sentinel).
 SELFPLAY_STALL_EXIT_CODE: int = 42
 
 
@@ -429,6 +430,15 @@ class StepCoordinator:
         # resume that starts at a nonzero games count is not falsely flagged.
         self._watchdog_last_games = pool.games_completed
         self._watchdog_last_progress_time = clock.now()
+        # Log the effective config at arm-time so a disabled/misconfigured watchdog
+        # (<=0, or a non-finite nan/inf that silently never fires) is VISIBLE, not
+        # silent. finite+>0 is the armed regime; anything else is off-by-config.
+        _wd_timeout = config.selfplay_stall_timeout_sec
+        self._logger.info(
+            "selfplay_stall_watchdog_armed",
+            timeout_sec=_wd_timeout,
+            enabled=bool(math.isfinite(_wd_timeout) and _wd_timeout > 0),
+        )
 
         # Mutable per-run state (§1.1)
         self._train_step = trainer.step
@@ -673,12 +683,19 @@ class StepCoordinator:
             threshold_sec=self.config.selfplay_stall_timeout_sec,
             eval_in_flight=eval_in_flight,
         )
-        # Best-effort CPU-only buffer save (writes numpy to disk; never touches the
-        # wedged GPU, never raises). Guarded so it can never block the exit.
+        # Best-effort CPU-only buffer snapshot to a DISTINCT `.watchdog` path — the
+        # save is non-atomic (in-place File::create), and the watchdog fires exactly
+        # in the abnormal-exit regime where an external kill (OOM / vast preempt)
+        # mid-write is most likely; writing the canonical resume buffer here could
+        # truncate it and corrupt the next resume. A separate path can never clobber
+        # the known-good `replay_buffer.bin`. Guarded (a wedged worker holding a
+        # &mut push would raise PyO3 "Already borrowed") so it can never block exit.
         try:
+            _wd_cfg = dict(self.mixing_cfg)
+            _base = _wd_cfg.get("buffer_persist_path", "checkpoints/replay_buffer.bin")
+            _wd_cfg["buffer_persist_path"] = str(_base) + ".watchdog"
             _try_save_buffer(
-                self.buffer, self.mixing_cfg, "selfplay_stall_watchdog",
-                self.recent_buffer,
+                self.buffer, _wd_cfg, "selfplay_stall_watchdog", self.recent_buffer,
             )
         except Exception:  # noqa: BLE001 — fail-fast must not be blocked by a save
             pass

@@ -1083,8 +1083,10 @@ def test_watchdog_records_eval_in_flight(patch_orchestrator_helpers):
     assert fire and fire[0].kwargs.get("eval_in_flight") is True
 
 
-def test_watchdog_saves_buffer_before_exit(patch_orchestrator_helpers):
-    """Best-effort CPU-only buffer save fires before the process exits."""
+def test_watchdog_saves_buffer_to_distinct_path_before_exit(patch_orchestrator_helpers):
+    """Best-effort CPU-only buffer snapshot fires before exit, routed to a DISTINCT
+    `.watchdog` path so a mid-write external kill can never clobber the canonical
+    resume buffer (replay_buffer.bin)."""
     codes, fake_exit = _recording_exit()
     clock = FakeClock()
     pool = _make_pool(games_completed=3)
@@ -1096,8 +1098,14 @@ def test_watchdog_saves_buffer_before_exit(patch_orchestrator_helpers):
     with pytest.raises(SystemExit):
         coord.step()
     save = patch_orchestrator_helpers["save_buf"]
-    triggers = [c.args[2] for c in save.call_args_list if len(c.args) >= 3]
-    assert "selfplay_stall_watchdog" in triggers
+    wd_calls = [c for c in save.call_args_list
+                if len(c.args) >= 3 and c.args[2] == "selfplay_stall_watchdog"]
+    assert wd_calls, "watchdog must attempt a buffer snapshot"
+    wd_cfg = wd_calls[0].args[1]                    # the mixing-cfg passed to the save
+    persist_path = wd_cfg.get("buffer_persist_path", "")
+    assert persist_path.endswith(".watchdog"), \
+        "watchdog save must route to a distinct .watchdog path, not the resume buffer"
+    assert not persist_path.endswith("replay_buffer.bin"), "must never clobber the canonical buffer"
     assert codes == [SELFPLAY_STALL_EXIT_CODE]     # exit still happened
 
 
