@@ -309,6 +309,12 @@ class StepCoordinatorConfig:
     # for this many wall-clock seconds (default 30 min; <= 0 disables). Guards the
     # 2026-07-11 run2 eval-boundary GPU wedge. See DEFAULT_SELFPLAY_STALL_TIMEOUT_SEC.
     selfplay_stall_timeout_sec: float = DEFAULT_SELFPLAY_STALL_TIMEOUT_SEC
+    # E1 promotion-gate CUDA isolation (Option A): when True, the in-loop promotion-gate eval runs
+    # in a SUBPROCESS (own CUDA context) instead of a daemon thread sharing the InferenceServer's
+    # GPU state — the ROOT fix for the run2 eval-thread ⊥ self-play concurrent-GPU-forward livelock
+    # the stall watchdog was catching. Default False = byte-pure (in-thread path unchanged);
+    # the run3 launch flips it on. See docs/designs/e1_promotion_gate_cuda_isolation.md.
+    promotion_gate_subprocess_isolation: bool = False
 
 
 # ── Step outcome dataclass ───────────────────────────────────────────────────
