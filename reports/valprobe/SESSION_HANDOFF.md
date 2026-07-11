@@ -37,7 +37,7 @@ The scalar `tanh` value head is a point estimate `E[outcome]` that **averages th
 | `reports/valprobe/AGGREGATE.md` (`81b96b8`) | THE verdict write-up (one line first) | **READ FIRST** |
 | `reports/valprobe/recognition_lag.md` | Frozen WP1 design + §1 verdicts + §4.3 point-of-no-return revision + §7 filled | High |
 | `reports/valprobe/248k/summary.json` + `games.jsonl` | Primary measurement (V-CONFIRM, class counts, sweep, cross-tab, oscillation) | High |
-| `reports/valprobe/card1_probe_set.jsonl` (41) + `probe_set_v1.jsonl` (WP2, →≥200) | **Run3 card #1 eval/validation set** | High |
+| `reports/valprobe/probe_set_v1.jsonl` (**234 positions**) | **Run3 card #1 eval/validation set** (supersedes the 41-position card1_probe_set.jsonl) | High |
 | `reports/valprobe/value_health_series.jsonl` + `value_health.md` | WP4 value-health trend (calibration, radius cliff, 248k regression) | High |
 | `reports/valprobe/175k/summary.json` | Secondary arm (MIXED, r4) | Med |
 | `reports/valprobe/canary_revive.md` | WP3-C1 + C2 (event contract + canary root-cause/fix) | Med |
@@ -50,11 +50,12 @@ The scalar `tanh` value head is a point estimate `E[outcome]` that **averages th
 
 ## Commit chain (`phase4.5/valprobe_dc`)
 
-`a4e7a13` WP3-C1 · `555ed43` WP1 design freeze · `c23fe23` WP1 native abort · `d12e3a1` install.sh fix · `4692350` threat_moves 11.4× · `c8635d7` WP4 · `6c11db3` SealBot feasibility gate · `ada51c2` WP1 re-run (V-CONFIRM) · `81b96b8` AGGREGATE · `7702b13` WP3-C2 · `9d4c94d` handoff · `cfa42b0` WP2 fix (sealbot_depth relative-path) · `f812dd3` WP2 (**153 distinct**).
+`a4e7a13` WP3-C1 · `555ed43` WP1 design freeze · `c23fe23` WP1 native abort · `d12e3a1` install.sh fix · `4692350` threat_moves 11.4× · `c8635d7` WP4 · `6c11db3` SealBot feasibility gate · `ada51c2` WP1 re-run (V-CONFIRM) · `81b96b8` AGGREGATE · `7702b13` WP3-C2 · `9d4c94d` handoff · `cfa42b0` WP2 fix (sealbot_depth relative-path) · `f812dd3` WP2 (153) · `d381672` WP2 top-up (**234 distinct**).
 
-## Open / next
+## Open / next — NONE (investigation complete)
 
-- **WP2 DONE: 153 distinct card1 positions** (`probe_set_v1.jsonl`; 41 WP1 + 112 over 3 batches). Short of the round-200 target by 47 (3-batch cap); ~2 more batches (~0.6h) would close it if run3 wants the full margin — but 153 (3.7× original) delivers most of the eval power.
+- **WP2 DONE: 234 distinct card1 positions** (`probe_set_v1.jsonl`; 41 WP1 + 193 over 5 batches, seeds 20260711/+1000/+2000/20263711/20264711). Exceeded the 200 target (5.7× the original 41). Integrity verified (234/234 distinct, 0 criterion violations). This is run3's card #1 validation set.
+- **Run3 next:** build the distributional value head, validate against these 234 positions.
 - **Run3:** build card #1 distributional value head; validate against the probe set; consider search-distilled targets + trunk/representation fix.
 - **Infra note:** vast secondary box `02e023b4079b` (RTX 5080, ssh -p 13279, key ~/.ssh/vast_hexo) prepped + native-tuned but **ephemeral** — sync anything off it. install.sh hardened for private submodules.
 
