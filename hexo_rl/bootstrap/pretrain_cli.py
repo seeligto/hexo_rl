@@ -251,6 +251,15 @@ def pretrain() -> None:
     policy_only_bias: bool = bool(
         args.policy_only_bias or config.get("policy_only_bias", False)
     )
+    # Distributional value head (E1). Read from config; default = scalar.
+    _VALID_VH = {"scalar", "dist65"}
+    value_head_type: str = str(config.get("value_head_type", "scalar"))
+    if value_head_type not in _VALID_VH:
+        raise ValueError(
+            f"value_head_type={value_head_type!r} must be one of {_VALID_VH}"
+        )
+    n_value_bins: int = int(config.get("n_value_bins", 65))
+
     if policy_only_bias and not gpool_bias_active:
         raise ValueError(
             "--policy-only-bias requires --gpool-bias-active; the policy-only "
@@ -417,6 +426,8 @@ def pretrain() -> None:
         canvas_realness=canvas_realness,
         gpool_bias_active=gpool_bias_active,
         policy_only_bias=policy_only_bias,
+        value_head_type=value_head_type,
+        n_value_bins=n_value_bins,
     )
     use_compile = (
         config.get("torch_compile", True)
