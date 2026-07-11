@@ -29,16 +29,19 @@ from typing import Any, Mapping
 import yaml
 
 from hexo_rl.config.resolve.bootstrap import resolve_bootstrap
+from hexo_rl.config.resolve.encoding import UNSPECIFIED as _ENC_UNSPECIFIED
+from hexo_rl.config.resolve.encoding import EncodingConflictError
+from hexo_rl.config.resolve.encoding import normalize_declared as _enc_normalize_declared
+from hexo_rl.config.resolve.encoding import normalize_stamp as _enc_normalize_stamp
+from hexo_rl.config.resolve.encoding import reconcile_declared_vs_stamp as _enc_reconcile
 from hexo_rl.config.resolve.lr import LrProvenance, resolve_lr_provenance
 from hexo_rl.config.resolve.nsims import resolve_eval_model_sims
 from hexo_rl.config.resolve.temperature import resolve_eval_temperature
-from hexo_rl.encoding import normalize_encoding_name
 from hexo_rl.utils.config import _deep_merge
 
-# Distinct sentinel for an ABSENT encoding declaration (I1). NOT None — ``normalize_encoding_name``
-# coerces None → "v6", which would make an absent key look like a PRESENT "v6" and I2-raise against
-# any non-v6 stamp, breaking every no-`encoding:` variant on resume (B5a).
-UNSPECIFIED = types.new_class("_UnspecifiedSentinel", (), {})()
+# 6c: the ABSENT-encoding sentinel now lives in ``resolve.encoding`` (single source, delegated to by
+# both surfaces). Re-exported here under the historical name for any importer of this module.
+UNSPECIFIED = _ENC_UNSPECIFIED
 
 # The valid vocabularies (design §2 ResolvedValue). Enforced at construction so a typo in a source
 # label surfaces as a build error, not a silent mis-labelled provenance row.
@@ -292,40 +295,40 @@ def _lookup_baked(baked: Mapping[str, Any] | None, *keys: str):
     return True, node
 
 
-# ── encoding resolution (I1/I2, raise-on-conflict) ───────────────────────────
+# ── encoding resolution (I1/I2, raise-on-conflict) — DELEGATES to resolve.encoding ──
 def _resolve_encoding(
     variant_layers: list[dict],
     checkpoint_stamps: Mapping[str, Any],
 ) -> ResolvedValue:
-    """Resolve the encoding name (I1 presence-before-normalize, I2 conflict-raise, B5a absent→stamp)."""
+    """Resolve the encoding name (I1 presence-before-normalize, I2 conflict-raise, B5a absent→stamp).
+
+    CONFRES 6c: the raise/normalize DECISION lives in ``resolve.encoding.reconcile_declared_vs_stamp``
+    — the ONE rule the eval checkpoint loader ALSO delegates to (design law #1). This function only
+    maps the layer/stamp provenance onto a ``ResolvedValue`` + re-raises the shared
+    ``EncodingConflictError`` as the builder's ``ConfigConflictError`` (same ``ValueError`` lineage,
+    same both-sources-named contract).
+    """
     decl_layers = _variant_layers_only(variant_layers)
     # I1: PRESENCE test BEFORE normalization — a key present in a DECLARATION layer is a decl.
     present, raw_decl = _lookup_in_layers(decl_layers, "encoding")
-    declared = normalize_encoding_name(raw_decl) if present else UNSPECIFIED
-
-    stamp_present = "encoding" in checkpoint_stamps
-    stamp = normalize_encoding_name(checkpoint_stamps["encoding"]) if stamp_present else None
+    declared = _enc_normalize_declared(present, raw_decl)
+    stamp = _enc_normalize_stamp(checkpoint_stamps)
 
     inputs: dict[str, Any] = {}
-    if present:
+    if declared is not _ENC_UNSPECIFIED:
         inputs["variant"] = declared
-    if stamp_present:
+    if stamp is not None:
         inputs["checkpoint"] = stamp
 
-    if declared is not UNSPECIFIED and stamp_present:
-        if declared != stamp:
-            raise ConfigConflictError("encoding", {"variant": declared, "checkpoint": stamp})
-        # agree → variant declaration (source recorded as variant, the declared authority)
-        return ResolvedValue(declared, "variant", "raise-on-conflict", inputs)
-    if declared is not UNSPECIFIED:
-        return ResolvedValue(declared, "variant", "raise-on-conflict", inputs)
-    if stamp_present:
-        # absent declaration + resume → stamp authoritative (metadata-wins, B5a)
-        return ResolvedValue(stamp, "checkpoint", "raise-on-conflict", inputs)
-    # absent everywhere, fresh run → the "v6" compat default (I1)
-    default = normalize_encoding_name(None)  # "v6"
-    inputs["default"] = default
-    return ResolvedValue(default, "default", "raise-on-conflict", inputs)
+    try:
+        res = _enc_reconcile(declared, stamp)
+    except EncodingConflictError as exc:
+        raise ConfigConflictError(
+            "encoding", {"variant": exc.declared, "checkpoint": exc.stamp}
+        ) from exc
+    if res.source == "default":
+        inputs["default"] = res.name
+    return ResolvedValue(res.name, res.source, "raise-on-conflict", inputs)
 
 
 # ── variant-wins scalar resolution (I4: cli → variant-layer → ckpt-baked → default) ──

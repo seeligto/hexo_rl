@@ -696,8 +696,12 @@ def init_replay_buffer(
     else:
         min_buf_size = max(128, min(512, int(train_cfg.get("batch_size", config.get("batch_size", 256)))))
 
-    from hexo_rl.encoding import normalize_encoding_name as _normalize_encoding_name
-    buffer = ReplayBuffer(capacity=capacity, encoding=_normalize_encoding_name(config.get("encoding")))
+    # CONFRES 6c: size the buffer from the RESOLVED encoding spec (the ONE encoding→spec
+    # authority, ``resolve.encoding.window_set``) rather than a raw ``normalize(config.get)``.
+    # Byte-pure on no-conflict configs; correct on a metadata-wins resume where the buffer used to
+    # size from the pre-checkpoint spec (B5b, design §4 window_set).
+    from hexo_rl.config.resolve.encoding import window_set as _window_set
+    buffer = ReplayBuffer(capacity=capacity, encoding=_window_set(config.get("encoding")).name)
 
     glw = train_cfg.get("game_length_weights", config.get("game_length_weights", {}))
     if glw:
@@ -826,6 +830,7 @@ def init_recent_buffer(
     _bp: Optional[Path],
     _buffer_restored: bool,
     log: "structlog.stdlib.BoundLogger",
+    combined_config: dict | None = None,
 ) -> tuple[Optional[RecentBuffer], float]:
     """Build the optional RecentBuffer + restore from the .recent sidecar.
 
@@ -834,10 +839,21 @@ def init_recent_buffer(
     recent_buffer, _recency_weight
 
     Mirrors ``scripts/train.py::main`` lines 478-499 verbatim.
+
+    CONFRES 6c: the RecentBuffer state_shape sizes from the RESOLVED encoding spec. The
+    ``registry_spec`` argument is the PRE-checkpoint spec (from ``flatten_config_and_resolve_
+    encoding``) — STALE after a metadata-wins resume where the checkpoint's baked encoding
+    back-propagates a different plane count. When ``combined_config`` (the post-load config) is
+    supplied, re-resolve the spec from it via the ONE encoding→spec authority
+    (``resolve.encoding.window_set``) — a latent-bug fix, byte-pure on no-conflict configs where
+    pre- and post-checkpoint encodings agree (design §4 window_set, handoff 6c).
     """
     _recency_weight = float(train_cfg.get("recency_weight", 0.0))
     recent_buffer: RecentBuffer | None = None
     if _recency_weight > 0.0:
+        if combined_config is not None:
+            from hexo_rl.config.resolve.encoding import window_set as _window_set
+            registry_spec = _window_set(combined_config.get("encoding"))
         _recent_cap = max(256, capacity // 2)
         recent_buffer = RecentBuffer(
             capacity=_recent_cap,
@@ -874,22 +890,19 @@ def allocate_batch_buffers_for_config(
 
     Mirrors ``scripts/train.py::main`` lines 501-518 verbatim.
     """
-    from hexo_rl.encoding import resolve_from_config as _registry_resolve
+    from hexo_rl.config.resolve.encoding import window_set as _window_set
 
-    # §172 A4.3: re-resolve registry post-checkpoint-load (resume path may
-    # have rewritten encoding via metadata) and size buffers per trunk_size /
-    # policy_logit_count. Falls through to v6 defaults on legacy v6 configs.
+    # §172 A4.3 / CONFRES 6c: re-resolve the RESOLVED encoding spec post-checkpoint-load (a resume
+    # may have rewritten encoding via metadata) and size the batch buffers per trunk_size /
+    # policy_logit_count / n_planes. Pre-CONFRES a resolve FAILURE was swallowed into a v6-shaped
+    # literal fallback (n_planes=8, trunk from board_size, _N_ACTIONS) + a warn — which would build
+    # v6-geometry buffers against a NON-v6 net and corrupt training silently. Under CONFRES this is
+    # a HARD-ERROR: the encoding spec MUST resolve (design §4 window_set, handoff 6c).
     _batch_size_cfg = int(train_cfg.get("batch_size", config.get("batch_size", 256)))
-    _n_planes_spec = 8  # v6-family default; overridden from the resolved spec.
-    try:
-        _bufs_spec = _registry_resolve(combined_config)
-        _trunk_size = int(_bufs_spec.trunk_size)
-        _n_actions_spec = int(_bufs_spec.policy_logit_count)
-        _n_planes_spec = int(_bufs_spec.n_planes)
-    except Exception as _re_err:
-        log.warning("buffer_alloc_registry_resolve_failed", error=str(_re_err)[:120])
-        _trunk_size = int(combined_config.get("board_size", 19))  # fallback from config
-        _n_actions_spec = _N_ACTIONS
+    _bufs_spec = _window_set(combined_config.get("encoding"))
+    _trunk_size = int(_bufs_spec.trunk_size)
+    _n_actions_spec = int(_bufs_spec.policy_logit_count)
+    _n_planes_spec = int(_bufs_spec.n_planes)
     bufs = allocate_batch_buffers(
         _batch_size_cfg,
         _n_actions_spec,

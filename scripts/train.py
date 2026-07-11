@@ -247,8 +247,12 @@ def main() -> None:
     )
 
     # ── Recent buffer ─────────────────────────────────────────────────────────
+    # CONFRES 6c: pass the POST-load ``combined_config`` so the RecentBuffer sizes from the RESOLVED
+    # encoding spec (a metadata-wins resume back-propagates the ckpt encoding into combined_config),
+    # not the stale pre-checkpoint ``_registry_spec``.
     recent_buffer, _recency_weight = _orchestrator.init_recent_buffer(
         train_cfg, config, capacity, _registry_spec, _bp, _buffer_restored, log,
+        combined_config=combined_config,
     )
 
     # ── Pre-allocated batch arrays ────────────────────────────────────────────
