@@ -24,10 +24,22 @@ from pathlib import Path
 RESULT_EVENT = "promotion_gate_result"
 
 
-def _load_model(ckpt_path: str, device):
+def _load_model(ckpt_path: str, device, declared_encoding=None):
+    """Load an eval checkpoint, gated on the run's DECLARED encoding.
+
+    ``declared_encoding`` (the run's ``full_config["encoding"]``) is an ASSERTION reconciled against
+    the checkpoint's OWN baked stamp — a stale/foreign checkpoint whose stamp disagrees RAISES
+    :class:`DeclaredEncodingMismatchError` rather than silently CROSS-DECODING into the LIVE promotion
+    decision (D-EVALGATE "HOLE 3"; the ``vast-stale-checkpoint-name-collision`` risk). This mirrors the
+    in-thread ``eval_pipeline._load_anchor_model`` gating so the subprocess promotion path (LIVE when
+    run3 flips ``promotion_gate_subprocess_isolation``) is not a re-opened hole. ``None`` preserves the
+    pre-fix shape/stamp-inference behaviour (backward compatible).
+    """
     from hexo_rl.eval.checkpoint_loader import load_model_with_encoding
 
-    model, _spec, _label = load_model_with_encoding(ckpt_path, device)
+    model, _spec, _label = load_model_with_encoding(
+        ckpt_path, device, declared_encoding=declared_encoding,
+    )
     return model.to(device).eval()
 
 
@@ -51,8 +63,15 @@ def run_worker(argv: list[str] | None = None) -> int:
     full_config = json.loads(Path(args.config).read_text())
     eval_config = full_config.get("eval_pipeline", full_config)
 
-    candidate = _load_model(args.candidate, device)
-    best = None if args.best == "-" else _load_model(args.best, device)
+    # D-EVALGATE HOLE 3 (subprocess path): gate BOTH candidate + best on the run's declared encoding
+    # so a stale/foreign checkpoint stamp RAISES instead of silently cross-decoding into the promotion
+    # decision. `best` here is the promotion-lineage best_model (run's own encoding by construction),
+    # NOT the cross-encoding bootstrap_anchor (loaded separately inside run_evaluation, gated on its own
+    # key). `full_config.get("encoding")` reads the run's top-level declared encoding (same access
+    # pattern as step_coordinator); a config missing it → None → pre-fix shape/stamp inference.
+    declared_encoding = full_config.get("encoding")
+    candidate = _load_model(args.candidate, device, declared_encoding=declared_encoding)
+    best = None if args.best == "-" else _load_model(args.best, device, declared_encoding=declared_encoding)
     best_step = None if args.best_step == "-" else int(args.best_step)
     radius = None if args.radius == "-" else int(args.radius)
 
