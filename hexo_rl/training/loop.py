@@ -226,6 +226,7 @@ def run_training_loop(
         DEFAULT_FINAL_EVAL_DRAIN_HARD_CAP_SEC,
         DEFAULT_FINAL_EVAL_DRAIN_SAFETY_FACTOR,
         DEFAULT_FINAL_EVAL_DRAIN_TIMEOUT_SEC,
+        DEFAULT_SELFPLAY_STALL_TIMEOUT_SEC,
         DEFAULT_TERMINAL_EVAL_HARD_CAP_SEC,
         StepCoordinator,
         StepCoordinatorConfig,
@@ -322,6 +323,8 @@ def run_training_loop(
             .get("regen_command", {}).get("args", {}).get("anchor_temperature", 0.5)
         ),
         bot_corpus_path=str(mixing_cfg.get("bot_corpus_path", "") or ""),
+        selfplay_stall_timeout_sec=_lifecycle_knob(
+            "selfplay_stall_timeout_sec", DEFAULT_SELFPLAY_STALL_TIMEOUT_SEC),
     )
 
     # ── Emit run_start ─────────────────────────────────────────────────────────
