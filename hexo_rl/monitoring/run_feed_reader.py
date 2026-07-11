@@ -870,15 +870,26 @@ def read_remote_ssh(host: str, repo: str, log: str, ts_sample: int = 200,
     Raises RuntimeError on ssh failure / timeout so the renderer surfaces a
     FETCH ERROR panel."""
     # `log` may be a GLOB (e.g. logs/run2_mw_fresh*.jsonl) to read every restart
-    # segment as one continuous history — pass it UNQUOTED so the remote shell
-    # expands it into awk's file args (awk reads the program from stdin via -f -,
-    # then processes each matched file; parse_feed dedups+sorts by step so segment
-    # order/overlap doesn't matter). A plain path (no glob metachar) is quoted as
-    # before. Guard: only treat as a glob when it actually contains * / ? / [.
+    # segment as one continuous history. Guard: only treat as a glob when it
+    # actually contains * / ? / [.
+    #
+    # For globs, sort members by mtime (oldest → live) via `ls -rt` so awk's
+    # END-block la/lb/lc come from the LIVE (newest-mtime) segment.  Default
+    # shell-glob order is alphabetical: the base .jsonl sorts before .r1/.r2/…
+    # restart segments, making END-block stale (live file processed first, then
+    # overwritten by archives). ls -rt = reverse-time (oldest first) is also
+    # restart-count-robust (.r10 before .r2 in lex = wrong; mtime = correct).
+    # [ -n "$FILES" ] propagates no-match as rc=1 (FETCH ERROR panel in monitor).
     _is_glob = any(ch in log for ch in "*?[")
-    _log_arg = log if _is_glob else "'%s'" % log
-    remote_cmd = "cd '%s' && awk -v TS=%d -v GC=%d -f - %s" % (
-        repo, max(1, int(ts_sample)), max(1, int(gc_sample)), _log_arg)
+    if _is_glob:
+        remote_cmd = (
+            "cd '%s' && FILES=$(ls -rt %s 2>/dev/null) && [ -n \"$FILES\" ] && "
+            "awk -v TS=%d -v GC=%d -f - $FILES" % (
+                repo, log, max(1, int(ts_sample)), max(1, int(gc_sample)))
+        )
+    else:
+        remote_cmd = "cd '%s' && awk -v TS=%d -v GC=%d -f - '%s'" % (
+            repo, max(1, int(ts_sample)), max(1, int(gc_sample)), log)
     cmd = ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=15", host, remote_cmd]
     try:
         p = subprocess.run(cmd, input=_REMOTE_SUBSAMPLE_AWK, capture_output=True,

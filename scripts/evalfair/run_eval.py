@@ -38,6 +38,8 @@ def main() -> None:
     ap.add_argument("--expect-encoding", default="v6_live2_ls", dest="expect_encoding")
     ap.add_argument("--n-pairs", type=int, default=None,
                     help="Limit to first N pairs (smoke/test use)")
+    ap.add_argument("--sealbot-depth", type=int, default=None, dest="sealbot_depth",
+                    help="Override SealBot max_depth (default: from configs/eval.yaml = d5)")
     args = ap.parse_args()
 
     # Determine book
@@ -60,6 +62,7 @@ def main() -> None:
         book_seed=book.get("seed", 20260709),
         expect_encoding=args.expect_encoding,
         n_pairs=args.n_pairs,
+        sealbot_depth=args.sealbot_depth,
     )
 
     print(

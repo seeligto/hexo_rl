@@ -1,0 +1,27 @@
+{
+  "abort": true,
+  "gate": "§5.6 pre-registered fallback ladder exhausted → abort",
+  "reason": "Native TacticalSolver at pinned settings (window_half=None, cand_cap=40, neighbor_dist=2) cannot compute T_provable within any feasible per-probe wall at either pre-registered rung. Both the primary rung (d9/2M) and the sole fallback rung (d7/1M) exceed the 8s/probe threshold by 3–75x AND return UNKNOWN (result=0, budget-exhausted) on every non-terminal turn-start. Head-lost proofs occur ONLY at the terminal-adjacent opponent-to-move ply (result=1, opponent completes the win next turn), which pins T_provable to game-end and manufactures a spurious V-KILL by construction (§6.1 red-team risk #1). This is the D-FORENSIC F2 / D-TACTICAL algorithm-bound failure: the tactics perf body (scored α-β / 729-eval / aged TT) is UNLANDED (memory d-zvalid-build-state), so neighbor_dist=2 candidate-gen exhausts budgets without proving.",
+  "settings_tested": {
+    "primary_rung": {"depth": 9, "node_budget": 2000000, "cand_cap": 40, "neighbor_dist": 2, "window_half": null},
+    "fallback_rung": {"depth": 7, "node_budget": 1000000, "cand_cap": 40, "neighbor_dist": 2, "window_half": null}
+  },
+  "measured_walls": {
+    "shortest_loss_game_17ply_d9_300k": {"median_wall_s": 14.16, "max_wall_s": 18.57, "note": "all non-terminal positions exhaust 300k budget → UNKNOWN"},
+    "shortest_loss_game_17ply_d7_1M_fullscan": {"median_wall_s": 27.91, "max_wall_s": 47.54, "head_lost_proofs": "terminal-adjacent ply only"},
+    "pilot_game0_185ply_d9_500k": {"ply181_wall_s": 123.6, "ply179_wall_s": 145.2, "note": "dense late-game board → ~130s/probe even at reduced 500k budget; ~500-600s expected at spec 2M budget"}
+  },
+  "proof_pattern": "Across game0 (17-ply), game1 (19-ply), game2 (27-ply) losses: head_lost=True ONLY at the last turn-start (opponent-to-move, result=1, 2-6 nodes, instant). EVERY earlier turn-start returns result=0 (UNKNOWN) after exhausting the node budget. T_provable therefore always lands at the terminal-adjacent ply → lag_raw ≈ 0 for all games → ~100% EARLY/UNMEASURABLE.",
+  "consistency_with_prior": "Matches D-FORENSIC F2 (memory d-forensic-f2-solver-algorithm-bound: 0/40 traps provable at 20k→3M nodes) and measure_native_provable_fraction.py (DEPTH=16 NODE_BUDGET=20000 on PRE-MINED near-mate traps). WP1 probes ARBITRARY mid-game turn-starts, a far harder proof target than mined traps, so the solver's inability to prove is expected and pre-registered as §6.1 risk #1.",
+  "budget_is_not_the_lever": "Decisive control: at d9/20000 (the reference measure_native_provable_fraction.py budget) the solver runs FAST (median ~1.0-1.3s/probe, UNDER the 8s threshold) on 3 short loss games — but proves head_lost at ONLY the terminal-adjacent ply in every game (g0 ply15/17, g1 ply17/19, g2 ply25/27), IDENTICAL to the 2M-budget proof pattern. The large 2M/1M budgets only make probes SLOW (12-145s) WITHOUT proving anything more than the fast 20k budget does. This proves the ceiling is algorithm-bound (candidate-gen truncation, no scored α-β / aged TT), not budget-bound. No feasible rung — fast or slow — yields a T_provable earlier than terminal-adjacent, so lag_raw is uncomputable as a non-degenerate quantity at ANY budget within the frozen candidate-gen config.",
+  "verdict_contamination": "Because T_provable pins to the terminal-adjacent ply for ~100% of games, lag_raw ≈ 0 universally → ~100% EARLY by §4.5 → a spurious V-KILL. §6.1 risk #1 states horizon truncation 'can manufacture V-KILL, it cannot manufacture V-CONFIRM' and that a V-KILL read under these conditions is NOT robust and must not be reported as a verdict. Producing any 248k verdict here would be a false V-KILL by construction. Hence ABORT rather than partial verdict, per dispatcher instruction and §5.6.",
+  "gates_passed_before_abort": {
+    "ckpt_sha_248k": "312f85f632ee5046 (matches spec pin)",
+    "ckpt_sha_175k": "c615beb3f7a8ce97 (matches spec pin)",
+    "knob_gate": "n_sims_effective=150, sims_overridden=false, solver_backup=false on all 128 records — PASS",
+    "game_sets_248k": "57 losses / 70 wins / 1 censored (200-ply draw) — matches §2 founding-fact correction",
+    "loss_eff_n": "57/57 (no duplicates)",
+    "distinct_openings": "48/57 losses — matches §4.6",
+    "replay_integrity": "all 128 games replay to matching terminal winner — PASS"
+  }
+}
