@@ -17,6 +17,7 @@ key on the wire-name keep firing on safety-critical events
 from __future__ import annotations
 
 import math
+import os
 import threading
 import time
 import tracemalloc
@@ -182,6 +183,18 @@ DEFAULT_FINAL_EVAL_DRAIN_HARD_CAP_SEC: float = 14400.0
 # Terminal full-battery eval (all phases, stride ignored) on the FINAL checkpoint.
 DEFAULT_TERMINAL_EVAL_HARD_CAP_SEC: float = 14400.0
 
+# Self-play stall watchdog (2026-07-11 run2 eval-boundary wedge). Wall-clock with
+# NO new self-play game (pool.games_completed frozen) after which the run fails
+# fast — a wedged self-play/eval GPU deadlock froze games for ~45h while the main
+# loop looped in waiting_for_games forever. 30 min ≫ any legitimate zero-games gap
+# (even a heavy 4-7h eval round only SLOWS self-play; games kept completing at
+# every prior healthy eval boundary). <= 0 disables. See
+# docs/designs/selfplay_stall_watchdog_design.md.
+DEFAULT_SELFPLAY_STALL_TIMEOUT_SEC: float = 1800.0
+# Distinct non-zero exit code so the launch script's RUN2_EXITED sentinel can tell
+# a watchdog abort apart from other failures.
+SELFPLAY_STALL_EXIT_CODE: int = 42
+
 
 def promotion_capable_rounds(
     stop_step: int | None, eval_interval: int, best_stride: int,
@@ -291,6 +304,10 @@ class StepCoordinatorConfig:
     # symmetric with batch_assembly's load-target). Empty string means
     # "fall back to mixing_cfg['bot_corpus_path']" at runtime.
     bot_corpus_path: str = ""
+    # Self-play stall watchdog — fail fast if pool.games_completed stops advancing
+    # for this many wall-clock seconds (default 30 min; <= 0 disables). Guards the
+    # 2026-07-11 run2 eval-boundary GPU wedge. See DEFAULT_SELFPLAY_STALL_TIMEOUT_SEC.
+    selfplay_stall_timeout_sec: float = DEFAULT_SELFPLAY_STALL_TIMEOUT_SEC
 
 
 # ── Step outcome dataclass ───────────────────────────────────────────────────
@@ -367,6 +384,7 @@ class StepCoordinator:
         event_emitter: Callable[[dict[str, Any]], None] = emit_event,
         logger: Any = None,
         bot_buffer: ReplayBufferLike | None = None,
+        exit_fn: Callable[[int], None] = os._exit,
     ) -> None:
         # Collaborators
         self.trainer = trainer
@@ -404,6 +422,13 @@ class StepCoordinator:
         self._tracemalloc = tracemalloc_provider
         self._event_emitter = event_emitter
         self._logger = logger or structlog.get_logger("hexo_rl.training.loop")
+        self._exit_fn = exit_fn
+        # Self-play stall watchdog state — fire when pool.games_completed stops
+        # advancing for config.selfplay_stall_timeout_sec (fail-fast on a wedged
+        # self-play/eval GPU deadlock). Seeded from the current count/clock so a
+        # resume that starts at a nonzero games count is not falsely flagged.
+        self._watchdog_last_games = pool.games_completed
+        self._watchdog_last_progress_time = clock.now()
 
         # Mutable per-run state (§1.1)
         self._train_step = trainer.step
@@ -627,6 +652,38 @@ class StepCoordinator:
     def is_eval_in_flight(self) -> bool:
         return self._eval_thread is not None and self._eval_thread.is_alive()
 
+    def _fire_stall_watchdog(self, stalled_for: float) -> None:
+        """Self-play has produced no new game for >= the stall timeout — a wedged
+        self-play/eval GPU deadlock (2026-07-11 run2). Fail fast: LOUD log →
+        best-effort CPU-only buffer save → os._exit with a distinct code, so the
+        run is restarted instead of burning GPU-hours invisibly. A clean shutdown
+        is avoided on purpose — it would try to save a checkpoint through the
+        wedged GPU and hang; the periodic checkpoint already captured this step."""
+        eval_in_flight = self.is_eval_in_flight
+        self._logger.error(
+            "selfplay_stall_watchdog",
+            msg=(
+                "self-play produced no new games for %.0fs (>= %.0fs threshold) — "
+                "likely a wedged self-play/eval GPU deadlock; failing fast so the "
+                "run can be restarted"
+            ) % (stalled_for, self.config.selfplay_stall_timeout_sec),
+            step=self._train_step,
+            games_completed=self._games_played,
+            stalled_for_sec=round(stalled_for, 1),
+            threshold_sec=self.config.selfplay_stall_timeout_sec,
+            eval_in_flight=eval_in_flight,
+        )
+        # Best-effort CPU-only buffer save (writes numpy to disk; never touches the
+        # wedged GPU, never raises). Guarded so it can never block the exit.
+        try:
+            _try_save_buffer(
+                self.buffer, self.mixing_cfg, "selfplay_stall_watchdog",
+                self.recent_buffer,
+            )
+        except Exception:  # noqa: BLE001 — fail-fast must not be blocked by a save
+            pass
+        self._exit_fn(SELFPLAY_STALL_EXIT_CODE)
+
     @property
     def best_model_step(self) -> int | None:
         return self._best_model_step
@@ -751,6 +808,16 @@ class StepCoordinator:
             )
 
         self._games_played = self.pool.games_completed
+
+        # ── Self-play stall watchdog ────────────────────────────────────────
+        # Track game-production progress every iteration; fail fast if it freezes.
+        if self._games_played > self._watchdog_last_games:
+            self._watchdog_last_games = self._games_played
+            self._watchdog_last_progress_time = self._clock.now()
+        elif cfg.selfplay_stall_timeout_sec > 0:
+            stalled = self._clock.now() - self._watchdog_last_progress_time
+            if stalled >= cfg.selfplay_stall_timeout_sec:
+                self._fire_stall_watchdog(stalled)
 
         # ── O4: warmup ──────────────────────────────────────────────────────
         if self.buffer.size < cfg.min_buf_size:
