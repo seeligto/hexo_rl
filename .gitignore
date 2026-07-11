@@ -210,3 +210,7 @@ scripts/migrations/2026_05_12_checkpoint_manifest.json
 /scratchpad/
 /scratchpad_calib.py
 /exports/
+
+# D-H CONSOLIDATE (2026-07-11) — tool cache + stray root checkpoint, never committed
+/.superpowers/
+/strix_checkpoint_*.pt
