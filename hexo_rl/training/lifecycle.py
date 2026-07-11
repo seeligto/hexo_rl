@@ -41,6 +41,8 @@ class InfModelArch:
     in_channels: int
     se_reduction_ratio: int
     input_channels: Any
+    value_head_type: str = "scalar"
+    n_value_bins: int = 65
 
 
 def build_inference_model(
@@ -55,6 +57,8 @@ def build_inference_model(
     in_channels        = int(trainer.config.get("in_channels",        MODEL_HPARAM_DEFAULTS["in_channels"]))
     se_reduction_ratio = int(trainer.config.get("se_reduction_ratio", MODEL_HPARAM_DEFAULTS["se_reduction_ratio"]))
     input_channels     = trainer.config.get("input_channels", None)
+    value_head_type    = str(trainer.config.get("value_head_type",    MODEL_HPARAM_DEFAULTS["value_head_type"]))
+    n_value_bins       = int(trainer.config.get("n_value_bins",       MODEL_HPARAM_DEFAULTS["n_value_bins"]))
 
     _torch_compile_enabled = (
         trainer.config.get("torch_compile", False) and device.type == "cuda"
@@ -66,6 +70,8 @@ def build_inference_model(
         res_blocks=res_blocks,
         filters=filters,
         se_reduction_ratio=se_reduction_ratio,
+        value_head_type=value_head_type,
+        n_value_bins=n_value_bins,
     ).to(device)
     # §S181-AUDIT Wave 2 — route through trainer.inference_state_dict so the
     # InferenceServer reads EMA weights when EMA is enabled. At step 0 this
@@ -92,6 +98,8 @@ def build_inference_model(
         in_channels=in_channels,
         se_reduction_ratio=se_reduction_ratio,
         input_channels=input_channels,
+        value_head_type=value_head_type,
+        n_value_bins=n_value_bins,
     )
     return inf_model, arch
 
@@ -165,6 +173,8 @@ def build_eval_model(arch: InfModelArch, device: torch.device) -> HexTacToeNet:
         board_size=arch.board_size, res_blocks=arch.res_blocks, filters=arch.filters,
         in_channels=arch.in_channels, input_channels=arch.input_channels,
         se_reduction_ratio=arch.se_reduction_ratio,
+        value_head_type=arch.value_head_type,
+        n_value_bins=arch.n_value_bins,
     ).to(device)
     eval_model.eval()
     return eval_model
