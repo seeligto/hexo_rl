@@ -47,15 +47,22 @@ MAX_PLIES = 200
 
 
 def radius_from_checkpoint(ck: Dict[str, Any]) -> Optional[int]:
-    """Drive the REAL StepCoordinator resolver over the checkpoint's own config + step."""
+    """Resolve the checkpoint's NATIVE training radius from its baked schedule + step.
 
-    class _Shim:
-        pass
+    CONFRES 6c/6d: delegates to the ONE schedule-scan authority
+    ``resolve.radius.resolve_radius_from_schedule`` (single-sourced with
+    ``StepCoordinator._resolve_radius``) instead of driving a shim through the coordinator. Returns
+    ``None`` when the checkpoint carries no baked ``legal_move_radius_schedule`` — the offline
+    HARD-ERROR (B6) is applied at the CONSUMER (``run_arm``), where a per-stage book context makes
+    an unresolvable radius a correctness bug, not here (some callers legitimately tolerate ``None``,
+    e.g. head-vs-head stamps the native radius for provenance only).
+    """
+    from hexo_rl.config.resolve.radius import resolve_radius_from_schedule
 
-    shim = _Shim()
-    shim.full_config = ck.get("config", {})
+    cfg = ck.get("config", {}) or {}
+    schedule = cfg.get("selfplay", {}).get("legal_move_radius_schedule")
     step = int(ck["step"])
-    return StepCoordinator._resolve_radius(shim, step)
+    return resolve_radius_from_schedule(schedule, step)
 
 
 def sealbot_depth_from_config(path: str = "configs/eval.yaml") -> int:
@@ -392,13 +399,23 @@ def run_arm(
     # radius. A mismatch is the rejected single-book-across-stages regime (design §2 R4a),
     # which biases Series B toward false-plateau — refuse it loudly rather than silently
     # read r5 ckpts on an r4 book (or vice versa).
+    # CONFRES 6d (B6): a per-stage book + an UNRESOLVABLE ckpt radius (no baked schedule — the
+    # sanctioned weights-only strip produces exactly this) used to skip the guard silently (the
+    # old `radius is not None` short-circuit). The HARD-ERROR authority is the ONE rule
+    # ``resolve.radius.require_offline_radius`` (design law #1 — no hand-inlined copy); a per-stage
+    # book has no --radius-stage escape here, so an unresolvable radius raises.
     book_stage = book.get("radius_stage")
-    if book_stage is not None and radius is not None and int(book_stage) != int(radius):
-        raise ValueError(
-            f"book/ckpt radius mismatch: book {book.get('book_id')!r} radius_stage={book_stage} "
-            f"but ckpt {ckpt_path} resolves radius={radius}. Per-stage books must match the "
-            f"checkpoint's training radius (design §2 F4) — use the r{radius} book."
+    if book_stage is not None:
+        from hexo_rl.config.resolve.radius import require_offline_radius
+        resolved_radius = require_offline_radius(
+            radius, radius_stage_override=None, ckpt_label=str(ckpt_path)
         )
+        if int(book_stage) != int(resolved_radius):
+            raise ValueError(
+                f"book/ckpt radius mismatch: book {book.get('book_id')!r} radius_stage={book_stage} "
+                f"but ckpt {ckpt_path} resolves radius={resolved_radius}. Per-stage books must match "
+                f"the checkpoint's training radius (design §2 F4) — use the r{resolved_radius} book."
+            )
 
     book_id = book.get("book_id", "unknown")
     openings = book["openings"]
