@@ -508,7 +508,9 @@ def resolve_anchor(
         # against an 18-channel anchor; syncing architectures is impossible and
         # wrong (sweep inf_model should start from trainer.model, not the anchor).
         _inf_base = getattr(inf_model, "_orig_mod", inf_model)
-        if _inf_base.in_channels == best_model.in_channels:
+        _inf_vht = getattr(_inf_base, "value_head_type", "scalar")
+        _anc_vht = getattr(best_model, "value_head_type", "scalar")
+        if _inf_base.in_channels == best_model.in_channels and _inf_vht == _anc_vht:
             _best_sd = best_model.state_dict()
             # Anchor is always loaded without input_channels (see _try_load_anchor
             # config_overrides). If _inf_base was built with input_channels, inject
@@ -523,7 +525,9 @@ def resolve_anchor(
                 "inf_model_anchor_arch_mismatch_skip_sync",
                 inf_in_channels=_inf_base.in_channels,
                 anchor_in_channels=best_model.in_channels,
-                msg="inf_model starts from trainer.model (sweep variant)",
+                inf_value_head_type=_inf_vht,
+                anchor_value_head_type=_anc_vht,
+                msg="inf_model starts from trainer.model (arch mismatch: sweep variant or head-type change)",
             )
         log.info("best_model_loaded", path=str(best_model_path), step=best_model_step)
         # M2: warn if resumed trainer.model and loaded anchor diverge on step.
