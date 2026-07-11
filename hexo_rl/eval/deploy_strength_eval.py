@@ -427,13 +427,33 @@ class DeployStrengthEvaluator:
         self.knobs = extract_deploy_knobs(config)  # HARD ERROR if any knob missing
         self.dcfg = DeployStrengthConfig.from_cfg(deploy_cfg, promotion_winrate)
         self._engine = _build_engine_for_model(model, self.encoding_name, device)
-        self._cand = DeployHeadBot(self._engine, self.knobs, label="cand",
-                                   seed=self.dcfg.seed_base, legal_set=self._legal_set)
+        # CONFRES batch 7: build the deploy head through the ONE construction authority
+        # ``build_player`` (design §4). ``resolve_deploy_planner`` dispatches the ``legal_set`` decode
+        # flag from the encoding's policy_pool — the SAME ``needs_no_drop_bot`` rule as ``self._
+        # legal_set`` — so the constructed head is BYTE-IDENTICAL to the prior direct DeployHeadBot,
+        # now with the dispatch pinned.
+        self._cand = self._build_deploy_head(label="cand", seed=self.dcfg.seed_base)
+
+    def _build_deploy_head(self, *, label: str, seed: int, engine=None):
+        """Construct a deploy Gumbel-g=0 head via the ``build_player`` factory (CONFRES batch 7)."""
+        from hexo_rl.config.resolve.planner import resolve_deploy_planner
+        from hexo_rl.eval.player_factory import build_player
+
+        plan = resolve_deploy_planner(
+            self.encoding_name, n_sims=int(self.knobs["n_sims_full"]),
+            c_puct=float(self.knobs["c_puct"]),
+        )
+        head = build_player(
+            plan, encoding_label=self.encoding_name,
+            engine=engine if engine is not None else self._engine,
+            knobs=self.knobs, seed=seed,
+        )
+        head._label = label  # match the prior label= arg the DeployHeadBot ctor set
+        return head
 
     def _best_bot(self, best_model: HexTacToeNet) -> DeployHeadBot:
         eng = _build_engine_for_model(best_model, self.encoding_name, self.device)
-        return DeployHeadBot(eng, self.knobs, label="best",
-                             seed=self.dcfg.seed_base + 101, legal_set=self._legal_set)
+        return self._build_deploy_head(label="best", seed=self.dcfg.seed_base + 101, engine=eng)
 
     def _sealbot(self) -> BotProtocol:
         from hexo_rl.bots.sealbot_bot import SealBotBot

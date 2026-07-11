@@ -226,12 +226,31 @@ def make_head_bot(
     knobs: Dict[str, Any],
     arm: ArmSpec,
     legal_set: bool,
+    encoding: str,
 ) -> Any:
-    """Build DeployHeadBot (optionally wrapped in SolverBackupBot) per arm spec."""
+    """Build DeployHeadBot (optionally wrapped in SolverBackupBot) per arm spec.
+
+    CONFRES batch 7: the DeployHeadBot is constructed through the ONE play-construction authority
+    ``build_player`` + ``resolve_deploy_planner`` (design §4). The planner derives the ``legal_set``
+    decode flag from the encoding's policy_pool via the SAME ``needs_no_drop_bot`` rule the caller
+    used, so the constructed head is BYTE-IDENTICAL to the prior direct DeployHeadBot; we assert the
+    two agree defensively. The SolverBackupBot wrap is unchanged.
+    """
+    from hexo_rl.config.resolve.planner import resolve_deploy_planner
+    from hexo_rl.eval.player_factory import build_player
+
     kb = dict(knobs)
     if arm.n_sims_override is not None:
         kb["n_sims_full"] = int(arm.n_sims_override)
-    head = DeployHeadBot(eng, kb, label=HEAD, seed=0, legal_set=legal_set)
+    plan = resolve_deploy_planner(
+        encoding, n_sims=int(kb["n_sims_full"]), c_puct=float(kb["c_puct"]),
+    )
+    assert plan.legal_set == legal_set, (
+        f"legal_set dispatch drift: planner derived {plan.legal_set} for {encoding!r} but caller "
+        f"passed {legal_set}"
+    )
+    head = build_player(plan, encoding_label=encoding, engine=eng, knobs=kb, seed=0)
+    head._label = HEAD  # match the prior label=HEAD ctor arg (repr-only)
     if not arm.solver_backup:
         return head
     return SolverBackupBot(
@@ -319,7 +338,7 @@ def _play_pair(args: tuple) -> List[Dict[str, Any]]:
 
     games_out = []
     for head_as_p1 in (True, False):
-        head_bot = make_head_bot(eng, knobs, arm, legal_set)
+        head_bot = make_head_bot(eng, knobs, arm, legal_set, encoding)
         opp_bot = SealBotBot(time_limit=600.0, max_depth=depth)
 
         if head_as_p1:

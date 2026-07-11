@@ -228,8 +228,15 @@ class KClusterMCTSBot(BotProtocol):
         pool_type: Optional[str] = None,
         fpu_q: float = 0.0,
         kept_plane_indices: Optional[list[int]] = None,
+        encoding: Optional[str] = None,
     ) -> None:
-        encoding = getattr(model, "encoding", None)
+        # CONFRES batch 7 / N5: the encoding label is passed EXPLICITLY (the label channel), NOT
+        # read from a mutated ``model.encoding`` attribute — a model shared across two arms with
+        # different labels made the attribute last-writer-wins. When ``encoding`` is supplied it is
+        # authoritative; the ``model.encoding`` fallback stays for legacy callers (e.g. any bot
+        # still relying on ``build_model_bot``'s stamp) until they migrate.
+        if encoding is None:
+            encoding = getattr(model, "encoding", None)
         # Registry-driven support check (no hardcoded name list — per the
         # registry-by-name / zero-literals discipline). The bot's per-cluster
         # scatter-max projects each legal move into a trunk-size window and handles

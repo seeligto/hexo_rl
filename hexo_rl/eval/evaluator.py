@@ -198,10 +198,17 @@ class Evaluator:
         """
         _enc = _normalize_encoding_name(self.config.get("encoding"))
         _c_puct = float(self.config.get("mcts", self.config).get("c_puct", DEFAULT_C_PUCT))
-        model_player = build_model_bot(
-            self.model, _lookup_encoding(_enc), self.device,
-            n_sims=model_sims, temperature=self._eval_temperature,
-            c_puct=_c_puct, encoding_label=_enc, config=self.config,
+        # CONFRES batch 7: route the in-loop eval player through the ONE construction authority
+        # ``build_player`` (design §4). It resolves the dispatch (ModelPlayer vs KClusterMCTSBot)
+        # from the encoding's policy_pool and delegates to ``build_model_bot`` — BYTE-IDENTICAL to
+        # the prior direct call, now with the dispatch pinned + the label passed explicitly (N5).
+        from hexo_rl.config.resolve.planner import resolve_eval_planner
+        from hexo_rl.eval.player_factory import build_player
+        _plan = resolve_eval_planner(
+            _enc, phase, n_sims=int(model_sims), c_puct=_c_puct, temperature=self._eval_temperature,
+        )
+        model_player = build_player(
+            _plan, encoding_label=_enc, model=self.model, device=self.device, config=self.config,
         )
         win_count = 0
         draw_count = 0

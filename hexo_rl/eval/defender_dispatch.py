@@ -94,9 +94,12 @@ def build_model_bot(
     if defender_kind(spec, mode) == "kcluster":
         from hexo_rl.eval.k_cluster_mcts_bot import KClusterMCTSBot
 
-        # KClusterMCTSBot reads model.encoding for the cluster views + pass-slot
-        # check; a state-dict-identical legal-set checkpoint detects as the arch
-        # family, so stamp the resolved (overridden) label.
+        # CONFRES batch 7 / N5: pass the resolved (overridden) label EXPLICITLY to the bot's
+        # ``encoding=`` param — the label channel — instead of mutating ``model.encoding`` (a shared
+        # model made that last-writer-wins). A state-dict-identical legal-set checkpoint detects as
+        # the arch family, so the explicit label is what routes the correct cluster views + pass
+        # slot. The attribute is still stamped for any legacy reader, but the bot no longer depends
+        # on it.
         try:
             model.encoding = encoding_label
         except Exception:
@@ -104,6 +107,7 @@ def build_model_bot(
         return KClusterMCTSBot(
             model, device, n_sims=n_sims, c_puct=c_puct, temperature=temperature,
             kept_plane_indices=list(spec.kept_plane_indices),
+            encoding=encoding_label,
         )
 
     from hexo_rl.eval.evaluator import ModelPlayer
