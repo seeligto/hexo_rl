@@ -20,6 +20,7 @@ import pytest
 
 from hexo_rl.training.step_coordinator import (
     DEFAULT_FINAL_EVAL_DRAIN_TIMEOUT_SEC,
+    SELFPLAY_STALL_EXIT_CODE,
     StepCoordinator,
     StepCoordinatorConfig,
 )
@@ -1018,3 +1019,136 @@ def test_update_checkpoint_step_not_bumped_per_train_step(
     coord.step()
     assert trainer.step >= 1                                    # trained ≥ once
     assert pool.update_checkpoint_step.call_count == init_calls  # no per-step bump
+
+
+# ── self-play stall watchdog (2026-07-11 run2 eval-boundary wedge) ────────────
+# A wedged self-play/eval GPU deadlock froze pool.games_completed for ~45h while
+# the main loop looped in waiting_for_games forever. The watchdog fires when
+# games stop advancing for >= selfplay_stall_timeout_sec, failing fast so the run
+# can be restarted instead of burning GPU-hours invisibly.
+
+def _recording_exit():
+    """A fake exit_fn that records the code and stops execution like os._exit."""
+    codes: list[int] = []
+
+    def _exit(code: int) -> None:
+        codes.append(code)
+        raise SystemExit(code)
+
+    return codes, _exit
+
+
+def test_watchdog_fires_when_games_frozen_past_timeout(patch_orchestrator_helpers):
+    """games_completed frozen for >= timeout → loud log + buffer save + exit(42)."""
+    codes, fake_exit = _recording_exit()
+    clock = FakeClock()
+    logger = Mock()
+    pool = _make_pool(games_completed=50)          # >0 so _make_coordinator won't bump
+    coord = _make_coordinator(
+        pool=pool, clock=clock, logger=logger, exit_fn=fake_exit,
+        config_overrides={"selfplay_stall_timeout_sec": 100.0},
+    )
+    clock.t = 150.0                                # 150s elapsed, no game progress
+    with pytest.raises(SystemExit):
+        coord.step()
+    assert codes == [SELFPLAY_STALL_EXIT_CODE]
+    fire = [c for c in logger.error.call_args_list
+            if c.args and c.args[0] == "selfplay_stall_watchdog"]
+    assert fire, "watchdog must emit a LOUD selfplay_stall_watchdog error event"
+    kw = fire[0].kwargs
+    assert kw.get("games_completed") == 50
+    assert kw.get("stalled_for_sec") >= 100.0
+    assert kw.get("eval_in_flight") is False       # no eval thread in this test
+
+
+def test_watchdog_records_eval_in_flight(patch_orchestrator_helpers):
+    """When an eval daemon is alive at fire time, the event records it (the exact
+    signature of the run2 wedge — eval kicked off at 250000 hung self-play)."""
+    codes, fake_exit = _recording_exit()
+    clock = FakeClock()
+    logger = Mock()
+    pool = _make_pool(games_completed=7)
+    coord = _make_coordinator(
+        pool=pool, clock=clock, logger=logger, exit_fn=fake_exit,
+        config_overrides={"selfplay_stall_timeout_sec": 10.0},
+    )
+    alive_thread = Mock()
+    alive_thread.is_alive = Mock(return_value=True)
+    coord._eval_thread = alive_thread              # simulate in-flight eval
+    clock.t = 20.0
+    with pytest.raises(SystemExit):
+        coord.step()
+    fire = [c for c in logger.error.call_args_list
+            if c.args and c.args[0] == "selfplay_stall_watchdog"]
+    assert fire and fire[0].kwargs.get("eval_in_flight") is True
+
+
+def test_watchdog_saves_buffer_to_distinct_path_before_exit(patch_orchestrator_helpers):
+    """Best-effort CPU-only buffer snapshot fires before exit, routed to a DISTINCT
+    `.watchdog` path so a mid-write external kill can never clobber the canonical
+    resume buffer (replay_buffer.bin)."""
+    codes, fake_exit = _recording_exit()
+    clock = FakeClock()
+    pool = _make_pool(games_completed=3)
+    coord = _make_coordinator(
+        pool=pool, clock=clock, exit_fn=fake_exit,
+        config_overrides={"selfplay_stall_timeout_sec": 5.0},
+    )
+    clock.t = 10.0
+    with pytest.raises(SystemExit):
+        coord.step()
+    save = patch_orchestrator_helpers["save_buf"]
+    wd_calls = [c for c in save.call_args_list
+                if len(c.args) >= 3 and c.args[2] == "selfplay_stall_watchdog"]
+    assert wd_calls, "watchdog must attempt a buffer snapshot"
+    wd_cfg = wd_calls[0].args[1]                    # the mixing-cfg passed to the save
+    persist_path = wd_cfg.get("buffer_persist_path", "")
+    assert persist_path.endswith(".watchdog"), \
+        "watchdog save must route to a distinct .watchdog path, not the resume buffer"
+    assert not persist_path.endswith("replay_buffer.bin"), "must never clobber the canonical buffer"
+    assert codes == [SELFPLAY_STALL_EXIT_CODE]     # exit still happened
+
+
+def test_watchdog_does_not_fire_while_games_advance(patch_orchestrator_helpers):
+    """Continuous game production resets the stall timer — no false positive even
+    though total elapsed exceeds the timeout."""
+    codes, fake_exit = _recording_exit()
+    clock = FakeClock()
+    pool = _make_pool(games_completed=10)
+    coord = _make_coordinator(
+        pool=pool, clock=clock, exit_fn=fake_exit,
+        config_overrides={"selfplay_stall_timeout_sec": 100.0},
+    )
+    for i in range(4):                             # 4 * 40s = 160s > 100s timeout
+        pool.games_completed += 5                  # but games advance each round
+        clock.t = 40.0 * (i + 1)
+        coord.step()
+    assert codes == [], "watchdog must not fire while games are advancing"
+
+
+def test_watchdog_does_not_fire_before_timeout(patch_orchestrator_helpers):
+    """Below the threshold the watchdog stays silent."""
+    codes, fake_exit = _recording_exit()
+    clock = FakeClock()
+    pool = _make_pool(games_completed=99)
+    coord = _make_coordinator(
+        pool=pool, clock=clock, exit_fn=fake_exit,
+        config_overrides={"selfplay_stall_timeout_sec": 100.0},
+    )
+    clock.t = 90.0                                 # frozen but under threshold
+    coord.step()
+    assert codes == []
+
+
+def test_watchdog_disabled_when_timeout_nonpositive(patch_orchestrator_helpers):
+    """selfplay_stall_timeout_sec <= 0 disables the watchdog entirely."""
+    codes, fake_exit = _recording_exit()
+    clock = FakeClock()
+    pool = _make_pool(games_completed=99)
+    coord = _make_coordinator(
+        pool=pool, clock=clock, exit_fn=fake_exit,
+        config_overrides={"selfplay_stall_timeout_sec": 0.0},
+    )
+    clock.t = 1_000_000.0                          # far past any threshold
+    coord.step()
+    assert codes == [], "timeout<=0 must disable the watchdog"
