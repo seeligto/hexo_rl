@@ -218,7 +218,7 @@ def _resolve_model_hparams(
     trainer_cls: type,
     config: Dict[str, Any],
     model_state: Dict[str, torch.Tensor],
-) -> Dict[str, int]:
+) -> Dict[str, Any]:
     """Resolve model architecture hparams from config + state_dict inference.
 
     Priority (B-007):
@@ -252,13 +252,22 @@ def _resolve_model_hparams(
 
     defaults = dict(MODEL_HPARAM_DEFAULTS)
 
-    def _explicit(key: str) -> Optional[int]:
+    # Determine which hparam keys are integer-valued (inferrable from shapes)
+    # vs string-valued (e.g. value_head_type="scalar"|"dist65").  Only
+    # integer-typed defaults are cast through int(); string-typed pass as-is.
+    _int_keys = {k for k, v in defaults.items() if isinstance(v, int)}
+
+    def _explicit(key: str):
         if isinstance(model_cfg, dict) and key in model_cfg:
             v = model_cfg[key]
-            return int(v) if v is not None else None
+            if v is None:
+                return None
+            return int(v) if key in _int_keys else v
         if key in config:
             v = config[key]
-            return int(v) if v is not None else None
+            if v is None:
+                return None
+            return int(v) if key in _int_keys else v
         return None
 
     inferred = trainer_cls._infer_model_hparams(model_state)
@@ -272,24 +281,29 @@ def _resolve_model_hparams(
     if input_channels_cfg is not None and "in_channels" in inferred:
         inferred["in_channels"] = len(input_channels_cfg)
 
-    resolved: Dict[str, int] = {}
+    resolved: Dict[str, Any] = {}
     for key, default_val in defaults.items():
         cfg_val = _explicit(key)
         inf_val = inferred.get(key)
 
-        if cfg_val is not None and inf_val is not None and int(cfg_val) != int(inf_val):
-            raise ValueError(
-                f"Model hparam '{key}' disagrees: config={cfg_val} vs "
-                f"checkpoint-inferred={inf_val}. Remove '{key}' from config "
-                f"to accept the checkpoint architecture, or load a checkpoint "
-                f"matching the config."
-            )
-        if inf_val is not None:
-            resolved[key] = int(inf_val)
-        elif cfg_val is not None:
-            resolved[key] = int(cfg_val)
+        if key in _int_keys:
+            if cfg_val is not None and inf_val is not None and int(cfg_val) != int(inf_val):
+                raise ValueError(
+                    f"Model hparam '{key}' disagrees: config={cfg_val} vs "
+                    f"checkpoint-inferred={inf_val}. Remove '{key}' from config "
+                    f"to accept the checkpoint architecture, or load a checkpoint "
+                    f"matching the config."
+                )
+            if inf_val is not None:
+                resolved[key] = int(inf_val)
+            elif cfg_val is not None:
+                resolved[key] = int(cfg_val)
+            else:
+                resolved[key] = int(default_val)
         else:
-            resolved[key] = int(default_val)
+            # String-typed hparam (e.g. value_head_type): config wins, then default.
+            # Never inferred from state_dict shapes — skip inf_val.
+            resolved[key] = cfg_val if cfg_val is not None else default_val
 
     # Keep top-level config aligned with final model dimensions.
     # board_size scalar retired (§172 A10) — readers use resolve_from_config(cfg).trunk_size.
@@ -588,6 +602,8 @@ def load_checkpoint(
         filters=model_hparams["filters"],
         se_reduction_ratio=model_hparams.get("se_reduction_ratio", MODEL_HPARAM_DEFAULTS["se_reduction_ratio"]),
         input_channels=config.get("input_channels"),
+        value_head_type=model_hparams.get("value_head_type", MODEL_HPARAM_DEFAULTS["value_head_type"]),
+        n_value_bins=model_hparams.get("n_value_bins", MODEL_HPARAM_DEFAULTS["n_value_bins"]),
     )
     # If input_channels was explicitly nulled (e.g. loading a sweep checkpoint
     # as a full-18ch anchor), strip input_channel_index from the state dict so

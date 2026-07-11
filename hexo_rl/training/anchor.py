@@ -315,8 +315,14 @@ def load_best_model_resilient(
     candidate is tried; the eventual successful candidate is then promoted
     in-place to ``best_model.pt`` by the caller (atomic save).
     """
+    # Strip arch keys that may differ between the anchor checkpoint and the
+    # current run — the anchor must load with ITS OWN architecture, not the
+    # run's. value_head_type/n_value_bins are new (E1) and absent from scalar
+    # anchors; feeding the run's dist65 value into a weights-only scalar anchor
+    # load builds a dist65 net that then fails to load the scalar state dict.
     fallback_cfg = {k: v for k, v in config.items()
-                    if k not in ("in_channels", "input_channels")}
+                    if k not in ("in_channels", "input_channels",
+                                 "value_head_type", "n_value_bins")}
 
     # 1. Live anchor.
     if best_model_path.exists():
@@ -400,6 +406,8 @@ def resolve_anchor(
     in_channels: int,
     input_channels: Any,
     se_reduction_ratio: int,
+    value_head_type: str = "scalar",
+    n_value_bins: int = 65,
     run_id: str | None = None,
 ) -> AnchorState:
     """Resolve the best-model anchor and sync ``inf_model`` to it.
@@ -500,7 +508,9 @@ def resolve_anchor(
         # against an 18-channel anchor; syncing architectures is impossible and
         # wrong (sweep inf_model should start from trainer.model, not the anchor).
         _inf_base = getattr(inf_model, "_orig_mod", inf_model)
-        if _inf_base.in_channels == best_model.in_channels:
+        _inf_vht = getattr(_inf_base, "value_head_type", "scalar")
+        _anc_vht = getattr(best_model, "value_head_type", "scalar")
+        if _inf_base.in_channels == best_model.in_channels and _inf_vht == _anc_vht:
             _best_sd = best_model.state_dict()
             # Anchor is always loaded without input_channels (see _try_load_anchor
             # config_overrides). If _inf_base was built with input_channels, inject
@@ -515,7 +525,9 @@ def resolve_anchor(
                 "inf_model_anchor_arch_mismatch_skip_sync",
                 inf_in_channels=_inf_base.in_channels,
                 anchor_in_channels=best_model.in_channels,
-                msg="inf_model starts from trainer.model (sweep variant)",
+                inf_value_head_type=_inf_vht,
+                anchor_value_head_type=_anc_vht,
+                msg="inf_model starts from trainer.model (arch mismatch: sweep variant or head-type change)",
             )
         log.info("best_model_loaded", path=str(best_model_path), step=best_model_step)
         # M2: warn if resumed trainer.model and loaded anchor diverge on step.
@@ -558,6 +570,8 @@ def resolve_anchor(
             board_size=board_size, res_blocks=res_blocks, filters=filters,
             in_channels=in_channels, input_channels=input_channels,
             se_reduction_ratio=se_reduction_ratio,
+            value_head_type=value_head_type,
+            n_value_bins=n_value_bins,
         ).to(device)
         # §S181-AUDIT Wave 2 — fresh anchor adopts EMA weights when enabled
         # so this rare path stays consistent with the rest of the inference

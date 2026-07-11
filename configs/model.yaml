@@ -21,3 +21,8 @@ se_reduction_ratio: 4
 # also still accepted for backward compat by both the new resolver and the
 # legacy `hexo_rl.utils.encoding.resolve_encoding`).
 encoding: v6
+
+# Distributional value head (E1). Default 'scalar' = current BCE head (byte-exact).
+# Set 'dist65' to enable the 65-bin two-hot cross-entropy head.
+value_head_type: scalar
+n_value_bins: 65

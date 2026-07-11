@@ -16,7 +16,7 @@ No behavior change: values mirror what was inlined prior to §176 P10.
 
 from __future__ import annotations
 
-from typing import Dict
+from typing import Any, Dict
 
 from hexo_rl.encoding import lookup as _lookup_encoding
 
@@ -25,10 +25,13 @@ BOARD_SIZE: int = _V6.board_size
 BUFFER_CHANNELS: int = _V6.n_planes
 
 # Canonical defaults. Keep keys in sync with HexTacToeNet.__init__.
-MODEL_HPARAM_DEFAULTS: Dict[str, int] = {
+MODEL_HPARAM_DEFAULTS: Dict[str, Any] = {
     "board_size": BOARD_SIZE,
     "res_blocks": 12,
     "filters": 128,
     "in_channels": BUFFER_CHANNELS,
     "se_reduction_ratio": 4,
+    # Distributional value head (E1). Default 'scalar' = current BCE head.
+    "value_head_type": "scalar",
+    "n_value_bins": 65,
 }

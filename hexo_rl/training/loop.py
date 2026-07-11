@@ -156,6 +156,8 @@ def run_training_loop(
         in_channels=in_channels,
         input_channels=input_channels,
         se_reduction_ratio=se_reduction_ratio,
+        value_head_type=_arch.value_head_type,
+        n_value_bins=_arch.n_value_bins,
         run_id=run_id,
     )
     # L1: allocate the eval-side model once and reuse across rounds. Reallocating

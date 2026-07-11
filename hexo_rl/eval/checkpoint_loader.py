@@ -561,6 +561,18 @@ def _build_min_max_model(state: dict, spec: EncodingSpec) -> HexTacToeNet:
     policy_w = state.get("policy_fc.weight")
     policy_logit_count = int(policy_w.shape[0]) if policy_w is not None else spec.policy_logit_count
     validate_arch_against_spec(in_channels, policy_logit_count, spec)
+    # E1 C1 — detect distributional value head from state dict.  A dist65
+    # checkpoint carries `value_fc2_bins.weight`; a scalar checkpoint does
+    # not.  Without this detection the ctor defaults to scalar, strict=False
+    # silently drops the trained bin weights, and every from-disk instrument
+    # (promotion gate, SealBot, probes) runs a RANDOM value head.
+    bins_w = state.get("value_fc2_bins.weight")
+    if bins_w is not None:
+        value_head_type = "dist65"
+        n_value_bins = int(bins_w.shape[0])
+    else:
+        value_head_type = "scalar"
+        n_value_bins = 65  # default; unused for scalar head
     model = HexTacToeNet(
         board_size=spec.board_size,
         in_channels=in_channels,
@@ -569,10 +581,26 @@ def _build_min_max_model(state: dict, spec: EncodingSpec) -> HexTacToeNet:
         encoding=spec.name,
         pool_type=pool_type,
         gpool_bias_active=gpool_bias_active,
+        value_head_type=value_head_type,
+        n_value_bins=n_value_bins,
     )
     # strict=False because v6 / v6w25 checkpoints may carry tower.* duplicates
     # left over from older save formats (see eval_pipeline._load_anchor_model).
     model.load_state_dict(state, strict=False)
+    # E1 C1 post-load guard: for a dist checkpoint, assert the bin weights
+    # actually landed (not silently dropped).  strict=False is kept for the
+    # tower.* duplicate reason above, so we verify explicitly.
+    if value_head_type == "dist65":
+        assert model.value_fc2_bins is not None, (
+            "Internal error: dist65 HexTacToeNet built without value_fc2_bins"
+        )
+        loaded_w = model.value_fc2_bins.weight.data
+        if not torch.allclose(loaded_w, bins_w.to(device=loaded_w.device).to(dtype=loaded_w.dtype)):
+            raise RuntimeError(
+                "dist65 checkpoint: value_fc2_bins.weight was NOT loaded "
+                "(post-load mismatch despite strict=False). "
+                "Inspect the checkpoint state dict for key conflicts."
+            )
     return model
 
 

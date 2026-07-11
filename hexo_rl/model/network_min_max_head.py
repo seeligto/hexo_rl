@@ -50,6 +50,8 @@ def min_max_window_head(
     value_fc2: nn.Linear,
     policy_bias: Optional[torch.Tensor] = None,
     value_bias: Optional[torch.Tensor] = None,
+    value_head_type: str = "scalar",
+    value_fc2_bins: Optional[nn.Linear] = None,
 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """Per-window min_max head for ``has_pass_slot=true`` encodings.
 
@@ -68,10 +70,13 @@ def min_max_window_head(
                     ``value_fc1`` post-ReLU hidden. ``None`` ⇒ A1 byte-exact.
 
     Returns:
-        ``(log_policy, value, v_logit)`` per-window:
-          * ``log_policy``: ``(N, n_actions)`` log-softmax probabilities.
-          * ``value``:      ``(N, 1)`` tanh of v_logit.
-          * ``v_logit``:    ``(N, 1)`` raw pre-tanh logit (for BCE loss).
+        ``(log_policy, value, value_aux)`` per-window:
+          * ``log_policy``:  ``(N, n_actions)`` log-softmax probabilities.
+          * ``value``:       ``(N, 1)`` scalar in [-1, 1]:
+                               scalar mode = tanh(v_logit);
+                               dist65 mode = E[softmax(bin_logits) · support].
+          * ``value_aux``:   scalar mode → ``(N, 1)`` raw pre-tanh v_logit;
+                             dist65 mode → ``(N, 65)`` bin logits.
     """
     # Policy branch — 1×1 conv → ReLU → flatten → FC → optional bias →
     # log_softmax. Identical math to the pre-refactor inline form.
@@ -90,6 +95,15 @@ def min_max_window_head(
     v = F.relu(value_fc1(v))
     if value_bias is not None:
         v = v + value_bias.to(v.dtype)
+    if value_head_type == "dist65":
+        assert value_fc2_bins is not None, "value_fc2_bins required for dist65 head"
+        # Local import avoids a hard model→training circular dependency at module
+        # load time; the import itself is cheap (module already in sys.modules
+        # after first call).
+        from hexo_rl.training.binned_value import decode_binned_value  # noqa: PLC0415
+        bin_logits = value_fc2_bins(v)                    # (N, 65)
+        value = decode_binned_value(bin_logits)           # (N, 1) in [-1,1]
+        return log_policy, value, bin_logits
     v_logit = value_fc2(v)
     value = torch.tanh(v_logit)
     return log_policy, value, v_logit

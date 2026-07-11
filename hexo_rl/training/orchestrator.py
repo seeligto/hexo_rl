@@ -659,12 +659,15 @@ def init_trainer(
         )
     else:
         in_channels_arg, input_channels_cfg = _resolve_fresh_in_channels(combined_config)
+        from hexo_rl.training.model_defaults import MODEL_HPARAM_DEFAULTS as _MHPD
         model = HexTacToeNet(
             board_size=board_size,
             res_blocks=res_blocks,
             filters=filters,
             in_channels=in_channels_arg,
             input_channels=input_channels_cfg,
+            value_head_type=combined_config.get("value_head_type", _MHPD["value_head_type"]),
+            n_value_bins=combined_config.get("n_value_bins", _MHPD["n_value_bins"]),
         )
         trainer = Trainer(model, combined_config, checkpoint_dir=args.checkpoint_dir, device=device)
         log.info(
@@ -672,6 +675,7 @@ def init_trainer(
             model_params=sum(p.numel() for p in model.parameters()),
             in_channels=in_channels_arg,
             input_channels=list(input_channels_cfg) if input_channels_cfg is not None else None,
+            value_head_type=combined_config.get("value_head_type", _MHPD["value_head_type"]),
         )
     return trainer, board_size
 

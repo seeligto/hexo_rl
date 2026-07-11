@@ -423,6 +423,8 @@ class HexTacToeNet(nn.Module):
         canvas_realness: bool = False,
         gpool_bias_active: bool = False,
         policy_only_bias: bool = False,
+        value_head_type: str = "scalar",
+        n_value_bins: int = 65,
     ) -> None:
         super().__init__()
         if encoding not in _VALID_ENCODINGS:
@@ -556,8 +558,33 @@ class HexTacToeNet(nn.Module):
             self.opp_reply_fc = nn.Linear(2 * spatial, spatial + 1)
 
         # Value head — global avg+max pooling
+        _VALID_VH_TYPES = {"scalar", "dist65"}
+        if value_head_type not in _VALID_VH_TYPES:
+            raise ValueError(
+                f"value_head_type={value_head_type!r} not in {_VALID_VH_TYPES}"
+            )
+        self.value_head_type: str = value_head_type
         self.value_fc1 = nn.Linear(2 * filters, 256)
         self.value_fc2 = nn.Linear(256, 1)
+        # Distributional head: 65-bin classifier exists only for dist65.
+        # State-dict compat: scalar checkpoints load byte-exact (key absent).
+        if value_head_type == "dist65":
+            # I1 — E1 is 65-fixed: VALUE_SUPPORT is linspace(-1,1,65) and
+            # decode_binned_value multiplies by that 65-length tensor.
+            # A mismatched n_value_bins causes a RuntimeError at the first
+            # forward; reject loudly at construction time instead.
+            from hexo_rl.training.binned_value import N_VALUE_BINS as _N_VALUE_BINS  # noqa: PLC0415
+            if n_value_bins != _N_VALUE_BINS:
+                raise ValueError(
+                    f"n_value_bins={n_value_bins} != {_N_VALUE_BINS} "
+                    f"(hexo_rl.training.binned_value.N_VALUE_BINS). "
+                    "E1 dist-head is 65-fixed; a different bin count is not "
+                    "supported and would cause a forward-time RuntimeError "
+                    "due to the mismatched VALUE_SUPPORT multiply."
+                )
+            self.value_fc2_bins: Optional[nn.Linear] = nn.Linear(256, n_value_bins)
+        else:
+            self.value_fc2_bins = None
 
         # Value uncertainty head (training only — never used in MCTS).
         # Reads from the same trunk features as the value head. Softplus
@@ -822,6 +849,8 @@ class HexTacToeNet(nn.Module):
                     value_fc2=self.value_fc2,
                     policy_bias=policy_bias,
                     value_bias=value_bias,
+                    value_head_type=self.value_head_type,
+                    value_fc2_bins=self.value_fc2_bins,
                 )
 
         # Build the base 3-tuple; optional heads are appended in order.
@@ -961,6 +990,8 @@ class HexTacToeNet(nn.Module):
             value_fc2=self.value_fc2,
             policy_bias=policy_bias_K,
             value_bias=value_bias_K,
+            value_head_type=self.value_head_type,
+            value_fc2_bins=self.value_fc2_bins,
         )
 
         pool = MinMaxPool()
