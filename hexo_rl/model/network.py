@@ -569,6 +569,19 @@ class HexTacToeNet(nn.Module):
         # Distributional head: 65-bin classifier exists only for dist65.
         # State-dict compat: scalar checkpoints load byte-exact (key absent).
         if value_head_type == "dist65":
+            # I1 — E1 is 65-fixed: VALUE_SUPPORT is linspace(-1,1,65) and
+            # decode_binned_value multiplies by that 65-length tensor.
+            # A mismatched n_value_bins causes a RuntimeError at the first
+            # forward; reject loudly at construction time instead.
+            from hexo_rl.training.binned_value import N_VALUE_BINS as _N_VALUE_BINS  # noqa: PLC0415
+            if n_value_bins != _N_VALUE_BINS:
+                raise ValueError(
+                    f"n_value_bins={n_value_bins} != {_N_VALUE_BINS} "
+                    f"(hexo_rl.training.binned_value.N_VALUE_BINS). "
+                    "E1 dist-head is 65-fixed; a different bin count is not "
+                    "supported and would cause a forward-time RuntimeError "
+                    "due to the mismatched VALUE_SUPPORT multiply."
+                )
             self.value_fc2_bins: Optional[nn.Linear] = nn.Linear(256, n_value_bins)
         else:
             self.value_fc2_bins = None
