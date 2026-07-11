@@ -450,6 +450,8 @@ def main() -> None:
     ap.add_argument("--target", type=int, default=TARGET_DEFAULT)
     ap.add_argument("--max-batches", type=int, default=MAX_BATCHES_DEFAULT)
     ap.add_argument("--batch-openings", type=int, default=BATCH_OPENINGS)
+    ap.add_argument("--batch-start-idx", type=int, default=0,
+                    help="Starting batch index (shifts seeds; use 3 to continue after 3 prior batches)")
     ap.add_argument("--dry-run-book", action="store_true",
                     help="Generate books only, skip eval+solver")
     args = ap.parse_args()
@@ -470,12 +472,13 @@ def main() -> None:
 
     distinct_start = len(seen_keys)
     print(f"[WP2] Starting with {len(all_rows)} rows, {distinct_start} distinct positions")
-    print(f"[WP2] Target: {args.target}, max_batches: {args.max_batches}")
+    print(f"[WP2] Target: {args.target}, max_batches: {args.max_batches}, batch_start_idx: {args.batch_start_idx}")
 
     batch_log = []
-    batch_idx = 0
+    batch_idx = args.batch_start_idx
 
-    while len(seen_keys) < args.target and batch_idx < args.max_batches:
+    batch_end_idx = args.batch_start_idx + args.max_batches
+    while len(seen_keys) < args.target and batch_idx < batch_end_idx:
         print(f"\n{'='*60}")
         print(f"[WP2] BATCH {batch_idx}: distinct={len(seen_keys)}/{args.target}")
         print(f"{'='*60}")
@@ -526,15 +529,16 @@ def main() -> None:
 
     # Final report
     distinct_final = len(seen_keys)
+    batches_run_this_session = batch_idx - args.batch_start_idx
     print(f"\n{'='*60}")
     print(f"[WP2] DONE: {distinct_final} distinct positions (started {distinct_start})")
-    print(f"[WP2] Batches run: {batch_idx}")
+    print(f"[WP2] Batches run this session: {batches_run_this_session}")
 
     if distinct_final < args.target:
         shortfall = args.target - distinct_final
-        # Estimate cost: each batch added (distinct_final - distinct_start) / batch_idx new
-        if batch_idx > 0:
-            added_per_batch = (distinct_final - distinct_start) / batch_idx
+        # Estimate cost: each batch added (distinct_final - distinct_start) / batches_run_this_session new
+        if batches_run_this_session > 0:
+            added_per_batch = (distinct_final - distinct_start) / batches_run_this_session
             batches_needed = shortfall / max(added_per_batch, 1)
             # Estimate wall: average batch wall
             avg_batch_min = sum(b["wall_min"] for b in batch_log) / len(batch_log) if batch_log else 30.0
@@ -555,7 +559,8 @@ def main() -> None:
             "distinct_start": distinct_start,
             "distinct_final": distinct_final,
             "target": args.target,
-            "batches_run": batch_idx,
+            "batches_run": batches_run_this_session,
+            "batch_start_idx": args.batch_start_idx,
             "shortfall": max(0, args.target - distinct_final),
             "batch_log": batch_log,
         }, f, indent=2)

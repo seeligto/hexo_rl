@@ -1,0 +1,371 @@
+[WP2] Starting with 153 rows, 153 distinct positions
+[WP2] Target: 200, max_batches: 2, batch_start_idx: 3
+
+============================================================
+[WP2] BATCH 3: distinct=153/200
+============================================================
+[BOOK] Generating evalfair_r5_wp2_b3: seed=20263711, n=64, radius=5...
+[BOOK] evalfair_r5_wp2_b3 done in 0.0s (64 openings)
+[BOOK] Saved → reports/valprobe/wp2/evalfair_r5_wp2_b3.json
+[EVAL] Running 64 pairs (workers=8)...
+2026-07-11 05:59:01 [warning  ] sealbot_colony_bug_risk        clusters=5 ply=87
+2026-07-11 05:59:02 [warning  ] sealbot_colony_bug_risk        clusters=5 ply=91
+2026-07-11 05:59:05 [warning  ] sealbot_colony_bug_risk        clusters=5 ply=99
+2026-07-11 05:59:07 [warning  ] sealbot_colony_bug_risk        clusters=5 ply=99
+2026-07-11 05:59:11 [warning  ] sealbot_colony_bug_risk        clusters=5 ply=115
+2026-07-11 05:59:13 [warning  ] sealbot_colony_bug_risk        clusters=5 ply=119
+2026-07-11 05:59:13 [warning  ] sealbot_colony_bug_risk        clusters=6 ply=111
+2026-07-11 05:59:16 [warning  ] sealbot_colony_bug_risk        clusters=5 ply=119
+2026-07-11 05:59:18 [warning  ] sealbot_colony_bug_risk        clusters=5 ply=123
+2026-07-11 05:59:18 [warning  ] sealbot_colony_bug_risk        clusters=5 ply=131
+2026-07-11 05:59:19 [warning  ] sealbot_colony_bug_risk        clusters=5 ply=135
+2026-07-11 05:59:23 [warning  ] sealbot_colony_bug_risk        clusters=6 ply=143
+2026-07-11 05:59:23 [warning  ] sealbot_colony_bug_risk        clusters=5 ply=135
+2026-07-11 05:59:24 [warning  ] sealbot_colony_bug_risk        clusters=5 ply=115
+2026-07-11 05:59:25 [warning  ] sealbot_colony_bug_risk        clusters=5 ply=139
+2026-07-11 05:59:27 [warning  ] sealbot_colony_bug_risk        clusters=6 ply=143
+2026-07-11 05:59:29 [warning  ] sealbot_colony_bug_risk        clusters=6 ply=147
+2026-07-11 05:59:32 [warning  ] sealbot_colony_bug_risk        clusters=6 ply=151
+2026-07-11 05:59:35 [warning  ] sealbot_colony_bug_risk        clusters=8 ply=155
+2026-07-11 05:59:37 [warning  ] sealbot_colony_bug_risk        clusters=6 ply=159
+2026-07-11 05:59:39 [warning  ] sealbot_colony_bug_risk        clusters=7 ply=163
+2026-07-11 05:59:41 [warning  ] sealbot_colony_bug_risk        clusters=5 ply=167
+2026-07-11 05:59:43 [warning  ] sealbot_colony_bug_risk        clusters=6 ply=171
+2026-07-11 05:59:45 [warning  ] sealbot_colony_bug_risk        clusters=7 ply=175
+2026-07-11 05:59:52 [warning  ] sealbot_colony_bug_risk        clusters=5 ply=107
+2026-07-11 05:59:57 [warning  ] sealbot_colony_bug_risk        clusters=5 ply=119
+2026-07-11 05:59:59 [warning  ] sealbot_colony_bug_risk        clusters=6 ply=123
+2026-07-11 06:00:00 [warning  ] sealbot_colony_bug_risk        clusters=5 ply=127
+2026-07-11 06:00:20 [warning  ] sealbot_colony_bug_risk        clusters=5 ply=99
+2026-07-11 06:00:25 [warning  ] sealbot_colony_bug_risk        clusters=5 ply=111
+2026-07-11 06:00:27 [warning  ] sealbot_colony_bug_risk        clusters=5 ply=115
+2026-07-11 06:00:34 [warning  ] sealbot_colony_bug_risk        clusters=5 ply=91
+2026-07-11 06:00:35 [warning  ] sealbot_colony_bug_risk        clusters=5 ply=95
+2026-07-11 06:00:48 [warning  ] sealbot_colony_bug_risk        clusters=5 ply=67
+2026-07-11 06:00:49 [warning  ] sealbot_colony_bug_risk        clusters=5 ply=123
+2026-07-11 06:00:50 [warning  ] sealbot_colony_bug_risk        clusters=5 ply=127
+2026-07-11 06:00:52 [warning  ] sealbot_colony_bug_risk        clusters=5 ply=131
+2026-07-11 06:00:53 [warning  ] sealbot_colony_bug_risk        clusters=5 ply=135
+2026-07-11 06:00:57 [warning  ] sealbot_colony_bug_risk        clusters=5 ply=147
+2026-07-11 06:00:59 [warning  ] sealbot_colony_bug_risk        clusters=6 ply=151
+2026-07-11 06:01:58 [warning  ] sealbot_colony_bug_risk        clusters=5 ply=139
+2026-07-11 06:01:59 [warning  ] sealbot_colony_bug_risk        clusters=5 ply=143
+2026-07-11 06:02:01 [warning  ] sealbot_colony_bug_risk        clusters=6 ply=147
+2026-07-11 06:02:02 [warning  ] sealbot_colony_bug_risk        clusters=5 ply=151
+2026-07-11 06:02:04 [warning  ] sealbot_colony_bug_risk        clusters=5 ply=155
+2026-07-11 06:02:05 [warning  ] sealbot_colony_bug_risk        clusters=6 ply=159
+2026-07-11 06:02:07 [warning  ] sealbot_colony_bug_risk        clusters=6 ply=163
+2026-07-11 06:02:09 [warning  ] sealbot_colony_bug_risk        clusters=7 ply=167
+2026-07-11 06:02:19 [warning  ] sealbot_colony_bug_risk        clusters=5 ply=111
+2026-07-11 06:02:22 [warning  ] sealbot_colony_bug_risk        clusters=5 ply=115
+2026-07-11 06:02:23 [warning  ] sealbot_colony_bug_risk        clusters=5 ply=119
+2026-07-11 06:02:25 [warning  ] sealbot_colony_bug_risk        clusters=6 ply=123
+2026-07-11 06:02:29 [warning  ] sealbot_colony_bug_risk        clusters=5 ply=131
+2026-07-11 06:02:30 [warning  ] sealbot_colony_bug_risk        clusters=5 ply=135
+2026-07-11 06:02:32 [warning  ] sealbot_colony_bug_risk        clusters=5 ply=139
+2026-07-11 06:02:33 [warning  ] sealbot_colony_bug_risk        clusters=5 ply=121
+2026-07-11 06:02:35 [warning  ] sealbot_colony_bug_risk        clusters=5 ply=129
+2026-07-11 06:02:37 [warning  ] sealbot_colony_bug_risk        clusters=5 ply=133
+2026-07-11 06:02:39 [warning  ] sealbot_colony_bug_risk        clusters=5 ply=137
+2026-07-11 06:02:40 [warning  ] sealbot_colony_bug_risk        clusters=5 ply=111
+2026-07-11 06:02:41 [warning  ] sealbot_colony_bug_risk        clusters=5 ply=141
+2026-07-11 06:02:43 [warning  ] sealbot_colony_bug_risk        clusters=5 ply=145
+2026-07-11 06:02:44 [warning  ] sealbot_colony_bug_risk        clusters=6 ply=149
+2026-07-11 06:02:46 [warning  ] sealbot_colony_bug_risk        clusters=5 ply=153
+2026-07-11 06:02:46 [warning  ] sealbot_colony_bug_risk        clusters=5 ply=127
+2026-07-11 06:02:51 [warning  ] sealbot_colony_bug_risk        clusters=5 ply=139
+2026-07-11 06:02:54 [warning  ] sealbot_colony_bug_risk        clusters=6 ply=143
+2026-07-11 06:03:00 [warning  ] sealbot_colony_bug_risk        clusters=5 ply=151
+2026-07-11 06:03:01 [warning  ] sealbot_colony_bug_risk        clusters=5 ply=155
+2026-07-11 06:03:03 [warning  ] sealbot_colony_bug_risk        clusters=5 ply=159
+2026-07-11 06:03:05 [warning  ] sealbot_colony_bug_risk        clusters=6 ply=163
+2026-07-11 06:03:06 [warning  ] sealbot_colony_bug_risk        clusters=6 ply=167
+2026-07-11 06:03:08 [warning  ] sealbot_colony_bug_risk        clusters=6 ply=171
+2026-07-11 06:03:12 [warning  ] sealbot_colony_bug_risk        clusters=5 ply=115
+2026-07-11 06:03:16 [warning  ] sealbot_colony_bug_risk        clusters=5 ply=123
+2026-07-11 06:03:25 [warning  ] sealbot_colony_bug_risk        clusters=5 ply=105
+2026-07-11 06:03:27 [warning  ] sealbot_colony_bug_risk        clusters=5 ply=109
+2026-07-11 06:03:29 [warning  ] sealbot_colony_bug_risk        clusters=5 ply=107
+2026-07-11 06:03:29 [warning  ] sealbot_colony_bug_risk        clusters=5 ply=113
+2026-07-11 06:03:30 [warning  ] sealbot_colony_bug_risk        clusters=5 ply=99
+2026-07-11 06:03:31 [warning  ] sealbot_colony_bug_risk        clusters=5 ply=117
+2026-07-11 06:03:32 [warning  ] sealbot_colony_bug_risk        clusters=5 ply=103
+2026-07-11 06:03:34 [warning  ] sealbot_colony_bug_risk        clusters=5 ply=121
+2026-07-11 06:03:37 [warning  ] sealbot_colony_bug_risk        clusters=5 ply=111
+2026-07-11 06:03:37 [warning  ] sealbot_colony_bug_risk        clusters=5 ply=125
+2026-07-11 06:03:39 [warning  ] sealbot_colony_bug_risk        clusters=5 ply=115
+2026-07-11 06:03:40 [warning  ] sealbot_colony_bug_risk        clusters=5 ply=129
+2026-07-11 06:03:41 [warning  ] sealbot_colony_bug_risk        clusters=5 ply=119
+2026-07-11 06:03:43 [warning  ] sealbot_colony_bug_risk        clusters=6 ply=137
+2026-07-11 06:03:43 [warning  ] sealbot_colony_bug_risk        clusters=5 ply=135
+2026-07-11 06:03:44 [warning  ] sealbot_colony_bug_risk        clusters=5 ply=141
+2026-07-11 06:03:46 [warning  ] sealbot_colony_bug_risk        clusters=6 ply=145
+2026-07-11 06:03:48 [warning  ] sealbot_colony_bug_risk        clusters=7 ply=149
+2026-07-11 06:03:50 [warning  ] sealbot_colony_bug_risk        clusters=5 ply=153
+2026-07-11 06:03:52 [warning  ] sealbot_colony_bug_risk        clusters=6 ply=155
+2026-07-11 06:03:53 [warning  ] sealbot_colony_bug_risk        clusters=5 ply=157
+2026-07-11 06:03:54 [warning  ] sealbot_colony_bug_risk        clusters=5 ply=159
+2026-07-11 06:03:55 [warning  ] sealbot_colony_bug_risk        clusters=6 ply=161
+2026-07-11 06:03:56 [warning  ] sealbot_colony_bug_risk        clusters=6 ply=163
+2026-07-11 06:03:57 [warning  ] sealbot_colony_bug_risk        clusters=6 ply=165
+2026-07-11 06:03:58 [warning  ] sealbot_colony_bug_risk        clusters=6 ply=167
+2026-07-11 06:04:00 [warning  ] sealbot_colony_bug_risk        clusters=5 ply=171
+2026-07-11 06:04:03 [warning  ] sealbot_colony_bug_risk        clusters=5 ply=175
+2026-07-11 06:04:04 [warning  ] sealbot_colony_bug_risk        clusters=5 ply=179
+2026-07-11 06:04:06 [warning  ] sealbot_colony_bug_risk        clusters=6 ply=183
+2026-07-11 06:04:08 [warning  ] sealbot_colony_bug_risk        clusters=7 ply=187
+2026-07-11 06:04:10 [warning  ] sealbot_colony_bug_risk        clusters=6 ply=191
+2026-07-11 06:04:13 [warning  ] sealbot_colony_bug_risk        clusters=6 ply=195
+2026-07-11 06:04:15 [warning  ] sealbot_colony_bug_risk        clusters=5 ply=199
+2026-07-11 06:04:25 [warning  ] sealbot_colony_bug_risk        clusters=5 ply=89
+2026-07-11 06:04:25 [warning  ] sealbot_colony_bug_risk        clusters=5 ply=95
+2026-07-11 06:04:27 [warning  ] sealbot_colony_bug_risk        clusters=5 ply=99
+2026-07-11 06:04:28 [warning  ] sealbot_colony_bug_risk        clusters=5 ply=103
+2026-07-11 06:04:30 [warning  ] sealbot_colony_bug_risk        clusters=5 ply=107
+2026-07-11 06:04:33 [warning  ] sealbot_colony_bug_risk        clusters=5 ply=127
+2026-07-11 06:04:35 [warning  ] sealbot_colony_bug_risk        clusters=5 ply=131
+2026-07-11 06:04:39 [warning  ] sealbot_colony_bug_risk        clusters=5 ply=139
+2026-07-11 06:04:41 [warning  ] sealbot_colony_bug_risk        clusters=5 ply=143
+2026-07-11 06:04:43 [warning  ] sealbot_colony_bug_risk        clusters=5 ply=147
+2026-07-11 06:04:44 [warning  ] sealbot_colony_bug_risk        clusters=5 ply=151
+2026-07-11 06:04:46 [warning  ] sealbot_colony_bug_risk        clusters=5 ply=155
+2026-07-11 06:04:48 [warning  ] sealbot_colony_bug_risk        clusters=5 ply=159
+2026-07-11 06:04:49 [warning  ] sealbot_colony_bug_risk        clusters=5 ply=163
+2026-07-11 06:04:51 [warning  ] sealbot_colony_bug_risk        clusters=6 ply=167
+2026-07-11 06:04:52 [warning  ] sealbot_colony_bug_risk        clusters=6 ply=171
+2026-07-11 06:04:54 [warning  ] sealbot_colony_bug_risk        clusters=6 ply=175
+2026-07-11 06:04:55 [warning  ] sealbot_colony_bug_risk        clusters=5 ply=179
+2026-07-11 06:04:57 [warning  ] sealbot_colony_bug_risk        clusters=6 ply=183
+2026-07-11 06:04:59 [warning  ] sealbot_colony_bug_risk        clusters=6 ply=187
+2026-07-11 06:05:01 [warning  ] sealbot_colony_bug_risk        clusters=7 ply=191
+2026-07-11 06:05:02 [warning  ] sealbot_colony_bug_risk        clusters=6 ply=195
+2026-07-11 06:05:04 [warning  ] sealbot_colony_bug_risk        clusters=6 ply=199
+2026-07-11 06:05:10 [warning  ] sealbot_colony_bug_risk        clusters=5 ply=107
+2026-07-11 06:05:15 [warning  ] sealbot_colony_bug_risk        clusters=5 ply=119
+2026-07-11 06:05:17 [warning  ] sealbot_colony_bug_risk        clusters=5 ply=123
+2026-07-11 06:05:43 [warning  ] sealbot_colony_bug_risk        clusters=5 ply=85
+2026-07-11 06:05:50 [warning  ] sealbot_colony_bug_risk        clusters=5 ply=105
+2026-07-11 06:05:52 [warning  ] sealbot_colony_bug_risk        clusters=5 ply=109
+2026-07-11 06:05:59 [warning  ] sealbot_colony_bug_risk        clusters=5 ply=133
+2026-07-11 06:06:03 [warning  ] sealbot_colony_bug_risk        clusters=6 ply=145
+2026-07-11 06:06:04 [warning  ] sealbot_colony_bug_risk        clusters=5 ply=123
+2026-07-11 06:06:04 [warning  ] sealbot_colony_bug_risk        clusters=5 ply=149
+2026-07-11 06:06:05 [warning  ] sealbot_colony_bug_risk        clusters=6 ply=153
+2026-07-11 06:06:07 [warning  ] sealbot_colony_bug_risk        clusters=5 ply=157
+2026-07-11 06:06:09 [warning  ] sealbot_colony_bug_risk        clusters=6 ply=161
+2026-07-11 06:06:13 [warning  ] sealbot_colony_bug_risk        clusters=5 ply=151
+2026-07-11 06:06:15 [warning  ] sealbot_colony_bug_risk        clusters=6 ply=155
+2026-07-11 06:06:18 [warning  ] sealbot_colony_bug_risk        clusters=5 ply=125
+2026-07-11 06:06:45 [warning  ] sealbot_colony_bug_risk        clusters=5 ply=103
+[EVAL] 128 games in 8.7min → reports/valprobe/wp2/evalfair_r5_wp2_b3/games.jsonl
+[PIPELINE] device: cuda
+[PIPELINE] ckpt_sha=312f85f632ee5046 n_sims=150
+[PIPELINE] 128 games loaded
+[PIPELINE] 57 loss games, 68 win games
+[PIPELINE] Replaying games...
+[PIPELINE] Replay done
+[PIPELINE] GPU phase: 57 loss + 68 win games...
+[GPU] 10/125 games done
+[GPU] 20/125 games done
+[GPU] 30/125 games done
+[GPU] 40/125 games done
+[GPU] 50/125 games done
+[GPU] 60/125 games done
+[GPU] 70/125 games done
+[GPU] 80/125 games done
+[GPU] 90/125 games done
+[GPU] 100/125 games done
+[GPU] 110/125 games done
+[GPU] 120/125 games done
+[PIPELINE] GPU done in 8.4min
+[PIPELINE] SealBot solver phase (20 workers)...
+[SOLVER] Starting 57 games on 20 workers (timeout=600s each)
+[SOLVER] SealBot depths=[6], window_half=9
+[SOLVER] 10/57 games done
+[SOLVER] 20/57 games done
+[SOLVER] 30/57 games done
+[SOLVER] 40/57 games done
+[SOLVER] 50/57 games done
+[SOLVER] Done: 57 completed, 0 timed out
+[PIPELINE] Solver done in 2.3min
+[PIPELINE] card1 positions from batch 3: 38
+[PIPELINE] Wrote batch card1 → reports/valprobe/wp2/batch3_card1.jsonl
+
+[WP2] Batch 3 summary:
+{
+  "batch_idx": 3,
+  "book_id": "evalfair_r5_wp2_b3",
+  "n_games": 128,
+  "card1_raw": 38,
+  "card1_added": 38,
+  "distinct_total": 191,
+  "wall_min": 19.4
+}
+[MERGE] Written 191 rows → reports/valprobe/probe_set_v1.jsonl
+
+============================================================
+[WP2] BATCH 4: distinct=191/200
+============================================================
+[BOOK] Generating evalfair_r5_wp2_b4: seed=20264711, n=64, radius=5...
+[BOOK] evalfair_r5_wp2_b4 done in 0.0s (64 openings)
+[BOOK] Saved → reports/valprobe/wp2/evalfair_r5_wp2_b4.json
+[EVAL] Running 64 pairs (workers=8)...
+2026-07-11 06:18:21 [warning  ] sealbot_colony_bug_risk        clusters=5 ply=101
+2026-07-11 06:18:23 [warning  ] sealbot_colony_bug_risk        clusters=5 ply=105
+2026-07-11 06:18:29 [warning  ] sealbot_colony_bug_risk        clusters=5 ply=121
+2026-07-11 06:18:30 [warning  ] sealbot_colony_bug_risk        clusters=5 ply=125
+2026-07-11 06:18:33 [warning  ] sealbot_colony_bug_risk        clusters=5 ply=129
+2026-07-11 06:18:34 [warning  ] sealbot_colony_bug_risk        clusters=6 ply=133
+2026-07-11 06:18:36 [warning  ] sealbot_colony_bug_risk        clusters=5 ply=137
+2026-07-11 06:18:38 [warning  ] sealbot_colony_bug_risk        clusters=6 ply=141
+2026-07-11 06:18:40 [warning  ] sealbot_colony_bug_risk        clusters=5 ply=145
+2026-07-11 06:18:43 [warning  ] sealbot_colony_bug_risk        clusters=5 ply=153
+2026-07-11 06:19:19 [warning  ] sealbot_colony_bug_risk        clusters=5 ply=103
+2026-07-11 06:19:21 [warning  ] sealbot_colony_bug_risk        clusters=5 ply=107
+2026-07-11 06:19:33 [warning  ] sealbot_colony_bug_risk        clusters=5 ply=135
+2026-07-11 06:19:38 [warning  ] sealbot_colony_bug_risk        clusters=5 ply=143
+2026-07-11 06:19:39 [warning  ] sealbot_colony_bug_risk        clusters=5 ply=147
+2026-07-11 06:19:41 [warning  ] sealbot_colony_bug_risk        clusters=6 ply=151
+2026-07-11 06:19:44 [warning  ] sealbot_colony_bug_risk        clusters=6 ply=155
+2026-07-11 06:19:44 [warning  ] sealbot_colony_bug_risk        clusters=5 ply=127
+2026-07-11 06:19:46 [warning  ] sealbot_colony_bug_risk        clusters=5 ply=131
+2026-07-11 06:19:46 [warning  ] sealbot_colony_bug_risk        clusters=6 ply=159
+2026-07-11 06:19:48 [warning  ] sealbot_colony_bug_risk        clusters=5 ply=135
+2026-07-11 06:19:49 [warning  ] sealbot_colony_bug_risk        clusters=6 ply=163
+2026-07-11 06:19:50 [warning  ] sealbot_colony_bug_risk        clusters=5 ply=139
+2026-07-11 06:19:51 [warning  ] sealbot_colony_bug_risk        clusters=6 ply=167
+2026-07-11 06:19:53 [warning  ] sealbot_colony_bug_risk        clusters=6 ply=171
+2026-07-11 06:19:53 [warning  ] sealbot_colony_bug_risk        clusters=5 ply=143
+2026-07-11 06:19:56 [warning  ] sealbot_colony_bug_risk        clusters=6 ply=147
+2026-07-11 06:19:57 [warning  ] sealbot_colony_bug_risk        clusters=6 ply=151
+2026-07-11 06:19:59 [warning  ] sealbot_colony_bug_risk        clusters=6 ply=155
+2026-07-11 06:20:01 [warning  ] sealbot_colony_bug_risk        clusters=5 ply=159
+2026-07-11 06:20:25 [warning  ] sealbot_colony_bug_risk        clusters=6 ply=119
+2026-07-11 06:21:07 [warning  ] sealbot_colony_bug_risk        clusters=5 ply=81
+2026-07-11 06:21:09 [warning  ] sealbot_colony_bug_risk        clusters=5 ply=97
+2026-07-11 06:21:10 [warning  ] sealbot_colony_bug_risk        clusters=5 ply=101
+2026-07-11 06:21:13 [warning  ] sealbot_colony_bug_risk        clusters=6 ply=109
+2026-07-11 06:21:14 [warning  ] sealbot_colony_bug_risk        clusters=5 ply=93
+2026-07-11 06:21:15 [warning  ] sealbot_colony_bug_risk        clusters=5 ply=97
+2026-07-11 06:21:18 [warning  ] sealbot_colony_bug_risk        clusters=5 ply=121
+2026-07-11 06:21:21 [warning  ] sealbot_colony_bug_risk        clusters=5 ply=109
+2026-07-11 06:21:23 [warning  ] sealbot_colony_bug_risk        clusters=5 ply=133
+2026-07-11 06:21:23 [warning  ] sealbot_colony_bug_risk        clusters=5 ply=113
+2026-07-11 06:21:26 [warning  ] sealbot_colony_bug_risk        clusters=5 ply=141
+2026-07-11 06:21:27 [warning  ] sealbot_colony_bug_risk        clusters=5 ply=121
+2026-07-11 06:21:33 [warning  ] sealbot_colony_bug_risk        clusters=5 ply=75
+2026-07-11 06:21:34 [warning  ] sealbot_colony_bug_risk        clusters=5 ply=79
+2026-07-11 06:21:57 [warning  ] sealbot_colony_bug_risk        clusters=5 ply=113
+2026-07-11 06:22:00 [warning  ] sealbot_colony_bug_risk        clusters=5 ply=117
+2026-07-11 06:22:46 [warning  ] sealbot_colony_bug_risk        clusters=5 ply=99
+2026-07-11 06:23:06 [warning  ] sealbot_colony_bug_risk        clusters=5 ply=103
+2026-07-11 06:23:19 [warning  ] sealbot_colony_bug_risk        clusters=5 ply=131
+2026-07-11 06:23:23 [warning  ] sealbot_colony_bug_risk        clusters=5 ply=139
+2026-07-11 06:23:24 [warning  ] sealbot_colony_bug_risk        clusters=5 ply=143
+2026-07-11 06:23:25 [warning  ] sealbot_colony_bug_risk        clusters=5 ply=147
+2026-07-11 06:23:27 [warning  ] sealbot_colony_bug_risk        clusters=5 ply=151
+2026-07-11 06:23:35 [warning  ] sealbot_colony_bug_risk        clusters=5 ply=99
+2026-07-11 06:23:37 [warning  ] sealbot_colony_bug_risk        clusters=5 ply=95
+2026-07-11 06:23:40 [warning  ] sealbot_colony_bug_risk        clusters=5 ply=103
+2026-07-11 06:23:43 [warning  ] sealbot_colony_bug_risk        clusters=5 ply=111
+2026-07-11 06:23:47 [warning  ] sealbot_colony_bug_risk        clusters=5 ply=119
+2026-07-11 06:23:50 [warning  ] sealbot_colony_bug_risk        clusters=5 ply=95
+2026-07-11 06:23:51 [warning  ] sealbot_colony_bug_risk        clusters=5 ply=127
+2026-07-11 06:23:53 [warning  ] sealbot_colony_bug_risk        clusters=6 ply=131
+2026-07-11 06:23:55 [warning  ] sealbot_colony_bug_risk        clusters=5 ply=135
+2026-07-11 06:23:56 [warning  ] sealbot_colony_bug_risk        clusters=5 ply=139
+2026-07-11 06:24:00 [warning  ] sealbot_colony_bug_risk        clusters=6 ply=147
+2026-07-11 06:24:00 [warning  ] sealbot_colony_bug_risk        clusters=5 ply=119
+2026-07-11 06:24:02 [warning  ] sealbot_colony_bug_risk        clusters=5 ply=123
+2026-07-11 06:24:04 [warning  ] sealbot_colony_bug_risk        clusters=6 ply=127
+2026-07-11 06:24:19 [warning  ] sealbot_colony_bug_risk        clusters=5 ply=89
+2026-07-11 06:24:22 [warning  ] sealbot_colony_bug_risk        clusters=5 ply=97
+2026-07-11 06:24:29 [warning  ] sealbot_colony_bug_risk        clusters=5 ply=117
+2026-07-11 06:24:32 [warning  ] sealbot_colony_bug_risk        clusters=5 ply=115
+2026-07-11 06:24:33 [warning  ] sealbot_colony_bug_risk        clusters=5 ply=119
+2026-07-11 06:24:34 [warning  ] sealbot_colony_bug_risk        clusters=5 ply=129
+2026-07-11 06:24:43 [warning  ] sealbot_colony_bug_risk        clusters=5 ply=119
+2026-07-11 06:24:48 [warning  ] sealbot_colony_bug_risk        clusters=5 ply=135
+2026-07-11 06:25:00 [warning  ] sealbot_colony_bug_risk        clusters=5 ply=135
+2026-07-11 06:25:01 [warning  ] sealbot_colony_bug_risk        clusters=5 ply=139
+2026-07-11 06:25:03 [warning  ] sealbot_colony_bug_risk        clusters=5 ply=111
+2026-07-11 06:25:03 [warning  ] sealbot_colony_bug_risk        clusters=5 ply=147
+2026-07-11 06:25:08 [warning  ] sealbot_colony_bug_risk        clusters=5 ply=131
+2026-07-11 06:25:11 [warning  ] sealbot_colony_bug_risk        clusters=5 ply=143
+2026-07-11 06:25:13 [warning  ] sealbot_colony_bug_risk        clusters=5 ply=151
+2026-07-11 06:25:14 [warning  ] sealbot_colony_bug_risk        clusters=6 ply=155
+2026-07-11 06:25:15 [warning  ] sealbot_colony_bug_risk        clusters=5 ply=111
+2026-07-11 06:25:15 [warning  ] sealbot_colony_bug_risk        clusters=6 ply=159
+2026-07-11 06:25:16 [warning  ] sealbot_colony_bug_risk        clusters=5 ply=115
+2026-07-11 06:25:16 [warning  ] sealbot_colony_bug_risk        clusters=5 ply=81
+2026-07-11 06:25:21 [warning  ] sealbot_colony_bug_risk        clusters=5 ply=135
+2026-07-11 06:25:22 [warning  ] sealbot_colony_bug_risk        clusters=5 ply=139
+2026-07-11 06:25:23 [warning  ] sealbot_colony_bug_risk        clusters=6 ply=147
+2026-07-11 06:25:24 [warning  ] sealbot_colony_bug_risk        clusters=5 ply=151
+2026-07-11 06:25:25 [warning  ] sealbot_colony_bug_risk        clusters=5 ply=155
+2026-07-11 06:25:26 [warning  ] sealbot_colony_bug_risk        clusters=6 ply=159
+2026-07-11 06:25:27 [warning  ] sealbot_colony_bug_risk        clusters=6 ply=163
+2026-07-11 06:25:27 [warning  ] sealbot_colony_bug_risk        clusters=6 ply=167
+2026-07-11 06:25:28 [warning  ] sealbot_colony_bug_risk        clusters=7 ply=171
+2026-07-11 06:25:29 [warning  ] sealbot_colony_bug_risk        clusters=5 ply=133
+2026-07-11 06:25:30 [warning  ] sealbot_colony_bug_risk        clusters=6 ply=137
+2026-07-11 06:25:30 [warning  ] sealbot_colony_bug_risk        clusters=6 ply=175
+2026-07-11 06:25:30 [warning  ] sealbot_colony_bug_risk        clusters=5 ply=179
+2026-07-11 06:25:31 [warning  ] sealbot_colony_bug_risk        clusters=5 ply=183
+2026-07-11 06:25:32 [warning  ] sealbot_colony_bug_risk        clusters=7 ply=187
+2026-07-11 06:26:02 [warning  ] sealbot_colony_bug_risk        clusters=5 ply=119
+2026-07-11 06:26:04 [warning  ] sealbot_colony_bug_risk        clusters=5 ply=131
+2026-07-11 06:26:05 [warning  ] sealbot_colony_bug_risk        clusters=5 ply=135
+2026-07-11 06:26:05 [warning  ] sealbot_colony_bug_risk        clusters=5 ply=139
+2026-07-11 06:26:06 [warning  ] sealbot_colony_bug_risk        clusters=5 ply=147
+[EVAL] 128 games in 8.5min → reports/valprobe/wp2/evalfair_r5_wp2_b4/games.jsonl
+[PIPELINE] device: cuda
+[PIPELINE] ckpt_sha=312f85f632ee5046 n_sims=150
+[PIPELINE] 128 games loaded
+[PIPELINE] 59 loss games, 69 win games
+[PIPELINE] Replaying games...
+[PIPELINE] Replay done
+[PIPELINE] GPU phase: 59 loss + 69 win games...
+[GPU] 10/128 games done
+[GPU] 20/128 games done
+[GPU] 30/128 games done
+[GPU] 40/128 games done
+[GPU] 50/128 games done
+[GPU] 60/128 games done
+[GPU] 70/128 games done
+[GPU] 80/128 games done
+[GPU] 90/128 games done
+[GPU] 100/128 games done
+[GPU] 110/128 games done
+[GPU] 120/128 games done
+[PIPELINE] GPU done in 8.5min
+[PIPELINE] SealBot solver phase (20 workers)...
+[SOLVER] Starting 59 games on 20 workers (timeout=600s each)
+[SOLVER] SealBot depths=[6], window_half=9
+[SOLVER] 10/59 games done
+[SOLVER] 20/59 games done
+[SOLVER] 30/59 games done
+[SOLVER] 40/59 games done
+[SOLVER] 50/59 games done
+[SOLVER] Done: 59 completed, 0 timed out
+[PIPELINE] Solver done in 2.5min
+[PIPELINE] card1 positions from batch 4: 43
+[PIPELINE] Wrote batch card1 → reports/valprobe/wp2/batch4_card1.jsonl
+
+[WP2] Batch 4 summary:
+{
+  "batch_idx": 4,
+  "book_id": "evalfair_r5_wp2_b4",
+  "n_games": 128,
+  "card1_raw": 43,
+  "card1_added": 43,
+  "distinct_total": 234,
+  "wall_min": 19.6
+}
+[MERGE] Written 234 rows → reports/valprobe/probe_set_v1.jsonl
+
+============================================================
+[WP2] DONE: 234 distinct positions (started 153)
+[WP2] Batches run this session: 2
+[WP2] Final probe set: reports/valprobe/probe_set_v1.jsonl (234 distinct positions)
+[WP2] Batch log → reports/valprobe/wp2/batch_log.json

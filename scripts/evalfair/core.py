@@ -365,6 +365,7 @@ def run_arm(
     first_knobs: Optional[Dict[str, Any]] = None,
     expect_encoding: str = "v6_live2_ls",
     n_pairs: Optional[int] = None,
+    sealbot_depth: Optional[int] = None,
 ) -> Dict[str, Any]:
     """Run one arm on one checkpoint against the book.
 
@@ -379,7 +380,7 @@ def run_arm(
     step = int(ck["step"])
     radius = radius_from_checkpoint(ck)
     knobs = extract_deploy_knobs(ck.get("config", {}))
-    depth = sealbot_depth_from_config()
+    depth = sealbot_depth if sealbot_depth is not None else sealbot_depth_from_config()
     sha_val = _ckpt_sha(ckpt_path)
 
     if first_knobs is not None:
