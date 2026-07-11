@@ -324,14 +324,19 @@ def fetch(cfg, host, repo, log):
     tip = read_live_tip(host, repo, log)
     if tip:
         out["live_tip"] = tip
+        # Compare by TIMESTAMP not step: a restart can reset step numbers while
+        # wall-clock always advances. Step comparison failed when an archived
+        # segment had a higher step watermark than the freshly-restarted live log.
         _ts = tip.get("last_summary")
-        if _ts and out.get("last_summary") and _ts.get("step", -1) >= (out["last_summary"].get("step", -1)):
-            out["last_summary"] = _ts
-        elif _ts and not out.get("last_summary"):
-            out["last_summary"] = _ts
+        if _ts:
+            _cur = out.get("last_summary")
+            if not _cur or (_ts.get("timestamp") or "") >= (_cur.get("timestamp") or ""):
+                out["last_summary"] = _ts
         _tt = tip.get("last_train")
-        if _tt and out.get("last_train") and _tt.get("step", -1) >= (out["last_train"].get("step", -1)):
-            out["last_train"] = _tt
+        if _tt:
+            _cur = out.get("last_train")
+            if not _cur or (_tt.get("timestamp") or "") >= (_cur.get("timestamp") or ""):
+                out["last_train"] = _tt
     return out
 
 
