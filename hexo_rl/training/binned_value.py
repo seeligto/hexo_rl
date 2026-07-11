@@ -16,7 +16,7 @@ VALUE_SUPPORT = torch.linspace(-1.0, 1.0, N_VALUE_BINS)   # (65,), fp32
 
 def scalar_to_two_hot(z: torch.Tensor, n_bins: int = N_VALUE_BINS) -> torch.Tensor:
     """z (N,) in [-1,1] → (N, n_bins) fp32 two-hot (MuZero/KataGo style)."""
-    z = z.reshape(-1).to(torch.float32).clamp(-1.0, 1.0)
+    z = z.reshape(-1).detach().to(torch.float32).clamp(-1.0, 1.0)
     scale = (n_bins - 1) / 2.0                      # 32 for 65 bins
     pos = (z + 1.0) * scale                         # [0, n_bins-1]
     lo = torch.floor(pos).to(torch.long).clamp(0, n_bins - 1)
@@ -30,8 +30,8 @@ def scalar_to_two_hot(z: torch.Tensor, n_bins: int = N_VALUE_BINS) -> torch.Tens
 
 def decode_binned_value(bin_logits: torch.Tensor) -> torch.Tensor:
     """(N, n_bins) logits → (N, 1) E[softmax·support], clamped [-1,1]."""
-    probs = F.softmax(bin_logits, dim=-1)
-    support = VALUE_SUPPORT.to(bin_logits.device, bin_logits.dtype)
+    probs = F.softmax(bin_logits.to(torch.float32), dim=-1)   # fp32 end-to-end (INV-D1): search-side decode must not run in autocast fp16
+    support = VALUE_SUPPORT.to(bin_logits.device, torch.float32)
     v = (probs * support).sum(dim=-1, keepdim=True)
     return v.clamp(-1.0, 1.0)
 
