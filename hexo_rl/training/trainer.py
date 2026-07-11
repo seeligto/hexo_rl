@@ -43,6 +43,7 @@ from hexo_rl.training.losses import (
     compute_aux_loss, compute_ply_index_loss, compute_total_loss, compute_uncertainty_loss,
     compute_chain_loss, fp16_backward_step,
 )
+from hexo_rl.training.binned_value import binned_value_loss
 from hexo_rl.training.checkpoints import (
     save_full_checkpoint, save_inference_weights, prune_checkpoints,
     get_base_model,
@@ -709,8 +710,16 @@ class Trainer:
                 chain=use_chain,
                 ply_index=use_ply_index,
             )
-            # Unpack in order: log_policy, value, v_logit, [opp_reply], [sigma2], [own_pred], [thr_pred], [chain_pred], [ply_pred]
-            log_policy, value, v_logit = fwd_result[0], fwd_result[1], fwd_result[2]
+            # Unpack in order: log_policy, value, value_aux, [opp_reply], [sigma2], [own_pred], [thr_pred], [chain_pred], [ply_pred]
+            # value_aux: (B,1) v_logit for scalar head; (B,65) bin_logits for dist65.
+            log_policy, value, value_aux = fwd_result[0], fwd_result[1], fwd_result[2]
+            # v_logit alias for diagnostics (logging only, no gradient consumer):
+            #   scalar → exact pre-tanh logit; dist65 → atanh proxy from decoded value.
+            _base_model = get_base_model(self.model)
+            if getattr(_base_model, "value_head_type", "scalar") == "dist65":
+                v_logit = torch.atanh(value.detach().clamp(-0.999999, 0.999999))
+            else:
+                v_logit = value_aux
             _idx = 3
             opp_reply = fwd_result[_idx] if use_aux else None
             if use_aux: _idx += 1
@@ -736,7 +745,10 @@ class Trainer:
                     log_policy, policies_t, policy_valid, self.device,
                     full_search_mask=full_search_mask_t,
                 )
-            value_loss = compute_value_loss(v_logit, outcomes_t, value_mask=value_mask_t)
+            if getattr(_base_model, "value_head_type", "scalar") == "dist65":
+                value_loss = binned_value_loss(value_aux, outcomes_t, value_mask=value_mask_t)
+            else:
+                value_loss = compute_value_loss(value_aux, outcomes_t, value_mask=value_mask_t)
 
             opp_reply_loss = None
             if use_aux:
