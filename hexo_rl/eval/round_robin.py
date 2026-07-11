@@ -436,10 +436,15 @@ class _CachedModelBot:
             )
             _CachedModelBot._NET_CACHE[key] = (model, spec, label)
         model, spec, label = _CachedModelBot._NET_CACHE[key]
-        from hexo_rl.eval.defender_dispatch import build_model_bot
-        self._player = build_model_bot(
-            model, spec, device, n_sims=n_sims, temperature=temperature,
-            encoding_label=label,
+        # CONFRES batch 7: route through the ONE play-construction authority ``build_player`` +
+        # ``resolve_eval_planner`` (design §4). The planner dispatches ModelPlayer vs KClusterMCTSBot
+        # from the encoding's policy_pool — the SAME rule ``build_model_bot`` (which build_player
+        # delegates to) applies — so the constructed player is BYTE-IDENTICAL, now dispatch-pinned.
+        from hexo_rl.config.resolve.planner import resolve_eval_planner
+        from hexo_rl.eval.player_factory import build_player
+        plan = resolve_eval_planner(label, "round_robin", n_sims=n_sims, temperature=temperature)
+        self._player = build_player(
+            plan, encoding_label=label, model=model, device=device,
         )
 
     def get_move(self, state, board):

@@ -182,7 +182,9 @@ def main() -> None:
     run_id = uuid.uuid4().hex
 
     # ── Load config ───────────────────────────────────────────────────────────
-    config = _orchestrator.load_train_config(args)
+    # CONFRES F2: load_train_config returns the merged config AND the kind-tagged raw layer chain
+    # (single load_paths source) so the resolved_config emission has per-layer provenance.
+    config, _config_layers = _orchestrator.load_train_config(args)
 
     # ── Logging ───────────────────────────────────────────────────────────────
     _log_run_name = args.run_name or f"train_{run_id}"
@@ -199,8 +201,23 @@ def main() -> None:
     )
 
     # ── Trainer (resume or fresh) ─────────────────────────────────────────────
+    # CONFRES F1(A): the operator-declaration set (keys present in --config/variant layers, incl
+    # explicit nulls) so a resume base-inherited override defers to the checkpoint-baked value while
+    # a declared knob still wins. Fresh runs ignore it (init_trainer's resume branch consumes it).
+    _declared_keys = _orchestrator.compute_declared_keys(_config_layers)
     trainer, board_size = _orchestrator.init_trainer(
         args, combined_config, device, board_size, res_blocks, filters, log,
+        declared_keys=_declared_keys,
+    )
+
+    # ── CONFRES 6a-ii: emit the resolved_config provenance event ──────────────
+    # Fires AFTER init_trainer (checkpoint loaded → post-load knobs resolvable) and BEFORE the
+    # training loop's first consumer read (design §5 F3). STRICTLY ADDITIVE: the only new event is
+    # resolved_config; seeding/device/checkpoint-load/training behavior is unchanged. The F2
+    # reconstruct target is the PRISTINE merged ``config`` (== merge of the raw layers), NOT the
+    # flattened/CLI-mutated ``combined_config`` — the resolver reads knobs from the raw layers.
+    _orchestrator.build_and_emit_resolved_config(
+        _config_layers, config, _registry_spec, trainer, args, log,
     )
 
     log.info("run_id", run_id=run_id)
@@ -230,8 +247,12 @@ def main() -> None:
     )
 
     # ── Recent buffer ─────────────────────────────────────────────────────────
+    # CONFRES 6c: pass the POST-load ``combined_config`` so the RecentBuffer sizes from the RESOLVED
+    # encoding spec (a metadata-wins resume back-propagates the ckpt encoding into combined_config),
+    # not the stale pre-checkpoint ``_registry_spec``.
     recent_buffer, _recency_weight = _orchestrator.init_recent_buffer(
         train_cfg, config, capacity, _registry_spec, _bp, _buffer_restored, log,
+        combined_config=combined_config,
     )
 
     # ── Pre-allocated batch arrays ────────────────────────────────────────────

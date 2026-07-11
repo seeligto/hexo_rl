@@ -223,21 +223,31 @@ def _check_declared_vs_stamped_encoding(
     Returns the declared name (or ``None`` if no declaration was made).
     Raises :class:`DeclaredEncodingMismatchError` on disagreement with a
     present checkpoint stamp — no silent override in either direction.
+
+    CONFRES 6c: the raise-on-conflict DECISION delegates to the ONE shared rule
+    ``hexo_rl.config.resolve.encoding.reconcile_declared_vs_stamp`` (design law #1) so this eval
+    Surface-B gate and the launch-builder Surface-A resolver apply provably identical semantics.
+    This wrapper keeps the eval-specific ``DeclaredEncodingMismatchError`` type + message (callers
+    catch it by name); only the comparison logic is single-sourced.
     """
     if declared_encoding is None:
         return None
     declared_name = _normalize_or_raise(declared_encoding, side="declared", source="declared_encoding")
-    if ckpt_stamp_name is not None and declared_name != ckpt_stamp_name:
+    from hexo_rl.config.resolve.encoding import EncodingConflictError as _EncConflict
+    from hexo_rl.config.resolve.encoding import reconcile_declared_vs_stamp as _reconcile
+    try:
+        _reconcile(declared_name, ckpt_stamp_name, stamp_source=ckpt_stamp_source or "checkpoint")
+    except _EncConflict as exc:
         raise DeclaredEncodingMismatchError(
-            f"Encoding version disagrees: declared_encoding={declared_name!r} vs "
-            f"{ckpt_stamp_source}={ckpt_stamp_name!r}. The checkpoint stamp would "
+            f"Encoding version disagrees: declared_encoding={exc.declared!r} vs "
+            f"{ckpt_stamp_source}={exc.stamp!r}. The checkpoint stamp would "
             "silently route eval under the wrong action-space/window geometry "
             "(v6_live2 vs v6_live2_ls are state-dict-shape-identical — shape "
             "inference cannot catch this). Re-stamp the checkpoint (weights-only "
             "strip + metadata['encoding_name'], e.g. scripts/make_ws3v3_warmstart.py) "
             "or fix the declared encoding; refusing to silently override either "
             "direction."
-        )
+        ) from exc
     return declared_name
 
 

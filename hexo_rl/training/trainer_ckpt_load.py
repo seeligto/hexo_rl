@@ -303,6 +303,105 @@ def _resolve_model_hparams(
     return resolved
 
 
+def _apply_config_overrides_f1(
+    config: Dict[str, Any],
+    config_overrides: Dict[str, Any],
+    baked_config: Optional[Dict[str, Any]],
+    declared_keys: Optional["frozenset | set"],
+    checkpoint_path: Any,
+) -> "frozenset[str]":
+    """Apply ``config_overrides`` onto ``config`` with the CONFRES F1(A) defer-to-baked rule.
+
+    ``config`` starts as the checkpoint-baked config (full resume) or the fallback config
+    (weights-only). ``config_overrides`` already EXCLUDES ``RESUME_CHECKPOINT_OWNED_KEYS``, so every
+    key here is a variant-wins knob. For each override key K:
+
+    - **F1 does NOT apply** (byte-pure with pre-6b) when there is no baked config
+      (``baked_config is None`` — weights-only path) OR ``declared_keys is None`` (a legacy call
+      site that did not thread declarations): apply verbatim, exactly as the old
+      ``config.update(config_overrides)``.
+    - **K is DECLARED** (``K in declared_keys``): the operator's ``--config``/variant declaration
+      WINS — apply (the E0 fix; incl an explicit ``key: null`` override, which travels here).
+    - **K is base-inherited** (not declared): if the checkpoint BAKED K → DEFER to the baked value
+      (skip the override) + WARN (loud, structured) when ``override != baked``. If the checkpoint did
+      NOT bake K → apply the base default (no baked value to preserve).
+
+    ``config`` already holds the baked value for any baked K (it was copied from ``ckpt["config"]``),
+    so "defer to baked" = simply DO NOT overwrite it.
+
+    Returns the FROZENSET of keys where F1 DEFERRED to the baked value (base-inherited + baked). The
+    caller (``load_checkpoint``) records this on the trainer so the orchestrator can back-propagate
+    the F1-PRESERVED values into the loop-read ``combined_config`` — closing the "split-brain" where
+    the loop / self-play / inference read the launch-merge value while the WARN + re-baked ckpt +
+    ``resolved_config`` emission all report the baked value the run does NOT execute (CONFRES F1(A)
+    back-prop fix). Determining the set HERE (not a hardcoded list downstream) keeps it exact.
+
+    Launch-mechanism carve-outs (preserved verbatim per the CONFRES 6b spec — these are NOT the
+    variant-wins runtime knobs F1 governs, they are launch controls ``build_resume_config_overrides``
+    injects for the operator, so they must NOT defer to the baked value):
+      - **scheduler-horizon gate**: ``total_steps`` / ``scheduler_t_max`` reach ``config_overrides``
+        ONLY when ``--override-scheduler-horizon`` was set — their presence IS the explicit re-horizon
+        intent (deferring would swallow it).
+      - **torch_compile / torch_compile_mode**: always re-added with a concrete value so a
+        ``--no-compile`` / variant flip is honoured on resume (pre-6b ``config.update`` applied them
+        unconditionally — preserve that).
+      - **allow_fresh_scheduler**: the ``--allow-fresh-scheduler`` control flag.
+    """
+    # No F1 (weights-only, or no declaration set threaded) → verbatim update, byte-pure. Nothing
+    # deferred (every override applied) so no back-prop needed.
+    if baked_config is None or declared_keys is None:
+        config.update(config_overrides)
+        return frozenset()
+
+    # Launch-mechanism keys present in overrides came from build_resume_config_overrides' explicit
+    # injection (flag / --no-compile), NOT a base-config inheritance — treat as declarations so F1
+    # never defers them to the baked value.
+    _LAUNCH_MECHANISM_KEYS = (
+        "total_steps", "scheduler_t_max",
+        "torch_compile", "torch_compile_mode",
+        "allow_fresh_scheduler",
+    )
+    declared = frozenset(declared_keys) | {
+        k for k in _LAUNCH_MECHANISM_KEYS if k in config_overrides
+    }
+    deferred_keys: set[str] = set()
+    for key, override_val in config_overrides.items():
+        if key in declared:
+            # Operator declaration wins (E0) — incl explicit null.
+            config[key] = override_val
+            continue
+        # base-inherited key.
+        if key in baked_config:
+            baked_val = baked_config[key]
+            # DEFER to the baked value: config already holds it (copied from ckpt['config']).
+            # Record the defer so the caller can back-propagate the PRESERVED baked value into the
+            # loop-read config (the split-brain fix). Both the differing case (WARN below) and the
+            # silent identical case are "deferred to baked" — but only a differing case matters for
+            # back-prop, so record it only when the value actually changed from the base default.
+            if override_val != baked_val:
+                deferred_keys.add(key)
+                # WARN loud when the suppressed base default differs from the baked value it defers
+                # to, so the divergence is never silent (F1).
+                log.warning(
+                    "resume_base_default_deferred_to_baked",
+                    knob=key,
+                    base_default=override_val,
+                    checkpoint_baked=baked_val,
+                    checkpoint=str(checkpoint_path),
+                    msg=(
+                        f"base-inherited default for {key!r} ({override_val!r}) is SUPPRESSED on "
+                        f"resume; deferring to the checkpoint-baked value ({baked_val!r}) it "
+                        "continues (CONFRES F1(A)). Declare the knob in --config/variant to "
+                        "override the baked value."
+                    ),
+                )
+            # else: identical value; silent no-op defer (back-prop would be a no-op too).
+        else:
+            # No baked value to preserve → base default applies (unchanged).
+            config[key] = override_val
+    return frozenset(deferred_keys)
+
+
 def load_checkpoint(
     cls: type,
     checkpoint_path: "str | Path",
@@ -310,6 +409,7 @@ def load_checkpoint(
     device: Optional[torch.device] = None,
     fallback_config: Optional[Dict[str, Any]] = None,
     config_overrides: Optional[Dict[str, Any]] = None,
+    declared_keys: Optional["frozenset | set"] = None,
 ) -> "Trainer":
     """Restore a Trainer from a checkpoint file.
 
@@ -324,6 +424,15 @@ def load_checkpoint(
         config_overrides: Optional config keys to override after loading
                           checkpoint config (useful for controlled resume
                           behavior such as scheduler horizon changes).
+        declared_keys:   CONFRES F1(A) — the set of top-level keys the operator
+                         DECLARED in a ``--config``/variant layer. On a FULL
+                         (config-carrying) resume, an override key NOT in this
+                         set that the checkpoint ALSO baked DEFERS to the baked
+                         value (base-inherited default preserves the baked run
+                         knob) + WARNs when they differ; a declared key still
+                         wins (E0). ``None`` (weights-only path + legacy call
+                         sites) → no F1 defer, config_overrides applied verbatim
+                         as before (byte-pure).
     """
     ckpt = torch.load(checkpoint_path, map_location="cpu", weights_only=True)
     if not isinstance(ckpt, dict):
@@ -336,8 +445,14 @@ def load_checkpoint(
 
     if "config" in ckpt and isinstance(ckpt["config"], dict):
         config = dict(ckpt["config"])
+        # CONFRES F1(A): remember the checkpoint-BAKED config so the config_overrides
+        # apply below can DEFER a base-inherited override to the baked value. The
+        # weights-only path (config from fallback_config) has no baked value → F1
+        # does not apply there.
+        baked_config: Optional[Dict[str, Any]] = dict(ckpt["config"])
     elif fallback_config is not None:
         config = dict(fallback_config)
+        baked_config = None
     else:
         raise ValueError(
             f"Checkpoint {checkpoint_path} does not include config and no fallback_config was provided."
@@ -452,8 +567,11 @@ def load_checkpoint(
                 source="shape_inference",
             )
 
+    f1_deferred_keys: "frozenset[str]" = frozenset()
     if config_overrides:
-        config.update(config_overrides)
+        f1_deferred_keys = _apply_config_overrides_f1(
+            config, config_overrides, baked_config, declared_keys, checkpoint_path,
+        )
         if resolved_spec is not None:
             # config_overrides won the merge above — re-propagate spec so
             # the encoding pins survive (overrides shouldn't silently
@@ -519,6 +637,9 @@ def load_checkpoint(
 
     ckpt_dir = Path(checkpoint_dir) if checkpoint_dir else Path(checkpoint_path).parent
     trainer = cls(model, config, checkpoint_dir=ckpt_dir, device=device)
+    # CONFRES F1(A) back-prop: expose the keys F1 DEFERRED to the baked value so the orchestrator can
+    # propagate the PRESERVED values into the loop-read combined_config (closing the split-brain).
+    trainer.f1_deferred_keys = f1_deferred_keys
 
     if is_full_ckpt:
         try:
@@ -529,6 +650,30 @@ def load_checkpoint(
                 reason=str(exc),
                 msg="Model architecture changed (new parameters added) — "
                     "optimizer restarted from scratch for new params.",
+            )
+        # CONFRES S1: the resume LR is checkpoint-STATE-owned (restored above) — a declared
+        # variant lr that differs from the checkpoint's baked lr is silently DROPPED (the v2-LR
+        # strike). Make it LOUD (precedence unchanged). `fallback_config` holds the operator's
+        # declared lr; `config["lr"]` is the checkpoint's baked initial lr (lr is resume-owned,
+        # excluded from config_overrides, so config["lr"] == ckpt["config"]["lr"]).
+        from hexo_rl.config.resolve.lr import resolve_lr_provenance
+        _lr_prov = resolve_lr_provenance(
+            declared=(fallback_config or {}).get("lr"),
+            baked=config.get("lr"),
+            effective=(
+                trainer.optimizer.param_groups[0]["lr"]
+                if trainer.optimizer.param_groups else None
+            ),
+        )
+        if _lr_prov.override_ignored:
+            log.warning(
+                "lr_declared_override_ignored_on_full_resume",
+                declared=_lr_prov.declared,
+                checkpoint_baked=_lr_prov.baked,
+                effective=_lr_prov.effective,
+                msg="declared lr differs from the checkpoint's baked lr and is IGNORED on a "
+                    "full-checkpoint resume (LR is checkpoint-state-owned); strip to weights-only "
+                    "to apply the declared lr.",
             )
         trainer.scaler.load_state_dict(ckpt["scaler_state"])
         if trainer.scheduler is not None:

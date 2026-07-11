@@ -46,33 +46,64 @@ from hexo_rl.training.trainer import Trainer
 
 
 # ── Section 3: load config + variant validation ──────────────────────────────
-def load_train_config(args: argparse.Namespace) -> dict:
-    """Load base + override + variant configs; abort-on-warning validation.
+_BASE_CONFIGS = [
+    "configs/model.yaml",
+    "configs/training.yaml",
+    "configs/selfplay.yaml",
+    "configs/game_replay.yaml",
+    "configs/monitoring.yaml",
+    "configs/monitors.yaml",
+]
 
-    Mirrors ``scripts/train.py::main`` lines 181-226 verbatim.
+
+def _build_load_paths(
+    args: argparse.Namespace,
+) -> tuple[list[str], Optional[str], Optional[str]]:
+    """Single source of truth for the base+config+variant path list (CONFRES F2).
+
+    Returns the ordered ``(base_paths, config_override, variant_path)`` triple so BOTH the
+    ``load_config`` merge AND ``capture_config_layers`` build the merge chain from ONE place — no
+    duplicated base-configs list, no second list-building site (design §2/§8, F2). ``base_paths``
+    already excludes any base file that ``--config`` resolves to (dedup preserved so the
+    ``config_key_overlap`` warning does not fire twice). The variant existence check +
+    abort-on-warning validation live in :func:`load_train_config`, which owns the launch failure
+    modes; this helper is a pure path assembler.
     """
-    from hexo_rl.utils.config import load_config
-    _BASE_CONFIGS = [
-        "configs/model.yaml",
-        "configs/training.yaml",
-        "configs/selfplay.yaml",
-        "configs/game_replay.yaml",
-        "configs/monitoring.yaml",
-        "configs/monitors.yaml",
-    ]
-    load_paths: list[str] = list(_BASE_CONFIGS)
+    base_paths: list[str] = list(_BASE_CONFIGS)
+    config_override: Optional[str] = None
     if args.config:
         override = str(Path(args.config).resolve())
-        load_paths = [p for p in load_paths if str(Path(p).resolve()) != override]
-        load_paths.append(args.config)
+        base_paths = [p for p in base_paths if str(Path(p).resolve()) != override]
+        config_override = args.config
+    variant_path: Optional[str] = None
     if args.variant:
-        variant_path = Path(f"configs/variants/{args.variant}.yaml")
-        if not variant_path.exists():
+        variant_path = str(Path(f"configs/variants/{args.variant}.yaml"))
+    return base_paths, config_override, variant_path
+
+
+def load_train_config(args: argparse.Namespace) -> tuple[dict, list[dict]]:
+    """Load base + override + variant configs; abort-on-warning validation.
+
+    Returns ``(merged_config, layers)`` — the merged config the rest of the launch reads AND the
+    kind-tagged raw layer chain (``capture_config_layers`` output) so the CONFRES resolver has
+    per-layer provenance without a SECOND path-list-building site (F2). Both are built from the
+    single :func:`_build_load_paths` source.
+
+    Mirrors ``scripts/train.py::main`` lines 181-226 verbatim (config merge + variant validation);
+    the layers return is CONFRES-additive.
+    """
+    from hexo_rl.utils.config import load_config
+    from hexo_rl.config.resolve.run_config import assert_layers_reconstruct, capture_config_layers
+
+    base_paths, config_override, variant_path = _build_load_paths(args)
+
+    if args.variant:
+        variant_p = Path(variant_path)
+        if not variant_p.exists():
             available = sorted(p.stem for p in Path("configs/variants").glob("*.yaml"))
             raise FileNotFoundError(
                 f"Variant '{args.variant}' not found. Available: {available}"
             )
-        load_paths.append(str(variant_path))
 
         # §176 P68 — abort-on-warning variant validation. Catches silent
         # namespace shadows before merge (e.g. variant declaring
@@ -83,7 +114,7 @@ def load_train_config(args: argparse.Namespace) -> dict:
             _load_standard_base_cfgs,
             validate_variant_against_bases,
         )
-        with open(variant_path) as _vf:
+        with open(variant_p) as _vf:
             _variant_cfg = _yaml.safe_load(_vf) or {}
         _base_cfgs = _load_standard_base_cfgs(Path(".").resolve())
         _warnings = validate_variant_against_bases(_variant_cfg, _base_cfgs)
@@ -95,7 +126,23 @@ def load_train_config(args: argparse.Namespace) -> dict:
                 f"see stderr. Fix the variant or run with --no-validate (not implemented)."
             )
 
-    return load_config(*load_paths)
+    # Flat ordered load-path list for the merge — base(deduped) → --config → variant.
+    load_paths: list[str] = list(base_paths)
+    if config_override is not None:
+        load_paths.append(config_override)
+    if variant_path is not None:
+        load_paths.append(variant_path)
+
+    config = load_config(*load_paths)
+    # CONFRES F2: kind-tagged raw layer chain from the SAME single path source.
+    layers = capture_config_layers(base_paths, config_override, variant_path)
+    # F2 invariant at LOAD time, where `config` is PRISTINE (== merged_layers(layers) by
+    # construction: same files, same order, same deep-merge). Asserted HERE (not at emission)
+    # so it cannot false-fail against a `config` that legitimate downstream transforms mutate
+    # (mixing/buffer <auto>-path expansion, encoding back-prop). A real dedup/order bug in
+    # _build_load_paths raises here, loudly, at launch.
+    assert_layers_reconstruct(layers, config)
+    return config, layers
 
 
 # ── Section 5: seed + device + TF32 ──────────────────────────────────────────
@@ -257,11 +304,37 @@ RESUME_CHECKPOINT_OWNED_KEYS: frozenset = frozenset({
 })
 
 
+def compute_declared_keys(layers: "list[dict] | None") -> frozenset:
+    """Top-level keys the OPERATOR declared in a ``--config`` or ``variant`` layer (CONFRES F1/B3).
+
+    A key present in a layer whose ``kind`` is ``"config"`` or ``"variant"`` is an operator
+    DECLARATION — including an explicit ``key: null`` (B3: an explicit null is a declaration that
+    overrides, to null). A key present only in a ``base`` layer is INHERITED, not a declaration, so
+    it DEFERS to a checkpoint-baked value on resume (F1(A)).
+
+    Classification reuses ``run_config._is_declaration_layer`` (the same kind-aware rule the
+    provenance resolver uses) so the two surfaces cannot disagree about what "declared" means.
+    ``None``/empty layers → empty set (fresh clones + hand-built call sites without layers).
+    """
+    if not layers:
+        return frozenset()
+    from hexo_rl.config.resolve.run_config import _is_declaration_layer
+
+    declared: set = set()
+    for layer in layers:
+        if _is_declaration_layer(layer):
+            raw = layer.get("raw") or {}
+            if isinstance(raw, dict):
+                declared.update(raw.keys())
+    return frozenset(declared)
+
+
 def build_resume_config_overrides(
     combined_config: dict,
     *,
     override_scheduler_horizon: bool = False,
     allow_fresh_scheduler: bool = False,
+    declared_keys: "frozenset | set | None" = None,
 ) -> dict:
     """Build the resume ``config_overrides`` so the launch variant wins.
 
@@ -278,13 +351,20 @@ def build_resume_config_overrides(
     the checkpoint scheduler_state's T_max is restored untouched
     (tests/test_scheduler_resume.py negative pin).
 
-    ``None``-valued launch keys are skipped so a stray null cannot nuke a real
-    checkpoint value.
+    B3 null semantics (CONFRES 6b) — the null-skip is now PROVENANCE-AWARE:
+    a ``None`` that the operator EXPLICITLY declared (``key in declared_keys``)
+    TRAVELS (it is a declaration that overrides the baked value to null); a
+    ``None`` merely inherited from a base layer is a default and is SKIPPED so a
+    stray null cannot nuke a real checkpoint value. Absent ``declared_keys``
+    (hand-built call sites) → every null skipped, preserving the pre-6b
+    behaviour byte-for-byte.
     """
+    declared: frozenset = frozenset(declared_keys or ())
     overrides: dict = {
         key: val
         for key, val in combined_config.items()
-        if key not in RESUME_CHECKPOINT_OWNED_KEYS and val is not None
+        if key not in RESUME_CHECKPOINT_OWNED_KEYS
+        and (val is not None or key in declared)
     }
     # torch_compile always travels with a concrete value (pre-E0 default path:
     # a weights-only resume needs an explicit flag, not an absent key).
@@ -305,6 +385,133 @@ def build_resume_config_overrides(
     return overrides
 
 
+# ── CONFRES 6a-ii: resolve provenance + emit the resolved_config event ────────
+def _checkpoint_stamps_from_trainer(trainer: Trainer) -> dict:
+    """Encoding/arch stamps cleanly available on the resumed trainer's baked config.
+
+    Only the encoding stamp is read post-init (``trainer.config['encoding']`` — a dict
+    ``{"version": ...}`` post-propagation, or a bare string). Arch stamps (res_blocks/filters) are
+    reconciled inside ``load_checkpoint`` and not surfaced as a distinct 'stamp' the encoding
+    resolver consumes, so they are omitted here (6b's deeper state-blob threading). Fresh runs have
+    no stamp → empty dict.
+    """
+    stamps: dict = {}
+    enc = trainer.config.get("encoding")
+    if isinstance(enc, dict):
+        enc = enc.get("version")
+    if enc is not None:
+        stamps["encoding"] = enc
+    return stamps
+
+
+def _checkpoint_state_from_trainer(trainer: Trainer) -> dict:
+    """Minimal optimizer-state blob for the LR-effective read (I3/B2).
+
+    Shapes the live optimizer's first param-group lr into the
+    ``optimizer_state.param_groups[0].lr`` structure ``_effective_lr_from_state`` reads. Guards an
+    empty ``param_groups`` (returns ``{}`` → resolver falls to declared/default). This is the
+    MINIMAL, cleanly-available slice; deeper scheduler_state/T_max threading is 6b.
+    """
+    opt = getattr(trainer, "optimizer", None)
+    pgs = getattr(opt, "param_groups", None) if opt is not None else None
+    if not pgs:
+        return {}
+    lr = pgs[0].get("lr")
+    if lr is None:
+        return {}
+    return {"optimizer_state": {"param_groups": [{"lr": lr}]}}
+
+
+def build_and_emit_resolved_config(
+    layers: list[dict],
+    merged_config: dict,
+    registry_spec: Any,
+    trainer: Trainer,
+    args: argparse.Namespace,
+    log: "structlog.stdlib.BoundLogger",
+) -> dict:
+    """CONFRES 6a-ii — resolve run provenance + emit the ONE ``resolved_config`` event (design §5).
+
+    STRICTLY ADDITIVE. This does NOT change seeding, device, checkpoint load, or any existing
+    event — it EMITS the F1-forensic provenance artifact alongside the already-applied launch
+    logic. The emitted value IS what the run used; consumers are NOT migrated here (that is 6c).
+
+    ``merged_config`` is the PRISTINE ``load_config`` merge output (the F2 reconstruct target:
+    ``merged_layers(layers) == merged_config``), NOT the flattened/CLI-mutated ``combined_config``
+    — the resolver reads its knobs from the raw ``layers``, and asserts the layers reconstruct this
+    merged config as a launch-time sanity check (raises loudly on a real bug).
+
+    Phase-A (I7/F3): ``resolve_preload_config`` renders seed/device/tf32, the launch-only knobs
+    consumed BEFORE the checkpoint loaded — flagged ``consumed_pre_resolution: true``.
+    Phase-B: ``resolve_run_config`` aggregates the post-load knobs. Checkpoint-side inputs are
+    gathered MINIMALLY from what is cleanly available post-init (encoding stamp + baked config +
+    effective lr); anything not cleanly available is passed None (deeper threading = 6b).
+
+    Returns the emitted payload (for the test harness / callers to inspect).
+    """
+    from hexo_rl.config.resolve.run_config import (
+        ConfigConflictError,
+        resolve_preload_config,
+        resolve_run_config,
+    )
+
+    cli = vars(args)
+
+    # (The F2 invariant is asserted at LOAD time in load_train_config, against the PRISTINE config
+    # — NOT here, where `merged_config` may reflect legitimate downstream transforms like
+    # mixing/buffer <auto>-path expansion or resume encoding back-prop.)
+    # Phase-A: launch-only knobs (no checkpoint ingestion — value emitted IS what the run used).
+    preload = resolve_preload_config(layers, cli=cli)
+
+    # Phase-B: post-load knobs. On resume the baked config is the checkpoint's config blob; on a
+    # fresh run there is no baked config (init_trainer built the Trainer from combined_config).
+    checkpoint_baked = trainer.config if bool(args.checkpoint) else None
+    checkpoint_stamps = _checkpoint_stamps_from_trainer(trainer) if bool(args.checkpoint) else {}
+    checkpoint_state = _checkpoint_state_from_trainer(trainer)
+
+    # BYTE-PURE guard (6a-ii): resolve+emit ONLY. The encoding resolver's I2 conflict-raise is a
+    # DESIGN-intended precedence change (6b), NOT this batch — on the live launch path a
+    # variant-vs-stamp encoding mismatch is back-propagated + WARN-logged (ckpt wins,
+    # init_trainer), it does NOT abort. So a resolver conflict here must NOT introduce a new launch
+    # abort: log + skip the provenance emission instead. The F2 assert above already fired loudly.
+    try:
+        resolved = resolve_run_config(
+            registry_spec,
+            layers,
+            merged_config,
+            checkpoint_stamps=checkpoint_stamps,
+            checkpoint_state=checkpoint_state,
+            cli=cli,
+            checkpoint_baked=checkpoint_baked,
+        )
+    except ConfigConflictError as exc:
+        # Encoding conflict (variant-declared vs checkpoint stamp): 6b-deferred precedence change.
+        # Do not abort a launch the live path allows — this is emission-only provenance. 6b owns the
+        # precedence enforcement.
+        log.warning(
+            "resolved_config_skipped",
+            reason=str(exc),
+            detail="resolver raised during 6a-ii emission; provenance event skipped (byte-pure — "
+                   "the live launch path is unaffected). The F1/B3 precedence enforcement is 6b.",
+        )
+        return {}
+
+    payload = resolved.to_event_payload()
+    # Merge the Phase-A preload knobs into the same payload so seed/device/tf32 appear with
+    # ``consumed_pre_resolution: true``. Phase-A knobs are launch-only and never overlap the
+    # Phase-B knob set.
+    preload_payload = preload.to_event_payload()
+    payload["knobs"].update(preload_payload["knobs"])
+
+    emit_event(payload)
+    log.info(
+        "resolved_config_emitted",
+        n_knobs=len(payload["knobs"]),
+        is_resume=bool(args.checkpoint),
+    )
+    return payload
+
+
 # ── Section 7: trainer init (resume vs fresh) ────────────────────────────────
 def init_trainer(
     args: argparse.Namespace,
@@ -314,17 +521,27 @@ def init_trainer(
     res_blocks: int,
     filters: int,
     log: "structlog.stdlib.BoundLogger",
+    declared_keys: "frozenset | set | None" = None,
 ) -> tuple[Trainer, int]:
     """Build / resume a Trainer; returns (trainer, possibly-updated board_size).
 
     On resume, board_size may be re-resolved from the registry after
     propagating ckpt-baked encoding back into combined_config.
 
-    Mirrors ``scripts/train.py::main`` lines 291-379 verbatim.
+    ``declared_keys`` (CONFRES F1(A)) is the operator-declaration set threaded into the resume
+    override apply: a base-inherited override that the checkpoint also baked DEFERS to the baked
+    value; a declared key still wins. ``None`` preserves the pre-6b behaviour.
+
+    Mirrors ``scripts/train.py::main`` lines 291-379 verbatim (F1 threading is 6b-additive).
     """
     from hexo_rl.encoding import resolve_from_config as _registry_resolve
 
     if args.checkpoint:
+        # CONFRES P3: validate the resolved bootstrap/resume checkpoint exists at LAUNCH
+        # (before Trainer.load_checkpoint's torch.load) so a stale Makefile BOOTSTRAP default
+        # or a typo'd --checkpoint fails loudly + informatively, not deep in loading.
+        from hexo_rl.config.resolve.bootstrap import resolve_bootstrap
+        resolve_bootstrap(args.checkpoint)
         # D-FULLSPEC E0: invert the resume precedence — seed config_overrides
         # from the full combined_config (variant = operator intent, wins over
         # the checkpoint-baked config) minus the checkpoint-owned EXCLUDE-set.
@@ -336,6 +553,7 @@ def init_trainer(
             combined_config,
             override_scheduler_horizon=bool(args.override_scheduler_horizon),
             allow_fresh_scheduler=bool(args.allow_fresh_scheduler),
+            declared_keys=declared_keys,
         )
 
         trainer = Trainer.load_checkpoint(
@@ -344,6 +562,7 @@ def init_trainer(
             device=device,
             fallback_config=combined_config,
             config_overrides=config_overrides,
+            declared_keys=declared_keys,
         )
         # Propagate the ckpt-resolved encoding back into the local config
         # dicts so downstream selfplay surfaces (pool, worker, lifecycle,
@@ -373,6 +592,22 @@ def init_trainer(
         ):
             if _enc_key in trainer.config:
                 combined_config[_enc_key] = trainer.config[_enc_key]
+        # CONFRES F1(A) split-brain fix: back-propagate the FULL set of F1-DEFERRED keys (the exact
+        # keys F1's defer-to-baked preserved — from trainer.f1_deferred_keys, NOT a hardcoded list)
+        # from trainer.config into combined_config, so the training loop / self-play / inference
+        # EXECUTE the values F1 preserved. Without this, run_training_loop(config=combined_config)
+        # ran the launch-merge (base-default) value while the resume_base_default_deferred_to_baked
+        # WARN, the re-baked checkpoint, AND the resolved_config emission ALL reported the baked value
+        # the run did NOT execute (e.g. ply_cap_value; and amp_dtype — a numerical trainer⊥inference
+        # autocast-dtype split). The 4 encoding keys above are a subset already covered; this closes
+        # every OTHER loop-read knob. E0 is untouched (declared keys are NOT in f1_deferred_keys, so a
+        # declaration still wins in combined_config); F2 (load-time assert) + owned-key semantics are
+        # unaffected (F1 owns which keys deferred).
+        # Plain attribute access (not getattr-with-default): Trainer.__init__ always sets
+        # f1_deferred_keys, so a missing attr is a real bug we WANT to surface, not mask. Every
+        # deferred key is baked → present in trainer.config, so no membership guard is needed.
+        for _f1_key in trainer.f1_deferred_keys:
+            combined_config[_f1_key] = trainer.config[_f1_key]
         _post_prop_enc = combined_config.get("encoding")
         _post_prop_enc_name = (
             _post_prop_enc.get("version") if isinstance(_post_prop_enc, dict) else _post_prop_enc
@@ -477,8 +712,12 @@ def init_replay_buffer(
     else:
         min_buf_size = max(128, min(512, int(train_cfg.get("batch_size", config.get("batch_size", 256)))))
 
-    from hexo_rl.encoding import normalize_encoding_name as _normalize_encoding_name
-    buffer = ReplayBuffer(capacity=capacity, encoding=_normalize_encoding_name(config.get("encoding")))
+    # CONFRES 6c: size the buffer from the RESOLVED encoding spec (the ONE encoding→spec
+    # authority, ``resolve.encoding.window_set``) rather than a raw ``normalize(config.get)``.
+    # Byte-pure on no-conflict configs; correct on a metadata-wins resume where the buffer used to
+    # size from the pre-checkpoint spec (B5b, design §4 window_set).
+    from hexo_rl.config.resolve.encoding import window_set as _window_set
+    buffer = ReplayBuffer(capacity=capacity, encoding=_window_set(config.get("encoding")).name)
 
     glw = train_cfg.get("game_length_weights", config.get("game_length_weights", {}))
     if glw:
@@ -607,6 +846,7 @@ def init_recent_buffer(
     _bp: Optional[Path],
     _buffer_restored: bool,
     log: "structlog.stdlib.BoundLogger",
+    combined_config: dict | None = None,
 ) -> tuple[Optional[RecentBuffer], float]:
     """Build the optional RecentBuffer + restore from the .recent sidecar.
 
@@ -615,10 +855,21 @@ def init_recent_buffer(
     recent_buffer, _recency_weight
 
     Mirrors ``scripts/train.py::main`` lines 478-499 verbatim.
+
+    CONFRES 6c: the RecentBuffer state_shape sizes from the RESOLVED encoding spec. The
+    ``registry_spec`` argument is the PRE-checkpoint spec (from ``flatten_config_and_resolve_
+    encoding``) — STALE after a metadata-wins resume where the checkpoint's baked encoding
+    back-propagates a different plane count. When ``combined_config`` (the post-load config) is
+    supplied, re-resolve the spec from it via the ONE encoding→spec authority
+    (``resolve.encoding.window_set``) — a latent-bug fix, byte-pure on no-conflict configs where
+    pre- and post-checkpoint encodings agree (design §4 window_set, handoff 6c).
     """
     _recency_weight = float(train_cfg.get("recency_weight", 0.0))
     recent_buffer: RecentBuffer | None = None
     if _recency_weight > 0.0:
+        if combined_config is not None:
+            from hexo_rl.config.resolve.encoding import window_set as _window_set
+            registry_spec = _window_set(combined_config.get("encoding"))
         _recent_cap = max(256, capacity // 2)
         recent_buffer = RecentBuffer(
             capacity=_recent_cap,
@@ -655,22 +906,19 @@ def allocate_batch_buffers_for_config(
 
     Mirrors ``scripts/train.py::main`` lines 501-518 verbatim.
     """
-    from hexo_rl.encoding import resolve_from_config as _registry_resolve
+    from hexo_rl.config.resolve.encoding import window_set as _window_set
 
-    # §172 A4.3: re-resolve registry post-checkpoint-load (resume path may
-    # have rewritten encoding via metadata) and size buffers per trunk_size /
-    # policy_logit_count. Falls through to v6 defaults on legacy v6 configs.
+    # §172 A4.3 / CONFRES 6c: re-resolve the RESOLVED encoding spec post-checkpoint-load (a resume
+    # may have rewritten encoding via metadata) and size the batch buffers per trunk_size /
+    # policy_logit_count / n_planes. Pre-CONFRES a resolve FAILURE was swallowed into a v6-shaped
+    # literal fallback (n_planes=8, trunk from board_size, _N_ACTIONS) + a warn — which would build
+    # v6-geometry buffers against a NON-v6 net and corrupt training silently. Under CONFRES this is
+    # a HARD-ERROR: the encoding spec MUST resolve (design §4 window_set, handoff 6c).
     _batch_size_cfg = int(train_cfg.get("batch_size", config.get("batch_size", 256)))
-    _n_planes_spec = 8  # v6-family default; overridden from the resolved spec.
-    try:
-        _bufs_spec = _registry_resolve(combined_config)
-        _trunk_size = int(_bufs_spec.trunk_size)
-        _n_actions_spec = int(_bufs_spec.policy_logit_count)
-        _n_planes_spec = int(_bufs_spec.n_planes)
-    except Exception as _re_err:
-        log.warning("buffer_alloc_registry_resolve_failed", error=str(_re_err)[:120])
-        _trunk_size = int(combined_config.get("board_size", 19))  # fallback from config
-        _n_actions_spec = _N_ACTIONS
+    _bufs_spec = _window_set(combined_config.get("encoding"))
+    _trunk_size = int(_bufs_spec.trunk_size)
+    _n_actions_spec = int(_bufs_spec.policy_logit_count)
+    _n_planes_spec = int(_bufs_spec.n_planes)
     bufs = allocate_batch_buffers(
         _batch_size_cfg,
         _n_actions_spec,

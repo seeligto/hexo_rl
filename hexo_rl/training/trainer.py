@@ -322,6 +322,10 @@ class Trainer:
         scaler_enabled = self.fp16 and self.amp_dtype == torch.float16
 
         self.config = config
+        # CONFRES F1(A) back-prop: the set of keys the resume's F1 defer-to-baked preserved (empty on
+        # a fresh run / weights-only resume). load_checkpoint overwrites this with the real set so the
+        # orchestrator can back-propagate the preserved baked values into the loop-read config.
+        self.f1_deferred_keys: "frozenset[str]" = frozenset()
         self.checkpoint_dir = Path(checkpoint_dir)
         self.checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
@@ -1348,6 +1352,7 @@ class Trainer:
         device: Optional[torch.device] = None,
         fallback_config: Optional[Dict[str, Any]] = None,
         config_overrides: Optional[Dict[str, Any]] = None,
+        declared_keys: Optional["frozenset | set"] = None,
     ) -> "Trainer":
         """Restore a Trainer from a checkpoint file.
 
@@ -1355,6 +1360,10 @@ class Trainer:
         (§176 P7 extraction). The cold-path body + encoding-reconciliation
         helpers live in ``trainer_ckpt_load`` so this module stays focused
         on the hot training step.
+
+        ``declared_keys`` threads the CONFRES F1(A) operator-declaration set through to the
+        override apply (base-inherited overrides defer to the checkpoint-baked value; declared keys
+        still win). ``None`` preserves the pre-6b verbatim-update behaviour.
         """
         from hexo_rl.training import trainer_ckpt_load
         return trainer_ckpt_load.load_checkpoint(
@@ -1364,4 +1373,5 @@ class Trainer:
             device=device,
             fallback_config=fallback_config,
             config_overrides=config_overrides,
+            declared_keys=declared_keys,
         )

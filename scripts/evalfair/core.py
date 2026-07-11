@@ -47,15 +47,22 @@ MAX_PLIES = 200
 
 
 def radius_from_checkpoint(ck: Dict[str, Any]) -> Optional[int]:
-    """Drive the REAL StepCoordinator resolver over the checkpoint's own config + step."""
+    """Resolve the checkpoint's NATIVE training radius from its baked schedule + step.
 
-    class _Shim:
-        pass
+    CONFRES 6c/6d: delegates to the ONE schedule-scan authority
+    ``resolve.radius.resolve_radius_from_schedule`` (single-sourced with
+    ``StepCoordinator._resolve_radius``) instead of driving a shim through the coordinator. Returns
+    ``None`` when the checkpoint carries no baked ``legal_move_radius_schedule`` — the offline
+    HARD-ERROR (B6) is applied at the CONSUMER (``run_arm``), where a per-stage book context makes
+    an unresolvable radius a correctness bug, not here (some callers legitimately tolerate ``None``,
+    e.g. head-vs-head stamps the native radius for provenance only).
+    """
+    from hexo_rl.config.resolve.radius import resolve_radius_from_schedule
 
-    shim = _Shim()
-    shim.full_config = ck.get("config", {})
+    cfg = ck.get("config", {}) or {}
+    schedule = cfg.get("selfplay", {}).get("legal_move_radius_schedule")
     step = int(ck["step"])
-    return StepCoordinator._resolve_radius(shim, step)
+    return resolve_radius_from_schedule(schedule, step)
 
 
 def sealbot_depth_from_config(path: str = "configs/eval.yaml") -> int:
@@ -219,12 +226,31 @@ def make_head_bot(
     knobs: Dict[str, Any],
     arm: ArmSpec,
     legal_set: bool,
+    encoding: str,
 ) -> Any:
-    """Build DeployHeadBot (optionally wrapped in SolverBackupBot) per arm spec."""
+    """Build DeployHeadBot (optionally wrapped in SolverBackupBot) per arm spec.
+
+    CONFRES batch 7: the DeployHeadBot is constructed through the ONE play-construction authority
+    ``build_player`` + ``resolve_deploy_planner`` (design §4). The planner derives the ``legal_set``
+    decode flag from the encoding's policy_pool via the SAME ``needs_no_drop_bot`` rule the caller
+    used, so the constructed head is BYTE-IDENTICAL to the prior direct DeployHeadBot; we assert the
+    two agree defensively. The SolverBackupBot wrap is unchanged.
+    """
+    from hexo_rl.config.resolve.planner import resolve_deploy_planner
+    from hexo_rl.eval.player_factory import build_player
+
     kb = dict(knobs)
     if arm.n_sims_override is not None:
         kb["n_sims_full"] = int(arm.n_sims_override)
-    head = DeployHeadBot(eng, kb, label=HEAD, seed=0, legal_set=legal_set)
+    plan = resolve_deploy_planner(
+        encoding, n_sims=int(kb["n_sims_full"]), c_puct=float(kb["c_puct"]),
+    )
+    assert plan.legal_set == legal_set, (
+        f"legal_set dispatch drift: planner derived {plan.legal_set} for {encoding!r} but caller "
+        f"passed {legal_set}"
+    )
+    head = build_player(plan, encoding_label=encoding, engine=eng, knobs=kb, seed=0)
+    head._label = HEAD  # match the prior label=HEAD ctor arg (repr-only)
     if not arm.solver_backup:
         return head
     return SolverBackupBot(
@@ -312,7 +338,7 @@ def _play_pair(args: tuple) -> List[Dict[str, Any]]:
 
     games_out = []
     for head_as_p1 in (True, False):
-        head_bot = make_head_bot(eng, knobs, arm, legal_set)
+        head_bot = make_head_bot(eng, knobs, arm, legal_set, encoding)
         opp_bot = SealBotBot(time_limit=600.0, max_depth=depth)
 
         if head_as_p1:
@@ -392,13 +418,23 @@ def run_arm(
     # radius. A mismatch is the rejected single-book-across-stages regime (design §2 R4a),
     # which biases Series B toward false-plateau — refuse it loudly rather than silently
     # read r5 ckpts on an r4 book (or vice versa).
+    # CONFRES 6d (B6): a per-stage book + an UNRESOLVABLE ckpt radius (no baked schedule — the
+    # sanctioned weights-only strip produces exactly this) used to skip the guard silently (the
+    # old `radius is not None` short-circuit). The HARD-ERROR authority is the ONE rule
+    # ``resolve.radius.require_offline_radius`` (design law #1 — no hand-inlined copy); a per-stage
+    # book has no --radius-stage escape here, so an unresolvable radius raises.
     book_stage = book.get("radius_stage")
-    if book_stage is not None and radius is not None and int(book_stage) != int(radius):
-        raise ValueError(
-            f"book/ckpt radius mismatch: book {book.get('book_id')!r} radius_stage={book_stage} "
-            f"but ckpt {ckpt_path} resolves radius={radius}. Per-stage books must match the "
-            f"checkpoint's training radius (design §2 F4) — use the r{radius} book."
+    if book_stage is not None:
+        from hexo_rl.config.resolve.radius import require_offline_radius
+        resolved_radius = require_offline_radius(
+            radius, radius_stage_override=None, ckpt_label=str(ckpt_path)
         )
+        if int(book_stage) != int(resolved_radius):
+            raise ValueError(
+                f"book/ckpt radius mismatch: book {book.get('book_id')!r} radius_stage={book_stage} "
+                f"but ckpt {ckpt_path} resolves radius={resolved_radius}. Per-stage books must match "
+                f"the checkpoint's training radius (design §2 F4) — use the r{resolved_radius} book."
+            )
 
     book_id = book.get("book_id", "unknown")
     openings = book["openings"]

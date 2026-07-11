@@ -43,6 +43,7 @@ plots/
 # Vendor (compiled artifacts — not committed; submodules under vendor/bots/ ARE committed)
 vendor/*
 !vendor/bots
+!vendor/patches
 
 # Deploy (VPS/Pi scraper — kept local, not published)
 deploy/

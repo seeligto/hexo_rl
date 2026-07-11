@@ -21,6 +21,33 @@ from hexo_rl.monitoring.gpu_monitor import GPUMonitor
 log = structlog.get_logger(__name__)
 
 
+# ── CONFRES S2: regime-stable cluster-stat emission ───────────────────────────
+# ``mcts_root_concentration`` + the §107 I2 cluster trio are PUCT-descent-specific (meaningless
+# under Gumbel-root). Pre-CONFRES they were DROPPED from ``iteration_complete`` under Gumbel,
+# silently changing the emitted schema by regime — a consumer wired to them flatlined on a
+# regime switch. Emit them ALWAYS-KEYED: their value under PUCT, ``None`` under Gumbel (§6 S2).
+_REGIME_GATED_CLUSTER_STAT_KEYS = (
+    "mcts_root_concentration",
+    "cluster_value_std_mean",
+    "cluster_policy_disagreement_mean",
+    "cluster_variance_sample_count",
+)
+
+
+def regime_gated_cluster_stats(rstats: Any, puct_regime: bool) -> dict[str, Any]:
+    """The PUCT-descent-specific cluster stats, always keyed: value under PUCT, ``None`` under
+    Gumbel. Schema-stable (S2) — the keys are never dropped, so a consumer reads ``null`` on a
+    regime switch instead of a silently-vanished field."""
+    if not puct_regime:
+        return {k: None for k in _REGIME_GATED_CLUSTER_STAT_KEYS}
+    return {
+        "mcts_root_concentration": rstats.mcts_mean_root_concentration,
+        "cluster_value_std_mean": rstats.cluster_value_std_mean,
+        "cluster_policy_disagreement_mean": rstats.cluster_policy_disagreement_mean,
+        "cluster_variance_sample_count": rstats.cluster_variance_sample_count,
+    }
+
+
 def replay_pretrain_events(args: argparse.Namespace) -> None:
     """Replay up to 500 pretrain ``training_step`` events into the dashboard on resume."""
     import json
@@ -284,17 +311,16 @@ def emit_training_events(
         "solver_injected_seeded":      rstats.solver_injected_seeded,
         "seeded_games_started":        rstats.seeded_games_started,
     }
-    if _puct_regime:
-        iteration_complete_event["mcts_root_concentration"] = rstats.mcts_mean_root_concentration
-        # §107 I2 investigation metrics: lifetime-mean per-cluster std-dev of
-        # values and top-1 policy disagreement (K≥2 positions only).
-        iteration_complete_event["cluster_value_std_mean"] = rstats.cluster_value_std_mean
-        iteration_complete_event["cluster_policy_disagreement_mean"] = rstats.cluster_policy_disagreement_mean
-        iteration_complete_event["cluster_variance_sample_count"] = rstats.cluster_variance_sample_count
+    # CONFRES S2: always-keyed (value under PUCT, null under Gumbel) so the iteration_complete
+    # schema is regime-STABLE. §107 I2 metrics = lifetime-mean per-cluster value std-dev +
+    # top-1 policy disagreement (K≥2 positions). See regime_gated_cluster_stats.
+    iteration_complete_event.update(regime_gated_cluster_stats(rstats, _puct_regime))
     emit_event(iteration_complete_event)
 
-    # B5 regime-guard (mirror of iteration_complete): suppress the
-    # PUCT-descent-specific root_concentration + I2 cluster trio under Gumbel.
+    # B5 regime-guard for the human LOG line only (NOT the schema-critical event, which is now
+    # always-keyed via regime_gated_cluster_stats — S2): omit the PUCT-descent-specific
+    # root_concentration + I2 cluster trio from the structured log under Gumbel (log parsers
+    # tolerate missing fields; the emitted event carries null).
     _puct_log_kwargs: dict[str, Any] = {}
     if _puct_regime:
         _puct_log_kwargs["mcts_root_concentration"] = round(rstats.mcts_mean_root_concentration, 3)

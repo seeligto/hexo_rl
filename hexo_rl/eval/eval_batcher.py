@@ -198,9 +198,15 @@ def batched_evaluate(
     """
     from hexo_rl.eval.colony_detection import is_colony_win
     from hexo_rl.eval.evaluator import EvalResult
+    from hexo_rl.eval.player_factory import assert_batched_dispatch_ok
     from hexo_rl.selfplay.inference import LocalInferenceEngine
 
     encoding = _norm(config.get("encoding") if config else None)
+    # CONFRES batch 7 (B1a batched carve-out): the batched coroutine assembles single-window physics
+    # inline and DROPS off-window legal moves — running it on a legal-set encoding mis-routes the net
+    # exactly like the ModelPlayer drop bug. HARD-REFUSE rather than silently drop (the full
+    # batched-KCluster branch is a §11 follow-up).
+    assert_batched_dispatch_ok(encoding)
     spec = _lookup_encoding(encoding)
     c_puct = float(config.get("mcts", config).get("c_puct", 1.5)) if config else 1.5
     engine = LocalInferenceEngine(model, device, encoding_spec=spec)
