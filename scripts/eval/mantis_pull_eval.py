@@ -348,15 +348,21 @@ def _pair_bootstrap_ci(
     n_boot: int = 2000,
     seed: int = 42,
 ) -> tuple:
-    """Bootstrap CI on Theil-Sen slope (point-level, for scalar metric series)."""
+    """Bootstrap CI on Theil-Sen slope for scalar metrics (jointly resampled step+val pairs).
+
+    Resamples (step, val) JOINTLY so the paired relationship is preserved.
+    For wr_d5 which has per-pair game scores, use _wr_d5_bootstrap_ci instead.
+    """
     if len(steps) < 2:
         return float("nan"), float("nan")
     rng = np.random.default_rng(seed)
-    a = np.asarray(vals, dtype=float)
+    steps_a = np.asarray(steps, dtype=float)
+    vals_a = np.asarray(vals, dtype=float)
+    n = len(steps_a)
     boot_slopes = []
     for _ in range(n_boot):
-        idx = rng.integers(0, len(a), size=len(a))
-        boot_slopes.append(_theil_sen(steps, a[idx].tolist()))
+        idx = rng.integers(0, n, size=n)
+        boot_slopes.append(_theil_sen(steps_a[idx].tolist(), vals_a[idx].tolist()))
     valid = [s for s in boot_slopes if not np.isnan(s)]
     if not valid:
         return float("nan"), float("nan")
@@ -373,17 +379,31 @@ def build_slope_table(
 
     Returns {metric: {theil_sen_slope, ci: [lo, hi], n_pts}} for each metric.
     Rows with None values for a metric are skipped for that metric.
+
+    For 'wr_d5': uses pair_bootstrap_slope_ci over per-pair game scores (correct
+    game-level resampling).  Requires rows to carry 'per_pair_scores_d5'.
+    For all other scalar metrics: resamples (step, val) JOINTLY (correct).
     """
+    from scripts.evalfair.compute_slope_report import pair_bootstrap_slope_ci  # tested, reused verbatim
+
     table: Dict[str, Any] = {}
     for metric in metrics:
-        pts = [(r["step"], r[metric]) for r in rows if r.get(metric) is not None]
+        pts = [(r["step"], r.get(metric), r.get("per_pair_scores_d5")) for r in rows if r.get(metric) is not None]
         if len(pts) < 2:
             table[metric] = {"theil_sen_slope": float("nan"), "ci": [float("nan"), float("nan")], "n_pts": len(pts)}
             continue
         steps_m = [p[0] for p in pts]
         vals_m = [p[1] for p in pts]
         slope = _theil_sen(steps_m, vals_m)
-        ci_lo, ci_hi = _pair_bootstrap_ci(steps_m, vals_m, n_boot=n_boot, seed=seed)
+        if metric == "wr_d5":
+            per_pair = [p[2] for p in pts]
+            if all(p is not None and len(p) > 0 for p in per_pair):
+                ci_lo, ci_hi = pair_bootstrap_slope_ci(steps_m, per_pair, n_boot=n_boot, seed=seed)
+            else:
+                # Fallback: jointly-resampled scalar CI (no game-level data available)
+                ci_lo, ci_hi = _pair_bootstrap_ci(steps_m, vals_m, n_boot=n_boot, seed=seed)
+        else:
+            ci_lo, ci_hi = _pair_bootstrap_ci(steps_m, vals_m, n_boot=n_boot, seed=seed)
         table[metric] = {"theil_sen_slope": slope, "ci": [ci_lo, ci_hi], "n_pts": len(pts)}
     return table
 
@@ -447,6 +467,8 @@ def _build_wp3_row(
         "wr_d5": wr_d5,
         "pair_ci_d5": ci_d5,
         "eff_n_d5": eff_n_d5,
+        # Per-pair game scores (for correct pair_bootstrap_slope_ci on wr_d5)
+        "per_pair_scores_d5": d5_result.get("per_pair_scores"),
         # Kraken strength
         "wr_kraken": wr_kraken,
         "pair_ci_kraken": ci_kraken,
@@ -472,16 +494,29 @@ def run_pull_eval(
     kraken_n_pairs: int = 32,
     kraken_sims: int = 200,
     kraken_temp: float = 0.0,
+    t7_series_out: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     """Process each checkpoint in order: Stage 1 -> Stage 2 -> Stage 3 -> Stage 4.
 
     Serial, niced. workers=1 enforced (load-34 crash record at higher values).
     Returns list of emitted WP3 series rows.
+
+    Schema separation:
+      - Stage 1 T7 rows -> t7_series_out  (default: reports/e1/t7_value_health_series.jsonl)
+      - Stage 4 WP3 rows -> series_out    (default: reports/e1/wp3_series.jsonl)
+    These are SEPARATE files to avoid incompatible-schema dual-write.
     """
     workers = 1  # mandatory — load-34 crash on record at higher
 
     default_kraken = str(_REPO / "checkpoints/external/kraken_v1.pt")
     kraken_path = kraken_asset or default_kraken
+
+    # Stage 1 T7 rows go to a dedicated file (separate schema from WP3)
+    t7_path = str(
+        Path(t7_series_out)
+        if t7_series_out is not None
+        else _REPO / "reports/e1/t7_value_health_series.jsonl"
+    )
 
     emitted: List[Dict[str, Any]] = []
 
@@ -495,13 +530,12 @@ def run_pull_eval(
         step_raw = torch.load(ckpt_path, map_location="cpu", weights_only=False)
         step = int(step_raw["step"]) if "step" in step_raw else None
 
-        # Stage 1: value-health
-        vh_series_out = str(_REPO / "reports/e1/value_health_series.jsonl") if series_out is None else series_out
+        # Stage 1: value-health — T7 schema rows go to t7_path (NOT series_out)
         print(f"[mantis] Stage 1: value-health ({arm}) ...", flush=True)
         vh_row = stage1_value_health(
             ckpt_path=ckpt_path,
             arm=arm,
-            series_out=vh_series_out,
+            series_out=t7_path,
             probe_path=probe_path,
             negatives_path=negatives_path,
             games_path=games_path,
@@ -562,7 +596,7 @@ def run_pull_eval(
                 flush=True,
             )
 
-        # Stage 4: assemble + emit per-bar WP3 row
+        # Stage 4: assemble + emit per-bar WP3 row to series_out (WP3 schema only)
         wp3_row = _build_wp3_row(
             ckpt_path=ckpt_path,
             step=step,
@@ -573,6 +607,10 @@ def run_pull_eval(
         )
         append_series_row(Path(series_out), wp3_row)
         emitted.append(wp3_row)
+
+        # Idempotency: mark done AFTER successful series append
+        _mark_done(ckpt, {"step": step, "arm": arm})
+
         print(
             f"[mantis] Step {step}: verdict bar "
             f"M1={wp3_row.get('mean_v_on_losses'):.4f}  "
@@ -613,8 +651,15 @@ def main() -> None:
 
     # Output paths
     ap.add_argument(
-        "--series-out", default=str(_REPO / "reports/e1/value_health_series.jsonl"),
+        "--series-out", default=str(_REPO / "reports/e1/wp3_series.jsonl"),
         dest="series_out",
+        help="WP3-schema JSONL output (one row per ckpt). DO NOT share with --t7-series-out.",
+    )
+    ap.add_argument(
+        "--t7-series-out", default=None,
+        dest="t7_series_out",
+        help="T7-schema JSONL output for stage1 value-health rows "
+             "(default: reports/e1/t7_value_health_series.jsonl). Separate file from --series-out.",
     )
     ap.add_argument(
         "--retro-out", default=str(_REPO / "reports/evalfair/retro_slope"),
@@ -704,6 +749,7 @@ def main() -> None:
         games_path=args.games_path,
         no_sha_check=args.no_sha_check,
         kraken_asset=args.kraken_asset,
+        t7_series_out=args.t7_series_out,
     )
 
 

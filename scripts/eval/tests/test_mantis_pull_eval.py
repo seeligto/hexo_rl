@@ -95,6 +95,144 @@ def test_collect_new_ckpts_returns_unprocessed(tmp_path: Path) -> None:
     assert c1 not in result
 
 
+# ── unit tests: done-marker written + idempotency ───────────────────────────
+
+
+def test_run_pull_eval_writes_done_marker(tmp_path: Path) -> None:
+    """run_pull_eval writes .mantis_done after successful series append."""
+    from scripts.eval.mantis_pull_eval import run_pull_eval
+
+    ckpt = _stub_ckpt(tmp_path / "checkpoint_00050000.pt", step=50000)
+    series_out = tmp_path / "wp3_series.jsonl"
+    t7_out = tmp_path / "t7_series.jsonl"
+
+    fake_vh = {
+        "step": 50000, "arm": "scalar", "ckpt_sha": "abc", "encoding": "v6_live2_ls",
+        "mean_v_on_losses": -0.5, "ece": 0.3, "tail_mass_auc": 0.6,
+        "decoded_auc": 0.7, "false_pessimism": 0.1,
+        "n_loss": 41, "n_safe": 651,
+    }
+    fake_d5 = {
+        "wr": 0.42, "pair_ci": [0.35, 0.50], "eff_n": 64,
+        "radius": 4, "per_pair_scores": [[1, 0, 1]],
+    }
+
+    with (
+        patch("scripts.eval.mantis_pull_eval.stage1_value_health", return_value=fake_vh),
+        patch("scripts.eval.mantis_pull_eval.stage2_d5_eval", return_value=fake_d5),
+        patch("scripts.eval.mantis_pull_eval._stage3_kraken", return_value={"skipped": True, "reason": "test"}),
+    ):
+        run_pull_eval(
+            ckpt_paths=[str(ckpt)],
+            series_out=str(series_out),
+            retro_out=str(tmp_path / "retro"),
+            book_r4=None,
+            book_r5=None,
+            skip_kraken=True,
+            t7_series_out=str(t7_out),
+        )
+
+    done = tmp_path / "checkpoint_00050000.mantis_done"
+    assert done.exists(), "done-marker must be written after successful run_pull_eval"
+
+
+def test_run_pull_eval_idempotency_skips_done_marked(tmp_path: Path) -> None:
+    """A checkpoint with an existing .mantis_done is skipped on re-run.
+
+    Tests the full collect_new_ckpts -> run_pull_eval path:
+    first run processes the ckpt and writes done-marker;
+    second run via collect_new_ckpts finds no new ckpts.
+    """
+    from scripts.eval.mantis_pull_eval import collect_new_ckpts, run_pull_eval
+
+    ckpt_dir = tmp_path / "ckpts"
+    ckpt_dir.mkdir()
+    ckpt = _stub_ckpt(ckpt_dir / "checkpoint_00050000.pt", step=50000)
+    series_out = tmp_path / "wp3_series.jsonl"
+    t7_out = tmp_path / "t7_series.jsonl"
+
+    fake_vh = {
+        "step": 50000, "arm": "scalar", "ckpt_sha": "abc", "encoding": "v6_live2_ls",
+        "mean_v_on_losses": -0.5, "ece": 0.3, "tail_mass_auc": 0.6,
+        "decoded_auc": 0.7, "false_pessimism": 0.1,
+        "n_loss": 41, "n_safe": 651,
+    }
+    fake_d5 = {
+        "wr": 0.42, "pair_ci": [0.35, 0.50], "eff_n": 64,
+        "radius": 4, "per_pair_scores": [[1, 0, 1]],
+    }
+
+    with (
+        patch("scripts.eval.mantis_pull_eval.stage1_value_health", return_value=fake_vh),
+        patch("scripts.eval.mantis_pull_eval.stage2_d5_eval", return_value=fake_d5),
+        patch("scripts.eval.mantis_pull_eval._stage3_kraken", return_value={"skipped": True, "reason": "test"}),
+    ):
+        # First run
+        new1 = collect_new_ckpts(ckpt_dir)
+        assert ckpt in new1, "ckpt must appear as new before first run"
+        run_pull_eval(
+            ckpt_paths=[str(p) for p in new1],
+            series_out=str(series_out),
+            retro_out=str(tmp_path / "retro"),
+            book_r4=None,
+            book_r5=None,
+            skip_kraken=True,
+            t7_series_out=str(t7_out),
+        )
+
+    done = ckpt_dir / "checkpoint_00050000.mantis_done"
+    assert done.exists(), "done-marker must exist after first run"
+
+    # Second run: collect_new_ckpts must return empty (skips done-marked ckpt)
+    new2 = collect_new_ckpts(ckpt_dir)
+    assert ckpt not in new2, "done-marked ckpt must be skipped on re-run"
+    assert new2 == [], f"expected no new ckpts, got {new2}"
+
+
+def test_run_pull_eval_series_out_single_schema(tmp_path: Path) -> None:
+    """series_out (WP3) must contain exactly 1 WP3-schema row per checkpoint.
+
+    T7 rows must go to t7_series_out, NOT to series_out.
+    """
+    from scripts.eval.mantis_pull_eval import run_pull_eval
+
+    ckpt = _stub_ckpt(tmp_path / "checkpoint_00050000.pt", step=50000)
+    series_out = tmp_path / "wp3_series.jsonl"
+    t7_out = tmp_path / "t7_series.jsonl"
+
+    fake_vh = {
+        "step": 50000, "arm": "scalar", "ckpt_sha": "abc", "encoding": "v6_live2_ls",
+        "mean_v_on_losses": -0.5, "ece": 0.3, "tail_mass_auc": 0.6,
+        "decoded_auc": 0.7, "false_pessimism": 0.1,
+        "n_loss": 41, "n_safe": 651,
+    }
+    fake_d5 = {
+        "wr": 0.42, "pair_ci": [0.35, 0.50], "eff_n": 64,
+        "radius": 4, "per_pair_scores": [[1, 0, 1]],
+    }
+
+    with (
+        patch("scripts.eval.mantis_pull_eval.stage1_value_health", return_value=fake_vh),
+        patch("scripts.eval.mantis_pull_eval.stage2_d5_eval", return_value=fake_d5),
+        patch("scripts.eval.mantis_pull_eval._stage3_kraken", return_value={"skipped": True, "reason": "test"}),
+    ):
+        run_pull_eval(
+            ckpt_paths=[str(ckpt)],
+            series_out=str(series_out),
+            retro_out=str(tmp_path / "retro"),
+            book_r4=None,
+            book_r5=None,
+            skip_kraken=True,
+            t7_series_out=str(t7_out),
+        )
+
+    wp3_rows = [json.loads(l) for l in series_out.read_text().splitlines() if l.strip()]
+    assert len(wp3_rows) == 1, f"series_out must have exactly 1 WP3 row per ckpt, got {len(wp3_rows)}"
+    # WP3 row must have WR_d5 (WP3 schema), not T7-only keys like recognition_lag_note
+    assert "wr_d5" in wp3_rows[0], "WP3 row must contain wr_d5"
+    assert "recognition_lag_note" not in wp3_rows[0], "T7-only key must not appear in WP3 series_out"
+
+
 # ── unit tests: rsync degradation ────────────────────────────────────────────
 
 
@@ -374,10 +512,13 @@ def test_e2e_two_ckpts_end_to_end_skip_kraken(tmp_path: Path) -> None:
         assert "mean_v_on_losses" in row
         assert "wr_d5" in row
 
-    # Done markers written for each ckpt
+    # Done markers must be written alongside the processed checkpoints.
+    # The integration test uses real ckpts from checkpoints/run2_retro/ — markers
+    # land there.  Clean up after ourselves so this test is idempotent.
     for ckpt in ckpts_to_test:
         done = ckpt.parent / (ckpt.stem + ".mantis_done")
-        assert done.exists() or True  # only if ckpts are in tmp — skip path check
+        assert done.exists(), f"done-marker must be written after successful run: {done}"
+        done.unlink()  # restore so re-running the test suite doesn't skip these ckpts
 
 
 @pytest.mark.integration
