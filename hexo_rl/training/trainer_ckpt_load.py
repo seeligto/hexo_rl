@@ -656,6 +656,12 @@ def load_checkpoint(
     # CONFRES F1(A) back-prop: expose the keys F1 DEFERRED to the baked value so the orchestrator can
     # propagate the PRESERVED values into the loop-read combined_config (closing the split-brain).
     trainer.f1_deferred_keys = f1_deferred_keys
+    # E1 T8 — record whether this was a FULL checkpoint (optimizer/scaler/step
+    # state restored) vs a weights-only warm-start. The warm-start value-head
+    # launch hook (warmstart_launch.maybe_warmstart_value_head) reads this to
+    # skip re-seeding the value head on a mid-run full resume (the trained head
+    # is already restored) while firing on a fresh weights-only warm launch.
+    trainer.loaded_from_full_checkpoint = is_full_ckpt
 
     if is_full_ckpt:
         try:

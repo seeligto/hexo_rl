@@ -1,0 +1,135 @@
+# ── E1 — paired value-head self-play — SCALAR ARM (control) ──────────────────
+#
+# E1 = scalar-vs-dist65 value-head self-play. BOTH arms warm-start from the
+# run2 248k trunk (WEIGHTS-ONLY) + a HEADSWAP value head, then self-play 50k
+# steps. This is the SCALAR (control) arm.
+#
+# ONE-KEY-DIFF INVARIANT (INV-D1 / R5): this file is BYTE-IDENTICAL to
+# configs/variants/e1_dist65.yaml EXCEPT value_head_type (scalar here, dist65
+# there — FLAT top-level, not nested `model:`, which the variant_validator
+# hard-aborts on). scripts/e1/run_pair.sh asserts the resolved diff == exactly
+# {value_head_type} and REFUSES to launch otherwise. The warm-start head
+# FILE is selected in code from value_head_type (scalar -> arm_A_seed0,
+# dist65 -> arm_B_seed0) — NOT a yaml key — so head_dir is shared / identical.
+#
+# WARM-START (weights-only, so the variant's value_head_type WINS — a full
+# resume would let the checkpoint own it, trainer_ckpt_load.py:364-368):
+#   .venv/bin/python scripts/make_ws3v3_warmstart.py \
+#     --in checkpoints/run2_retro/checkpoint_00248000.pt \
+#     --out checkpoints/e1/checkpoint_00248000_weights_only.pt --encoding-name ''
+#
+# LAUNCH — via scripts/e1/run_pair.sh (scalar arm FIRST, pre-registered). Direct:
+#   .venv/bin/python scripts/train.py \
+#     --checkpoint checkpoints/e1/checkpoint_00248000_weights_only.pt \
+#     --variant e1_scalar \
+#     --checkpoint-dir checkpoints/e1_scalar --run-name e1_scalar \
+#     --iterations 50000
+# Absolute step: warm-start step 248000 + 50000 iterations.
+#
+# IN-LOOP EVAL OFF (frozen A2 metric doc docs/designs/e1_metric_freeze.md): the
+# E1 read is offline value-health on saved 5k/10k/20k/50k checkpoints, not an
+# in-loop promotion eval. eval_pipeline.enabled false + deploy_strength off.
+
+encoding: v6_live2_ls
+in_channels: 4
+lr: 1.0e-4          # PINNED flat via the WEIGHTS-ONLY warm-start (a full-ckpt resume cannot pin LR;
+                    # RESUME_CHECKPOINT_OWNED_KEYS owns lr/lr_schedule/eta_min/total_steps).
+lr_schedule: none   # flat LR — no decay floor needed.
+aux_opp_reply_weight: 0.0
+training_steps_per_game: 1.0
+total_steps: 50000
+min_buffer_size: 25000   # POSITIONS. Selfplay prefill warmup gate (step_coordinator.py:736).
+
+seed: 1234          # SHARED across both arms (identical data order — one-variable discipline).
+
+# ── VALUE HEAD (the ONE lever) — scalar here, dist65 in e1_dist65.yaml ────────
+# FLAT top-level (NOT a nested `model:` block): base configs/model.yaml carries
+# value_head_type / n_value_bins as FLAT keys, so a nested `model:` block would
+# be a silent namespace shadow the variant_validator hard-aborts on (its sub-keys
+# get dropped by the deep-merge, base scalar silently wins). Flat here overrides
+# the base correctly. The one-key diff is therefore top-level `value_head_type`.
+value_head_type: scalar
+n_value_bins: 65
+
+# ── WARM-START — head_dir SHARED across both arms; the FILE is selected in code
+# from value_head_type (scalar -> arm_A_seed0, dist65 -> arm_B_seed0). ─────────
+warm_start:
+  enabled: true
+  head_dir: /home/timmy/headswap_safe/box_results/headswap/ab
+
+selfplay:
+  completed_q_values: true
+  n_workers: 24
+  inference_batch_size: 64
+  inference_max_wait_ms: 2.0
+  leaf_batch_size: 8
+  random_opening_plies: 0
+  gumbel_mcts: true
+  gumbel_m: 16
+  gumbel_explore_moves: 10
+  c_visit: 50.0
+  c_scale: 1.0
+  playout_cap:
+    full_search_prob: 1.0
+    n_sims_full: 150
+    n_sims_quick: 150
+
+  # run2's EXACT radius curriculum (E1 runs to 50k -> only the step-0 radius-4
+  # stage is live; later stages are inert within a 50k run but kept verbatim so
+  # the schedule is a byte-copy of run2's).
+  legal_move_radius_schedule:
+    - {step: 0,      radius: 4}
+    - {step: 200000, radius: 5}
+    - {step: 400000, radius: 6}
+    - {step: 600000, radius: 8}
+
+  # Solver / seeding OFF (one-variable: only the value head differs).
+  solver_enabled: false
+  forced_win_policy_enabled: false
+  seed_fraction: 0.0
+  seed_corpus_path: null
+
+mcts:
+  c_puct: 1.5
+  dirichlet_enabled: false
+
+mixing:
+  # No buffer_persist_path: per-arm isolation is by --checkpoint-dir / --run-name
+  # (run_pair.sh), and buffer_persist defaults OFF so nothing collides on the
+  # shared default path. Keeping this block IDENTICAL across arms preserves the
+  # one-key-diff invariant (a per-arm path here would be a 2nd differing key).
+  pretrained_buffer_path: "data/bootstrap_corpus_v6_live2_ls.npz"
+  initial_pretrained_weight: 0.8
+  min_pretrained_weight: 0.1
+  decay_steps: 200000
+
+# Persist 5k/10k/20k/50k for the offline value-health read.
+checkpoint_interval: 5000
+anchor_every_steps: 5000
+preserve_eval_checkpoints: true
+
+# Self-play stall watchdog — EXPLICIT (step_coordinator.py:308; 30 min).
+selfplay_stall_timeout_sec: 1800.0
+
+# ── IN-LOOP EVAL OFF (E1 reads offline value-health, not an in-loop gate) ─────
+eval_pipeline:
+  enabled: false
+  opponents:
+    deploy_strength:
+      enabled: false
+    best_checkpoint: { enabled: false }
+    sealbot: { enabled: false }
+    random: { enabled: false }
+    bootstrap_anchor: { enabled: false }
+    nnue: { enabled: false }
+    offwindow_adversary: { enabled: false }
+
+telemetry:
+  emit_outcome_distribution: true
+  emit_value_pred_at_ply_cap: true
+
+monitors:
+  hard_abort_grad_norm: 10.0
+  hard_abort_draw_rate: 0.55
+  hard_abort_draw_rate_consec: 3
+  hard_abort_draw_rate_min_step: 0

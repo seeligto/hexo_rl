@@ -26,3 +26,13 @@ encoding: v6
 # Set 'dist65' to enable the 65-bin two-hot cross-entropy head.
 value_head_type: scalar
 n_value_bins: 65
+
+# E1 warm-start value head (T8). Default DISABLED = byte-identical for every
+# non-E1 launch (the launch hook maybe_warmstart_value_head is a no-op).
+# The E1 arm variants set enabled: true + head_dir: <HEADSWAP ab dir>. The
+# concrete head FILE is selected in code from value_head_type (scalar ->
+# arm_A_seed0, dist65 -> arm_B_seed0), NOT declared here — so the two arm
+# yamls differ ONLY in model.value_head_type (the one-key-diff invariant).
+warm_start:
+  enabled: false
+  head_dir: null

@@ -378,7 +378,16 @@ def load_state_dict_strict(
     # §S181 Wave 4 4B-impl-3 — ply_index_head is a new aux head; pre-Wave-4
     # checkpoints lack its keys but the head initializes from scratch fine.
     # Filter missing keys that belong to known new aux heads.
-    new_aux_prefixes = ("ply_index_head.",)
+    #
+    # E1 T8 — value_fc2_bins is the dist65 value head (network.py:585). A
+    # SCALAR checkpoint (the run2 248k trunk) carries no value_fc2_bins.* keys,
+    # so loading it into a dist65 net leaves them benign-missing — the E1
+    # warm-start then seeds them from the HEADSWAP dist head (load_value_head)
+    # right after this load. Same class as ply_index_head: a new head absent in
+    # older checkpoints that inits fine. Scoped to value_fc2_bins ONLY, so the
+    # scalar->scalar and dist->dist paths are byte-identical (no such key can be
+    # missing there) and a genuinely-missing trunk key still raises.
+    new_aux_prefixes = ("ply_index_head.", "value_fc2_bins.")
     benign_missing = [k for k in missing_keys if k.startswith(new_aux_prefixes)]
     real_missing = [k for k in missing_keys if not k.startswith(new_aux_prefixes)]
     if benign_missing:
