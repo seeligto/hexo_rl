@@ -68,9 +68,12 @@ our own code (kraken adapters are our reimplementations; mantis is our net).
 ## 3. Format
 
 - **Full round-robin.** C(7,2) = **21 pairings**.
-- **Book:** one fixed fair radius-5 opening book, 32 paired openings, versioned at
-  `scripts/arena/book_r5_32.json` (seed 42, 4 plies each; 4 central stones on a radius-5 disk —
-  no 6-in-a-row reachable from the opening). One book for all pairings.
+- **Book:** the canonical deploy opening book `tests/fixtures/opening_books/book_deploy_v1_5ply.json`
+  — **5 plies**, `turn_clean: true` (ends on a turn boundary: P1(1) + P2(2) + P1(2)), 32 openings,
+  seed 20260712, sampler_commit `d12e3a13fe4f`, encoding v6_live2_ls. One book for all pairings.
+  Openings are non-origin; the delegation bots (shrimp/strix) translate to their origin-seeded frame
+  (verified legal from a non-origin opening before launch). Loaded via `run_arena --book-file`.
+  (Superseded the initial generated radius-5 **4-ply** `book_r5_32.json` — 4 plies cut mid-P1-turn; see §10.)
 - Each opening played **both colors** → 2 games/opening/pairing.
 - **Games = 21 × 32 × 2 = 1344.**
 - Turn clock: ref-server-enforced (45 s/move in smoke). Delegation bots get wider bridge timeouts
@@ -160,7 +163,8 @@ from d5 or d6 (CLAUDE.md re-validation discipline).
 - **Source pins (appendix):** strix delegation clone `SootyOwl/hexo-strix` @ `031d309` (WP1 net
   fidelity read `c381ffb`; checkpoint reconstructs clean under both — delegation is self-consistent
   at `031d309`). shrimp source `Cmiller132/hexo-bot` @ `ed520da`. kraken vendored (SHA in
-  `reports/anchorx/krakenbot_repo_notes.md`). Book seed 42. Fill exact SHAs in the final report.
+  `reports/anchorx/krakenbot_repo_notes.md`). Book: `book_deploy_v1_5ply` seed 20260712,
+  sampler_commit d12e3a13fe4f. Fill exact SHAs in the final report.
 
 ---
 
@@ -176,4 +180,9 @@ from d5 or d6 (CLAUDE.md re-validation discipline).
 
 ## 10. Amendment log
 
-(Empty at freeze. Any change after the first game is dated and recorded here.)
+- **2026-07-12 (pre-first-game, 0 done-markers):** Book corrected from the generated radius-5
+  **4-ply** `scripts/arena/book_r5_32.json` to the canonical **5-ply**
+  `tests/fixtures/opening_books/book_deploy_v1_5ply.json` (turn-clean, 32 openings, seed 20260712).
+  Reason: 4-ply openings cut off mid-P1-turn; 5-ply is turn-aligned and is the project's canonical
+  deploy book. `run_arena.py` gained `--book-file` to load an external book. Game count unchanged (1344).
+  No tournament game had run at the time of change.
