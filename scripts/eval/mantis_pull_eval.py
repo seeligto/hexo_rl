@@ -1,0 +1,711 @@
+"""WP3 — on-demand external eval reader (laptop-side).
+
+Operator-triggered script that:
+  Stage 0   rsync pull NEW banked checkpoints from vast (read-only, idempotent).
+            Degrades gracefully when vast is unreachable — processes whatever is local.
+  Stage 1   value-health: calls T7 validate_ckpt -> M1-M4, appends to series.jsonl.
+  Stage 2   d5 fair-book (64 pairs, 150 sims, g=0, pair-bootstrap CI): reuses
+            scripts/evalfair/run_retro_ckpt.py's run_arm path.
+  Stage 3   kraken-MCTS (200 sims, temp0, 32 pairs): reuses
+            scripts/evalfair/head_vs_krakenbot.py; gated behind --skip-kraken /
+            absent-asset skip-with-reason.
+  Stage 4   append a per-bar row to the series, print slope table (Theil-Sen) + verdict.
+
+Done-marker pattern: each processed checkpoint gets a <stem>.mantis_done sentinel.
+Idempotent: re-running skips done-marked checkpoints.
+
+CLI::
+
+    .venv/bin/python scripts/eval/mantis_pull_eval.py \\
+        --ckpt-dir checkpoints/run2_retro \\
+        --series-out reports/e1/value_health_series.jsonl \\
+        --retro-out reports/evalfair/retro_slope \\
+        --book-r4 tests/fixtures/opening_books/evalfair_r4_v2.json \\
+        --book-r5 tests/fixtures/opening_books/evalfair_r5_v2.json \\
+        --skip-kraken
+
+    # Target a specific checkpoint:
+    .venv/bin/python scripts/eval/mantis_pull_eval.py \\
+        --ckpt checkpoints/run2_retro/checkpoint_00248000.pt \\
+        --skip-kraken
+
+Constraints:
+  - Read-only wrt vast. Serial, niced. workers=1 (load-34 crash on record at higher).
+  - Gated loader (encoding v6_live2_ls). No new eval math — composes existing tools.
+  - Deterministic series rows.
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import subprocess
+import sys
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Sequence
+
+_REPO = Path(__file__).resolve().parents[2]
+if str(_REPO) not in sys.path:
+    sys.path.insert(0, str(_REPO))
+
+import numpy as np
+import torch
+
+
+# ── Stage 0 helpers: rsync pull ──────────────────────────────────────────────
+
+
+def _build_rsync_cmd(
+    host: str,
+    remote_path: str,
+    local_path: str,
+    extra_flags: Sequence[str] = (),
+) -> List[str]:
+    """Build an rsync pull command (local_path is ALWAYS the destination).
+
+    Read-only pull: rsync from remote to local, never the reverse.
+    """
+    return [
+        "rsync",
+        "-avz",
+        "--progress",
+        *extra_flags,
+        f"{host}:{remote_path}",
+        local_path,
+    ]
+
+
+def rsync_pull(
+    host: str,
+    remote_path: str,
+    local_path: str,
+    timeout: int = 300,
+) -> bool:
+    """Pull new checkpoints from vast via rsync.
+
+    Returns True on success, False when vast is unreachable or rsync fails.
+    Never raises — degrades gracefully so the caller can process local files.
+    """
+    cmd = _build_rsync_cmd(host, remote_path, local_path)
+    try:
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            timeout=timeout,
+            text=True,
+        )
+        if result.returncode == 0:
+            return True
+        print(
+            f"[mantis] rsync failed (rc={result.returncode}): {result.stderr[:200]}",
+            file=sys.stderr,
+        )
+        return False
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError) as e:
+        print(f"[mantis] rsync unreachable: {e}", file=sys.stderr)
+        return False
+
+
+# ── Done-marker + checkpoint collection ──────────────────────────────────────
+
+
+def _done_marker(ckpt_path: Path) -> Path:
+    return ckpt_path.parent / (ckpt_path.stem + ".mantis_done")
+
+
+def collect_new_ckpts(ckpt_dir: Path) -> List[Path]:
+    """Return all .pt files in ckpt_dir that lack a .mantis_done sentinel.
+
+    Sorted ascending by filename (step order).
+    """
+    ckpts = sorted(ckpt_dir.glob("checkpoint_*.pt"))
+    return [p for p in ckpts if not _done_marker(p).exists()]
+
+
+def _mark_done(ckpt_path: Path, summary: Dict[str, Any]) -> None:
+    _done_marker(ckpt_path).write_text(json.dumps(summary, indent=2))
+
+
+# ── Arm inference ─────────────────────────────────────────────────────────────
+
+
+def infer_arm_from_ckpt(ckpt_path: str) -> str:
+    """Return 'dist65' if the checkpoint contains a dist value head, else 'scalar'.
+
+    Reads only the state_dict keys — never loads the full model weights.
+    Mirrors the post-load guard in checkpoint_loader.py.
+    """
+    raw = torch.load(ckpt_path, map_location="cpu", weights_only=False)
+    if not isinstance(raw, dict):
+        return "scalar"
+    state = raw.get("model_state", raw.get("state_dict", {}))
+    if any("value_fc2_bins" in k for k in (state or {})):
+        return "dist65"
+    return "scalar"
+
+
+# ── Stage 1: value-health ─────────────────────────────────────────────────────
+
+
+def stage1_value_health(
+    ckpt_path: str,
+    arm: str,
+    series_out: str,
+    probe_path: Optional[str] = None,
+    negatives_path: Optional[str] = None,
+    games_path: Optional[str] = None,
+    wp2_games: Optional[Dict[str, str]] = None,
+    no_sha_check: bool = False,
+) -> Dict[str, Any]:
+    """Run T7 validate_ckpt and return the emitted M1-M4 row.
+
+    Reuses scripts.e1.validate_ckpt.validate_ckpt verbatim — no new metric math.
+    Writes one row to series_out (appended).
+    """
+    from scripts.e1.validate_ckpt import validate_ckpt as _validate_ckpt
+    from scripts.e1.validate_ckpt import DEFAULT_PROBE, DEFAULT_NEGATIVES, DEFAULT_GAMES
+
+    kw: Dict[str, Any] = {
+        "no_sha_check": no_sha_check,
+    }
+    if probe_path is not None:
+        kw["probe_path"] = probe_path
+    else:
+        kw["probe_path"] = DEFAULT_PROBE
+    if negatives_path is not None:
+        kw["negatives_path"] = negatives_path
+    else:
+        kw["negatives_path"] = DEFAULT_NEGATIVES
+    if games_path is not None:
+        kw["games_path"] = games_path
+    else:
+        kw["games_path"] = DEFAULT_GAMES
+    if wp2_games is not None:
+        kw["wp2_games"] = wp2_games
+
+    return _validate_ckpt(ckpt_path, arm, series_out, **kw)
+
+
+# ── Stage 2: d5 fair-book eval ────────────────────────────────────────────────
+
+
+def stage2_d5_eval(
+    ckpt_path: str,
+    book_r4: Optional[str],
+    book_r5: Optional[str],
+    out_dir: str,
+    workers: int = 1,
+    n_boot: int = 2000,
+    expect_encoding: str = "v6_live2_ls",
+    n_pairs: Optional[int] = None,
+) -> Dict[str, Any]:
+    """Run deploy-matched d5 eval (64 pairs, 150 sims, g=0, pair-bootstrap CI).
+
+    Reuses scripts.evalfair.core.run_arm verbatim via the run_retro_ckpt path.
+    Resume-safe: if result.json exists in out_dir, returns the cached result.
+
+    Workers forced to 1 (load-34 crash record at higher).
+    """
+    from scripts.evalfair.core import ArmSpec, extract_deploy_knobs, radius_from_checkpoint, run_arm
+    from scripts.evalfair.retro_slope import resolve_book_for_radius
+    from scripts.evalfair.book import load_book
+
+    out = Path(out_dir)
+    result_path = out / "result.json"
+    if result_path.exists():
+        return json.loads(result_path.read_text())
+
+    books_by_radius: Dict[int, Dict[str, Any]] = {}
+    if book_r4:
+        b = load_book(Path(book_r4))
+        books_by_radius[int(b["radius_stage"])] = b
+    if book_r5:
+        b = load_book(Path(book_r5))
+        books_by_radius[int(b["radius_stage"])] = b
+    if not books_by_radius:
+        raise ValueError("stage2_d5_eval: supply at least one of book_r4 / book_r5")
+
+    ck = torch.load(ckpt_path, map_location="cpu", weights_only=False)
+    radius = radius_from_checkpoint(ck)
+    book = resolve_book_for_radius(radius, books_by_radius, ckpt_path)
+
+    arm = ArmSpec(label="sims150")
+    result = run_arm(
+        ckpt_path,
+        arm,
+        book,
+        out_dir=out_dir,
+        workers=max(1, workers),
+        n_boot=n_boot,
+        book_seed=book.get("seed", 20260709),
+        expect_encoding=expect_encoding,
+        n_pairs=n_pairs,
+    )
+    return result
+
+
+# ── Stage 3: kraken eval ──────────────────────────────────────────────────────
+
+
+def _run_kraken_eval(
+    ckpt_path: str,
+    book_r5: str,
+    out_dir: str,
+    kraken_asset: str,
+    n_pairs: int = 32,
+    kraken_sims: int = 200,
+    kraken_temp: float = 0.0,
+    n_boot: int = 2000,
+    expect_encoding: str = "v6_live2_ls",
+) -> Dict[str, Any]:
+    """Run kraken-MCTS (200 sims, temp0, 32 pairs). Returns result dict."""
+    from scripts.evalfair.head_vs_krakenbot import run_head_vs_krakenbot
+    from scripts.evalfair.book import load_book
+
+    book = load_book(Path(book_r5))
+    return run_head_vs_krakenbot(
+        ckpt=ckpt_path,
+        book=book,
+        out_dir=out_dir,
+        kraken_path=kraken_asset,
+        kraken_mcts=True,
+        kraken_sims=kraken_sims,
+        kraken_temp=kraken_temp,
+        n_boot=n_boot,
+        book_seed=book.get("seed", 20260710),
+        expect_encoding=expect_encoding,
+        n_pairs=n_pairs,
+    )
+
+
+def _stage3_kraken(
+    ckpt_path: str,
+    out_dir: str,
+    book_r5: Optional[str],
+    skip_kraken: bool,
+    kraken_asset: str,
+    n_pairs: int = 32,
+    kraken_sims: int = 200,
+    kraken_temp: float = 0.0,
+    n_boot: int = 2000,
+    expect_encoding: str = "v6_live2_ls",
+) -> Dict[str, Any]:
+    """Gate and run kraken eval. Returns dict with 'skipped' + optional result fields."""
+    if skip_kraken:
+        return {"skipped": True, "reason": "skip_kraken=True (operator flag)"}
+
+    if not Path(kraken_asset).exists():
+        return {
+            "skipped": True,
+            "reason": f"kraken asset absent: {kraken_asset} (F2 — tie to absent weights)",
+        }
+
+    if book_r5 is None:
+        return {"skipped": True, "reason": "no --book-r5 supplied; kraken needs r5 book"}
+
+    result_path = Path(out_dir) / "result.json"
+    if result_path.exists():
+        return json.loads(result_path.read_text())
+
+    return _run_kraken_eval(
+        ckpt_path=ckpt_path,
+        book_r5=book_r5,
+        out_dir=out_dir,
+        kraken_asset=kraken_asset,
+        n_pairs=n_pairs,
+        kraken_sims=kraken_sims,
+        kraken_temp=kraken_temp,
+        n_boot=n_boot,
+        expect_encoding=expect_encoding,
+    )
+
+
+# ── Stage 4: series append + slope table ─────────────────────────────────────
+
+
+def append_series_row(series_path: Path, row: Dict[str, Any]) -> None:
+    """Append one JSONL row to the WP3 series file. Thread-safe append (single writer)."""
+    series_path = Path(series_path)
+    series_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(series_path, "a") as f:
+        f.write(json.dumps(row) + "\n")
+
+
+def _theil_sen(steps: List[int], vals: List[float]) -> float:
+    """Theil-Sen slope estimator: median of pairwise slopes."""
+    slopes = []
+    for i in range(len(steps)):
+        for j in range(i + 1, len(steps)):
+            dx = steps[j] - steps[i]
+            if dx != 0:
+                slopes.append((vals[j] - vals[i]) / dx)
+    return float(np.median(slopes)) if slopes else float("nan")
+
+
+def _pair_bootstrap_ci(
+    steps: List[int],
+    vals: List[float],
+    n_boot: int = 2000,
+    seed: int = 42,
+) -> tuple:
+    """Bootstrap CI on Theil-Sen slope (point-level, for scalar metric series)."""
+    if len(steps) < 2:
+        return float("nan"), float("nan")
+    rng = np.random.default_rng(seed)
+    a = np.asarray(vals, dtype=float)
+    boot_slopes = []
+    for _ in range(n_boot):
+        idx = rng.integers(0, len(a), size=len(a))
+        boot_slopes.append(_theil_sen(steps, a[idx].tolist()))
+    valid = [s for s in boot_slopes if not np.isnan(s)]
+    if not valid:
+        return float("nan"), float("nan")
+    return float(np.percentile(valid, 2.5)), float(np.percentile(valid, 97.5))
+
+
+def build_slope_table(
+    rows: List[Dict[str, Any]],
+    metrics: List[str],
+    n_boot: int = 2000,
+    seed: int = 42,
+) -> Dict[str, Any]:
+    """Compute Theil-Sen slope + bootstrap CI for each metric across the row series.
+
+    Returns {metric: {theil_sen_slope, ci: [lo, hi], n_pts}} for each metric.
+    Rows with None values for a metric are skipped for that metric.
+    """
+    table: Dict[str, Any] = {}
+    for metric in metrics:
+        pts = [(r["step"], r[metric]) for r in rows if r.get(metric) is not None]
+        if len(pts) < 2:
+            table[metric] = {"theil_sen_slope": float("nan"), "ci": [float("nan"), float("nan")], "n_pts": len(pts)}
+            continue
+        steps_m = [p[0] for p in pts]
+        vals_m = [p[1] for p in pts]
+        slope = _theil_sen(steps_m, vals_m)
+        ci_lo, ci_hi = _pair_bootstrap_ci(steps_m, vals_m, n_boot=n_boot, seed=seed)
+        table[metric] = {"theil_sen_slope": slope, "ci": [ci_lo, ci_hi], "n_pts": len(pts)}
+    return table
+
+
+def _print_slope_table(table: Dict[str, Any]) -> None:
+    print("\n[mantis] Slope table (Theil-Sen per 100k steps):")
+    for metric, info in table.items():
+        slope = info["theil_sen_slope"]
+        ci = info["ci"]
+        n = info["n_pts"]
+        s100 = slope * 100_000 if not np.isnan(slope) else float("nan")
+        ci_str = (
+            f"[{ci[0]*100_000:.4f}, {ci[1]*100_000:.4f}]"
+            if not (np.isnan(ci[0]) or np.isnan(ci[1]))
+            else "[nan, nan]"
+        )
+        print(f"  {metric:35s}: {s100:+.4f}/100k-steps  CI={ci_str}  n={n}")
+
+
+# ── Main orchestration ────────────────────────────────────────────────────────
+
+
+def _build_wp3_row(
+    ckpt_path: str,
+    step: Optional[int],
+    arm: str,
+    vh_row: Dict[str, Any],
+    d5_result: Dict[str, Any],
+    kraken_result: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Assemble the per-bar WP3 series row."""
+    # D5 fields
+    wr_d5 = d5_result.get("wr")
+    ci_d5 = d5_result.get("pair_ci")
+    eff_n_d5 = d5_result.get("eff_n")
+    radius = d5_result.get("radius")
+
+    # Kraken fields
+    if kraken_result.get("skipped"):
+        wr_kraken = None
+        ci_kraken = None
+    else:
+        wr_kraken = kraken_result.get("wr_head")
+        ci_kraken = kraken_result.get("pair_ci")
+
+    return {
+        "step": step or vh_row.get("step"),
+        "arm": arm,
+        "ckpt_sha": vh_row.get("ckpt_sha"),
+        "encoding": vh_row.get("encoding", "v6_live2_ls"),
+        "radius": radius,
+        # Value health M1-M4
+        "mean_v_on_losses": vh_row.get("mean_v_on_losses"),
+        "ece": vh_row.get("ece"),
+        "tail_mass_auc": vh_row.get("tail_mass_auc"),
+        "decoded_auc": vh_row.get("decoded_auc"),
+        "false_pessimism": vh_row.get("false_pessimism"),
+        "n_loss": vh_row.get("n_loss"),
+        "n_safe": vh_row.get("n_safe"),
+        # D5 strength
+        "wr_d5": wr_d5,
+        "pair_ci_d5": ci_d5,
+        "eff_n_d5": eff_n_d5,
+        # Kraken strength
+        "wr_kraken": wr_kraken,
+        "pair_ci_kraken": ci_kraken,
+    }
+
+
+def run_pull_eval(
+    ckpt_paths: List[str],
+    series_out: str,
+    retro_out: str,
+    book_r4: Optional[str],
+    book_r5: Optional[str],
+    skip_kraken: bool = False,
+    workers: int = 1,
+    n_boot: int = 2000,
+    expect_encoding: str = "v6_live2_ls",
+    probe_path: Optional[str] = None,
+    negatives_path: Optional[str] = None,
+    games_path: Optional[str] = None,
+    wp2_games: Optional[Dict[str, str]] = None,
+    no_sha_check: bool = False,
+    kraken_asset: Optional[str] = None,
+    kraken_n_pairs: int = 32,
+    kraken_sims: int = 200,
+    kraken_temp: float = 0.0,
+) -> List[Dict[str, Any]]:
+    """Process each checkpoint in order: Stage 1 -> Stage 2 -> Stage 3 -> Stage 4.
+
+    Serial, niced. workers=1 enforced (load-34 crash record at higher values).
+    Returns list of emitted WP3 series rows.
+    """
+    workers = 1  # mandatory — load-34 crash on record at higher
+
+    default_kraken = str(_REPO / "checkpoints/external/kraken_v1.pt")
+    kraken_path = kraken_asset or default_kraken
+
+    emitted: List[Dict[str, Any]] = []
+
+    for ckpt_path in ckpt_paths:
+        ckpt = Path(ckpt_path)
+        stem = ckpt.stem
+        print(f"\n[mantis] processing {stem} ...", flush=True)
+
+        # Infer arm from checkpoint payload
+        arm = infer_arm_from_ckpt(ckpt_path)
+        step_raw = torch.load(ckpt_path, map_location="cpu", weights_only=False)
+        step = int(step_raw["step"]) if "step" in step_raw else None
+
+        # Stage 1: value-health
+        vh_series_out = str(_REPO / "reports/e1/value_health_series.jsonl") if series_out is None else series_out
+        print(f"[mantis] Stage 1: value-health ({arm}) ...", flush=True)
+        vh_row = stage1_value_health(
+            ckpt_path=ckpt_path,
+            arm=arm,
+            series_out=vh_series_out,
+            probe_path=probe_path,
+            negatives_path=negatives_path,
+            games_path=games_path,
+            wp2_games=wp2_games,
+            no_sha_check=no_sha_check,
+        )
+        print(
+            f"[mantis] Stage 1 done: M1(mean_v_on_losses)={vh_row.get('mean_v_on_losses'):.4f}  "
+            f"M2(ece)={vh_row.get('ece'):.4f}  n_loss={vh_row.get('n_loss')}  n_safe={vh_row.get('n_safe')}",
+            flush=True,
+        )
+
+        # Stage 2: d5 fair-book eval
+        d5_out_dir = str(Path(retro_out) / stem)
+        print(f"[mantis] Stage 2: d5 eval (64 pairs, deploy-matched) ...", flush=True)
+        d5_result = stage2_d5_eval(
+            ckpt_path=ckpt_path,
+            book_r4=book_r4,
+            book_r5=book_r5,
+            out_dir=d5_out_dir,
+            workers=workers,
+            n_boot=n_boot,
+            expect_encoding=expect_encoding,
+        )
+        wr_d5 = d5_result.get("wr", float("nan"))
+        ci_d5 = d5_result.get("pair_ci", [float("nan"), float("nan")])
+        print(
+            f"[mantis] Stage 2 done: WR={wr_d5:.3f}  CI=[{ci_d5[0]:.3f},{ci_d5[1]:.3f}]  "
+            f"radius={d5_result.get('radius')}  eff_n={d5_result.get('eff_n')}",
+            flush=True,
+        )
+
+        # Stage 3: kraken eval
+        kraken_out_dir = str(Path(retro_out) / stem / "kraken")
+        print(
+            f"[mantis] Stage 3: kraken eval (skip={skip_kraken}, asset_exists={Path(kraken_path).exists()}) ...",
+            flush=True,
+        )
+        kraken_result = _stage3_kraken(
+            ckpt_path=ckpt_path,
+            out_dir=kraken_out_dir,
+            book_r5=book_r5,
+            skip_kraken=skip_kraken,
+            kraken_asset=kraken_path,
+            n_pairs=kraken_n_pairs,
+            kraken_sims=kraken_sims,
+            kraken_temp=kraken_temp,
+            n_boot=n_boot,
+            expect_encoding=expect_encoding,
+        )
+        if kraken_result.get("skipped"):
+            print(f"[mantis] Stage 3 skipped: {kraken_result.get('reason')}", flush=True)
+        else:
+            wr_k = kraken_result.get("wr_head", float("nan"))
+            ci_k = kraken_result.get("pair_ci", [float("nan"), float("nan")])
+            print(
+                f"[mantis] Stage 3 done: WR_head={wr_k:.3f}  CI=[{ci_k[0]:.3f},{ci_k[1]:.3f}]",
+                flush=True,
+            )
+
+        # Stage 4: assemble + emit per-bar WP3 row
+        wp3_row = _build_wp3_row(
+            ckpt_path=ckpt_path,
+            step=step,
+            arm=arm,
+            vh_row=vh_row,
+            d5_result=d5_result,
+            kraken_result=kraken_result,
+        )
+        append_series_row(Path(series_out), wp3_row)
+        emitted.append(wp3_row)
+        print(
+            f"[mantis] Step {step}: verdict bar "
+            f"M1={wp3_row.get('mean_v_on_losses'):.4f}  "
+            f"WR_d5={wp3_row.get('wr_d5'):.3f}  "
+            f"WR_kraken={wp3_row.get('wr_kraken')}",
+            flush=True,
+        )
+
+    # Slope table over emitted series
+    if len(emitted) >= 2:
+        slope_metrics = ["mean_v_on_losses", "wr_d5", "ece", "false_pessimism"]
+        table = build_slope_table(emitted, metrics=slope_metrics, n_boot=n_boot)
+        _print_slope_table(table)
+
+    return emitted
+
+
+# ── CLI ───────────────────────────────────────────────────────────────────────
+
+
+def main() -> None:
+    ap = argparse.ArgumentParser(
+        description="WP3 mantis on-demand external eval reader (value-health + d5 + kraken)"
+    )
+    # Checkpoint selection
+    ap.add_argument("--ckpt", default=None, help="Target a specific checkpoint .pt")
+    ap.add_argument("--ckpt-dir", default=None, help="Directory of banked checkpoints (default scan)")
+
+    # Books
+    ap.add_argument(
+        "--book-r4", default=str(_REPO / "tests/fixtures/opening_books/evalfair_r4_v2.json"),
+        dest="book_r4",
+    )
+    ap.add_argument(
+        "--book-r5", default=str(_REPO / "tests/fixtures/opening_books/evalfair_r5_v2.json"),
+        dest="book_r5",
+    )
+
+    # Output paths
+    ap.add_argument(
+        "--series-out", default=str(_REPO / "reports/e1/value_health_series.jsonl"),
+        dest="series_out",
+    )
+    ap.add_argument(
+        "--retro-out", default=str(_REPO / "reports/evalfair/retro_slope"),
+        dest="retro_out",
+    )
+
+    # Kraken
+    ap.add_argument("--skip-kraken", action="store_true", dest="skip_kraken",
+                    help="Skip Stage 3 kraken eval (quick runs)")
+    ap.add_argument(
+        "--kraken-asset",
+        default=str(_REPO / "checkpoints/external/kraken_v1.pt"),
+        dest="kraken_asset",
+    )
+
+    # Vast pull
+    ap.add_argument("--vast-host", default=None, dest="vast_host",
+                    help="vast.ai SSH host (e.g. user@12.34.56.78). Omit to skip pull.")
+    ap.add_argument(
+        "--vast-path", default="/workspace/hexo_rl/checkpoints/run2_retro/",
+        dest="vast_path",
+    )
+    ap.add_argument("--pull-timeout", type=int, default=300, dest="pull_timeout")
+
+    # Probe paths
+    ap.add_argument("--probe", default=None, dest="probe_path")
+    ap.add_argument("--negatives", default=None, dest="negatives_path")
+    ap.add_argument("--games", default=None, dest="games_path")
+    ap.add_argument("--no-sha-check", action="store_true", dest="no_sha_check",
+                    help="Skip frozen-probe SHA guard (dev only)")
+
+    # Boot + misc
+    ap.add_argument("--n-boot", type=int, default=2000, dest="n_boot")
+    ap.add_argument("--expect-encoding", default="v6_live2_ls", dest="expect_encoding")
+
+    args = ap.parse_args()
+
+    # ── Stage 0: rsync pull ─────────────────────────────────────────────────
+    ckpt_dir_path: Optional[Path] = None
+    if args.ckpt_dir:
+        ckpt_dir_path = Path(args.ckpt_dir)
+    elif args.ckpt is None:
+        ckpt_dir_path = _REPO / "checkpoints/run2_retro"
+
+    if args.vast_host and ckpt_dir_path is not None:
+        print(f"[mantis] Stage 0: rsync pull from {args.vast_host}:{args.vast_path} ...", flush=True)
+        ok = rsync_pull(
+            host=args.vast_host,
+            remote_path=args.vast_path,
+            local_path=str(ckpt_dir_path),
+            timeout=args.pull_timeout,
+        )
+        if not ok:
+            print("[mantis] rsync pull failed — continuing with local files.", file=sys.stderr)
+
+    # Collect checkpoints to process
+    if args.ckpt:
+        ckpt_paths = [args.ckpt]
+    elif ckpt_dir_path is not None and ckpt_dir_path.exists():
+        ckpt_paths = [str(p) for p in collect_new_ckpts(ckpt_dir_path)]
+        if not ckpt_paths:
+            print("[mantis] no new checkpoints to process (all done-marked).")
+            return
+    else:
+        ap.error("Supply --ckpt <path> or --ckpt-dir <dir>")
+        return
+
+    # ── Stages 1-4 ──────────────────────────────────────────────────────────
+    # nice the process (best-effort)
+    try:
+        os.nice(10)
+    except OSError:
+        pass
+
+    run_pull_eval(
+        ckpt_paths=ckpt_paths,
+        series_out=args.series_out,
+        retro_out=args.retro_out,
+        book_r4=args.book_r4,
+        book_r5=args.book_r5,
+        skip_kraken=args.skip_kraken,
+        workers=1,
+        n_boot=args.n_boot,
+        expect_encoding=args.expect_encoding,
+        probe_path=args.probe_path,
+        negatives_path=args.negatives_path,
+        games_path=args.games_path,
+        no_sha_check=args.no_sha_check,
+        kraken_asset=args.kraken_asset,
+    )
+
+
+if __name__ == "__main__":
+    main()
