@@ -148,8 +148,43 @@ def maybe_warmstart_value_head(
     return True
 
 
+def assert_dist65_bins_seeded(
+    trainer: Any,
+    combined_config: Dict[str, Any],
+    warmstart_fired: bool,
+) -> None:
+    """Belt-and-suspenders guard: raise if a dist65 net's value_fc2_bins are
+    untrained/random (neither loaded from the checkpoint NOR seeded by the
+    warm-start hook).
+
+    Called by the orchestrator immediately after ``maybe_warmstart_value_head``.
+    No-op for scalar nets (any config), dist65 + warm-start ON (E1 path), or
+    a genuine dist65 checkpoint resume (bins were in the checkpoint).
+
+    Raises:
+        RuntimeError: dist65 + scalar trunk (no bins in ckpt) + no warm-start.
+    """
+    value_head_type = combined_config.get("value_head_type", "scalar")
+    if value_head_type != "dist65":
+        return  # scalar arm — always safe
+    ckpt_had_bins = getattr(trainer, "ckpt_had_value_fc2_bins", True)
+    if ckpt_had_bins:
+        return  # checkpoint was a dist65 ckpt — bins were loaded
+    if warmstart_fired:
+        return  # warm-start seeded the bins — safe
+    raise RuntimeError(
+        "dist65 value head has untrained/random value_fc2_bins and no "
+        "warm-start seeded them — refusing to train. The loaded checkpoint "
+        "is a SCALAR trunk (no value_fc2_bins.*) and warm_start.enabled is "
+        "false (or warm-start was skipped). Fix: set warm_start.enabled=true "
+        "and point warm_start.head_dir at the HEADSWAP `ab` dir, OR resume "
+        "from a full dist65 checkpoint that already has trained bins."
+    )
+
+
 __all__ = [
     "HEAD_FILE_BY_TYPE",
+    "assert_dist65_bins_seeded",
     "maybe_warmstart_value_head",
     "resolve_warmstart_head_file",
 ]

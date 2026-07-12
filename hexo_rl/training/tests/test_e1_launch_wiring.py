@@ -18,6 +18,7 @@ from hexo_rl.model.network import HexTacToeNet
 from hexo_rl.training.checkpoints import load_state_dict_strict
 from hexo_rl.training.warmstart_launch import (
     HEAD_FILE_BY_TYPE,
+    assert_dist65_bins_seeded,
     maybe_warmstart_value_head,
     resolve_warmstart_head_file,
 )
@@ -197,3 +198,68 @@ def test_dist_net_still_rejects_a_genuinely_missing_trunk_key():
     broken = {k: v for k, v in scalar_state.items() if k != "value_fc1.weight"}
     with pytest.raises(RuntimeError, match="(?i)mismatch|missing"):
         load_state_dict_strict(dist_net, broken)
+
+
+# ── (2) footgun guard: dist65 + scalar trunk + warm_start off ────────────────
+
+class _FakeTrainerWithBinsFlag(_FakeTrainer):
+    """Extends _FakeTrainer with the ckpt_had_value_fc2_bins attribute that
+    trainer_ckpt_load.load_checkpoint sets on the real Trainer after load."""
+
+    def __init__(self, model, loaded_from_full_checkpoint: bool, ckpt_had_value_fc2_bins: bool):
+        super().__init__(model, loaded_from_full_checkpoint)
+        self.ckpt_had_value_fc2_bins = ckpt_had_value_fc2_bins
+
+
+def test_footgun_guard_raises_dist65_scalar_trunk_no_warmstart():
+    """THE footgun: dist65 net + scalar trunk (no bins in ckpt) + warm_start off
+    → assert_dist65_bins_seeded must RAISE with a clear message."""
+    net = _build_net("dist65")
+    trainer = _FakeTrainerWithBinsFlag(
+        net, loaded_from_full_checkpoint=False, ckpt_had_value_fc2_bins=False
+    )
+    cfg = {"value_head_type": "dist65"}  # warm_start absent → disabled
+    with pytest.raises(RuntimeError, match="(?i)untrained.*random|warm.?start|dist65"):
+        assert_dist65_bins_seeded(trainer, cfg, warmstart_fired=False)
+
+
+def test_footgun_guard_no_raise_dist65_warmstart_on(tmp_path):
+    """E1 safe path: dist65 + scalar trunk + warm_start ON (hook fired) → no raise."""
+    net = _build_net("dist65")
+    trainer = _FakeTrainerWithBinsFlag(
+        net, loaded_from_full_checkpoint=False, ckpt_had_value_fc2_bins=False
+    )
+    cfg = {"value_head_type": "dist65"}
+    # warmstart_fired=True means maybe_warmstart_value_head seeded the bins.
+    assert_dist65_bins_seeded(trainer, cfg, warmstart_fired=True)  # must not raise
+
+
+def test_footgun_guard_no_raise_scalar_arm():
+    """Scalar arm — guard is always a no-op regardless of other flags."""
+    net = _build_net("scalar")
+    trainer = _FakeTrainerWithBinsFlag(
+        net, loaded_from_full_checkpoint=False, ckpt_had_value_fc2_bins=False
+    )
+    cfg = {"value_head_type": "scalar"}
+    assert_dist65_bins_seeded(trainer, cfg, warmstart_fired=False)  # must not raise
+
+
+def test_footgun_guard_no_raise_dist65_full_ckpt_resume():
+    """Genuine dist65 full-checkpoint resume: bins were in the checkpoint → no raise."""
+    net = _build_net("dist65")
+    trainer = _FakeTrainerWithBinsFlag(
+        net, loaded_from_full_checkpoint=True, ckpt_had_value_fc2_bins=True
+    )
+    cfg = {"value_head_type": "dist65"}
+    assert_dist65_bins_seeded(trainer, cfg, warmstart_fired=False)  # must not raise
+
+
+def test_footgun_guard_no_raise_dist65_weights_only_from_dist_ckpt():
+    """dist65 weights-only resume FROM a dist65 checkpoint (bins in ckpt) → no raise.
+    Covers e.g. a mid-run dist65 recovery where only the model weights are loaded."""
+    net = _build_net("dist65")
+    trainer = _FakeTrainerWithBinsFlag(
+        net, loaded_from_full_checkpoint=False, ckpt_had_value_fc2_bins=True
+    )
+    cfg = {"value_head_type": "dist65"}
+    assert_dist65_bins_seeded(trainer, cfg, warmstart_fired=False)  # must not raise

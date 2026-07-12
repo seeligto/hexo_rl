@@ -662,6 +662,15 @@ def load_checkpoint(
     # skip re-seeding the value head on a mid-run full resume (the trained head
     # is already restored) while firing on a fresh weights-only warm launch.
     trainer.loaded_from_full_checkpoint = is_full_ckpt
+    # E1 footgun guard — record whether the loaded state dict carried
+    # value_fc2_bins.* keys. A SCALAR trunk (248k) has none; a genuine dist65
+    # full checkpoint or a dist65 weights-only trunk has them. The orchestrator
+    # reads this after the warm-start hook to detect the misconfig:
+    #   dist65 net + scalar trunk (no bins) + warm_start.enabled=false
+    # which leaves value_fc2_bins at random init with no error (pre-guard).
+    trainer.ckpt_had_value_fc2_bins = any(
+        k.startswith("value_fc2_bins.") for k in model_state
+    )
 
     if is_full_ckpt:
         try:
