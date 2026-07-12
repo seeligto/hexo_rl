@@ -1,23 +1,31 @@
-"""Flask + SocketIO route handlers for WebDashboard.
+"""Flask route handlers for WebDashboard.
 
-Extracted from web_dashboard.py (§176 P50). Route handler bodies copied
-verbatim — response codes, URL paths, and JSON shapes preserved.
+D-J DASH WP3.2: SocketIO routes REMOVED. New polling endpoints:
+  GET /api/events.jsonl?since=<offset>    — emit_event JSONL tail
+  GET /api/structlog.jsonl?since=<offset> — structlog JSONL tail
+  GET /api/series/<name>                  — file-sourced series (value_health, external_bars)
 
-``register_routes(app, dashboard)`` wires every HTTP + SocketIO endpoint
-against the supplied ``WebDashboard`` instance (captured via closure).
+Viewer/analyze routes PRESERVED (out-of-scope per WP3 operator ruling §8.2).
 """
 
 from __future__ import annotations
 
 import json
+import logging
+import os
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 import structlog
 from flask import Flask, jsonify, request, send_from_directory
-from flask_socketio import emit
 
 from hexo_rl.encoding import resolve_from_config
+from hexo_rl.monitoring.series_reader import (
+    tail_jsonl,
+    read_value_health_series,
+    read_external_bars,
+    compute_external_slope,
+)
 
 if TYPE_CHECKING:
     from hexo_rl.monitoring.web_dashboard import WebDashboard
@@ -25,13 +33,66 @@ if TYPE_CHECKING:
 log = structlog.get_logger()
 
 
+def _find_structlog_jsonl(log_dir: Path, run_name: str | None = None) -> Path | None:
+    """Return the structlog log file for this run.
+
+    Priority:
+    1. logs/<run_name>.jsonl if run_name supplied and file exists
+    2. Most-recent *.jsonl in log_dir that is NOT events_*.jsonl
+    """
+    if run_name:
+        p = log_dir / f"{run_name}.jsonl"
+        if p.exists():
+            return p
+
+    candidates = [
+        f for f in log_dir.glob("*.jsonl")
+        if not f.name.startswith("events_")
+    ]
+    if not candidates:
+        return None
+    try:
+        return max(candidates, key=lambda p: p.stat().st_mtime)
+    except OSError:
+        return None
+
+
+def _find_events_jsonl(log_dir: Path) -> Path | None:
+    """Return the most-recent events_*.jsonl in log_dir."""
+    candidates = list(log_dir.glob("events_*.jsonl"))
+    if not candidates:
+        return None
+    try:
+        return max(candidates, key=lambda p: p.stat().st_mtime)
+    except OSError:
+        return None
+
+
 def register_routes(app: Flask, dashboard: "WebDashboard") -> None:
-    """Register every HTTP + SocketIO endpoint on ``app`` against ``dashboard``."""
-    socketio = dashboard._socketio
+    """Register every HTTP endpoint on app against dashboard."""
+
+    # ── log dir resolution (resolved once at request time via config) ─────────
+
+    def _log_dir() -> Path:
+        cfg = dashboard._config
+        ld = cfg.get("log_dir") or cfg.get("monitoring", {}).get("log_dir") or "logs"
+        return Path(ld)
+
+    def _valprobe_dir() -> Path:
+        cfg = dashboard._config
+        return Path(cfg.get("valprobe_dir") or cfg.get("monitoring", {}).get("valprobe_dir") or "reports/valprobe")
+
+    def _evalfair_dir() -> Path:
+        cfg = dashboard._config
+        return Path(cfg.get("evalfair_dir") or cfg.get("monitoring", {}).get("evalfair_dir") or "reports/evalfair")
+
+    # ── Static index ──────────────────────────────────────────────────────────
 
     @app.route("/")
     def index():
         return send_from_directory("static", "index.html")
+
+    # ── API: monitoring config (kept for backwards compat) ────────────────────
 
     @app.route("/api/monitoring-config")
     def monitoring_config():
@@ -40,7 +101,10 @@ def register_routes(app: Flask, dashboard: "WebDashboard") -> None:
         return jsonify({
             "training_step_history": int(mc.training_step_history),
             "game_history": int(mc.game_history),
-            "num_actions_for_entropy_norm": int(mon.get("num_actions_for_entropy_norm", resolve_from_config(dashboard._config).policy_logit_count)),
+            "num_actions_for_entropy_norm": int(
+                mon.get("num_actions_for_entropy_norm",
+                        resolve_from_config(dashboard._config).policy_logit_count)
+            ),
             "alert_entropy_min": float(mc.alert_entropy_min),
             "alert_entropy_warn": float(mc.alert_entropy_warn),
             "collapse_threshold_nats": float(mc.collapse_threshold_nats),
@@ -50,23 +114,75 @@ def register_routes(app: Flask, dashboard: "WebDashboard") -> None:
             "p0_win_rate_target_high": float(mc.p0_win_rate_target_high),
         })
 
-    @socketio.on("connect")
-    def on_connect():
-        dashboard._connected_sids.add(request.sid)
-        with dashboard._history_lock:
-            # Merge training_step history with other events, sorted by ts so
-            # the client replays them in chronological order.
-            history = sorted(
-                list(dashboard._event_history) + list(dashboard._training_step_history),
-                key=lambda e: e.get("ts", 0),
-            )
-        emit("replay_history", history)
+    # ── API: dual-channel JSONL tails ────────────────────────────────────────
 
-    @socketio.on("disconnect")
-    def on_disconnect():
-        dashboard._connected_sids.discard(request.sid)
+    @app.route("/api/events.jsonl")
+    def api_events_jsonl():
+        """Tail emit_event JSONL (logs/events_*.jsonl).
 
-    # ── Analyze route ─────────────────────────────────────────────────
+        ?since=<byte_offset>  (default 0 = first-load bounded tail)
+        Returns: {"lines": [...], "next_offset": int, "truncated": bool}
+        """
+        since = int(request.args.get("since", 0))
+        ld = _log_dir()
+        p = _find_events_jsonl(ld)
+        if p is None:
+            return jsonify({"lines": [], "next_offset": 0, "truncated": False, "file": None})
+        result = tail_jsonl(p, since_offset=since)
+        result["file"] = str(p)
+        return jsonify(result)
+
+    @app.route("/api/structlog.jsonl")
+    def api_structlog_jsonl():
+        """Tail structlog JSONL (logs/<run_name>.jsonl).
+
+        ?since=<byte_offset>  (default 0 = first-load bounded tail)
+        Required for promotion, value_bce, fp16, forced_win, startup/config.
+        Returns: {"lines": [...], "next_offset": int, "truncated": bool}
+        """
+        since = int(request.args.get("since", 0))
+        ld = _log_dir()
+        run_name = dashboard._run_id if dashboard._run_id != "default" else None
+        p = _find_structlog_jsonl(ld, run_name)
+        if p is None:
+            return jsonify({"lines": [], "next_offset": 0, "truncated": False, "file": None})
+        result = tail_jsonl(p, since_offset=since)
+        result["file"] = str(p)
+        return jsonify(result)
+
+    @app.route("/api/series/<name>")
+    def api_series(name: str):
+        """File-sourced series (value_health, external_bars).
+
+        value_health  → valprobe JSONL from _valprobe_dir()
+        external_bars → evalfair JSONL from _evalfair_dir()
+
+        Returns: {"records": [...], "slope": {...}}
+        """
+        if name == "value_health":
+            vdir = _valprobe_dir()
+            # Merge recognition_lag + ece outputs
+            records: list[dict] = []
+            for fname in ("recognition_lag.jsonl", "value_health.jsonl", "valprobe.jsonl"):
+                p = vdir / fname
+                if p.exists():
+                    records.extend(read_value_health_series(p))
+            if not records:
+                # Fallback: any jsonl in valprobe dir
+                for jf in sorted(vdir.glob("*.jsonl")):
+                    records.extend(read_value_health_series(jf))
+            return jsonify({"records": records})
+
+        elif name == "external_bars":
+            edir = _evalfair_dir()
+            records = read_external_bars(edir)
+            slope_info = compute_external_slope(records)
+            return jsonify({"records": records, "slope": slope_info})
+
+        else:
+            return jsonify({"error": f"unknown series: {name}"}), 404
+
+    # ── Analyze route (PRESERVED, out-of-scope) ───────────────────────────────
 
     @app.route("/analyze")
     def analyze_page():
@@ -75,7 +191,7 @@ def register_routes(app: Flask, dashboard: "WebDashboard") -> None:
         except Exception as exc:
             return f"analyze.html not found: {exc}", 404
 
-    # ── Viewer routes ─────────────────────────────────────────────────
+    # ── Viewer routes (PRESERVED, out-of-scope) ───────────────────────────────
 
     @app.route("/viewer")
     def viewer_page():
@@ -106,7 +222,6 @@ def register_routes(app: Flask, dashboard: "WebDashboard") -> None:
     @app.route("/viewer/game/<game_id>")
     def viewer_game(game_id: str):
         try:
-            # Look up path from in-memory index first
             path_str: str | None = None
             with dashboard._history_lock:
                 for ref in dashboard._game_index:
@@ -114,7 +229,6 @@ def register_routes(app: Flask, dashboard: "WebDashboard") -> None:
                         path_str = ref["path"]
                         break
 
-            # Fallback: search on disk for older games not in the index
             if path_str is None:
                 candidates = list(
                     dashboard._games_base_dir.glob(f"*/games/{game_id}.json")
@@ -126,9 +240,7 @@ def register_routes(app: Flask, dashboard: "WebDashboard") -> None:
                 return jsonify({"error": "game not found"}), 404
 
             try:
-                record = json.loads(
-                    Path(path_str).read_text(encoding="utf-8")
-                )
+                record = json.loads(Path(path_str).read_text(encoding="utf-8"))
             except Exception as exc:
                 log.warning("game_load_failed", error=str(exc), game_id=game_id)
                 return jsonify({"error": "game not found"}), 404

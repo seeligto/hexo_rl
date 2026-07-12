@@ -108,34 +108,18 @@ def test_web_dashboard_ignores_unknown_events():
     wd.on_event({"event": "unknown_future_event", "ts": 1.0})
 
 
-# ── WebDashboard queue / blocking tests ───────────────────────────────────────
+# ── WebDashboard on_event is non-blocking ────────────────────────────────────
+# (WP3.2: SocketIO queue removed; on_event just stores to deque)
 
 
 def test_emit_does_not_block_when_no_client():
-    """on_event returns in <10ms when no SocketIO client is connected."""
+    """on_event returns quickly — no SocketIO queue to block on."""
     import time
     wd = WebDashboard(MINIMAL_CONFIG)
     start = time.monotonic()
     wd.on_event({"event": "training_step", "ts": 1.0, "step": 1, "loss_total": 2.5})
     elapsed = time.monotonic() - start
-    assert elapsed < 0.01, f"on_event blocked for {elapsed:.3f}s with no connected client"
-
-
-def test_queue_drops_when_full():
-    """Pushing past maxsize drops the new event without raising and without growing the queue."""
-    wd = WebDashboard(MINIMAL_CONFIG)
-    wd._connected_sids.add("fake-sid")
-    maxsize = wd._emit_queue.maxsize
-
-    # Fill the queue entirely
-    for i in range(maxsize):
-        wd._emit_queue.put_nowait(("training_step", {"step": i}))
-
-    assert wd._emit_queue.qsize() == maxsize
-
-    # Push one more via _safe_emit — must not raise and must not grow the queue
-    wd._safe_emit("training_step", {"step": maxsize + 1})
-    assert wd._emit_queue.qsize() == maxsize
+    assert elapsed < 0.01, f"on_event blocked for {elapsed:.3f}s"
 
 
 # ── Pool batch_fill_pct tests ─────────────────────────────────────────────────
