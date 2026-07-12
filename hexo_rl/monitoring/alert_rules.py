@@ -84,15 +84,6 @@ def check_loss_increase_window(
     return None
 
 
-def check_sealbot_gate_failed(payload: dict) -> Optional[str]:
-    """``eval_complete`` payload with ``sealbot_gate_passed`` == False."""
-    if payload.get("sealbot_gate_passed") is False:
-        wr = payload.get("win_rate_vs_sealbot")
-        wr_str = f"{wr:.1%}" if wr is not None else "?"
-        return f"SealBot eval FAILED — {wr_str} win rate"
-    return None
-
-
 def check_sealbot_wr_hard_abort(
     wr_history: list[tuple[int, float]],
     current_step: int,
@@ -361,28 +352,7 @@ def check_value_spread_canary(payload: dict) -> Optional[str]:
     return None
 
 
-# ── Aggregators ──────────────────────────────────────────────────────────
-
-
-def evaluate_training_step_alerts(
-    payload: dict, cfg: MonitoringConfig, loss_window: list
-) -> list[str]:
-    """Run every ``training_step`` rule, returning fired messages in order.
-
-    The order matches the pre-extraction evaluation site so that
-    duplicate-prefix de-duplication in ``TerminalDashboard._add_alert``
-    sees alerts arrive in the same sequence.
-    """
-    out: list[str] = []
-    for msg in (
-        check_entropy_collapse(payload, cfg),
-        check_selfplay_entropy_collapse(payload, cfg),
-        check_grad_norm_spike(payload, cfg),
-        check_loss_increase_window(loss_window, cfg),
-    ):
-        if msg is not None:
-            out.append(msg)
-    return out
+# ── Headless emitter (D-J DASH WP3 — replaces the display-only aggregators) ──
 
 
 def emit_training_step_alerts_headless(
@@ -418,19 +388,3 @@ def emit_training_step_alerts_headless(
     return out
 
 
-def evaluate_eval_complete_alerts(payload: dict) -> list[str]:
-    """Run every ``eval_complete`` rule, returning fired messages."""
-    out: list[str] = []
-    msg = check_sealbot_gate_failed(payload)
-    if msg is not None:
-        out.append(msg)
-    return out
-
-
-def evaluate_value_spread_alerts(payload: dict) -> list[str]:
-    """Run every ``value_spread`` rule, returning fired messages."""
-    out: list[str] = []
-    msg = check_value_spread_canary(payload)
-    if msg is not None:
-        out.append(msg)
-    return out

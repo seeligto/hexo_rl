@@ -14,10 +14,7 @@ from hexo_rl.monitoring.alert_rules import (
     check_entropy_collapse,
     check_grad_norm_spike,
     check_loss_increase_window,
-    check_sealbot_gate_failed,
     check_selfplay_entropy_collapse,
-    evaluate_eval_complete_alerts,
-    evaluate_training_step_alerts,
 )
 from hexo_rl.monitoring.config import MonitoringConfig
 
@@ -137,75 +134,8 @@ def test_loss_increase_window_only_looks_at_tail(cfg):
     assert msg is not None
 
 
-# ── check_sealbot_gate_failed ────────────────────────────────────────────
-
-
-def test_sealbot_gate_failed_fires_with_known_rate():
-    msg = check_sealbot_gate_failed(
-        {"sealbot_gate_passed": False, "win_rate_vs_sealbot": 0.05}
-    )
-    assert msg is not None
-    assert "5.0%" in msg
-    assert "FAILED" in msg
-
-
-def test_sealbot_gate_failed_fires_with_unknown_rate():
-    msg = check_sealbot_gate_failed({"sealbot_gate_passed": False})
-    assert msg is not None
-    assert "?" in msg
-
-
-def test_sealbot_gate_silent_on_pass():
-    assert (
-        check_sealbot_gate_failed({"sealbot_gate_passed": True}) is None
-    )
-
-
-def test_sealbot_gate_silent_on_skip_none():
-    # stride-skipped: sealbot_gate_passed is None -> rule must not fire
-    # (regression guard for D-003/D-004 behaviour).
-    assert (
-        check_sealbot_gate_failed({"sealbot_gate_passed": None}) is None
-    )
-
-
-# ── aggregators ──────────────────────────────────────────────────────────
-
-
-def test_evaluate_training_step_alerts_multiple_fire(cfg):
-    payload = {
-        "policy_entropy": 0.5,
-        "selfplay_model_entropy_batch": 1.0,
-        "grad_norm": 50.0,
-        "loss_total": 1.0,
-    }
-    window = [1.0, 2.0, 3.0, 4.0]
-    msgs = evaluate_training_step_alerts(payload, cfg, window)
-    assert len(msgs) == 4
-    # Order matches pre-extraction site (entropy, selfplay, grad, loss).
-    assert "policy entropy" in msgs[0]
-    assert "selfplay entropy" in msgs[1]
-    assert "grad norm" in msgs[2]
-    assert "loss increased" in msgs[3]
-
-
-def test_evaluate_training_step_alerts_none_fire(cfg):
-    payload = {
-        "policy_entropy": 3.0,
-        "selfplay_model_entropy_batch": 3.0,
-        "grad_norm": 1.0,
-        "loss_total": 1.0,
-    }
-    assert evaluate_training_step_alerts(payload, cfg, [1.0]) == []
-
-
-def test_evaluate_eval_complete_alerts_fires():
-    msgs = evaluate_eval_complete_alerts(
-        {"sealbot_gate_passed": False, "win_rate_vs_sealbot": 0.10}
-    )
-    assert len(msgs) == 1
-    assert "FAILED" in msgs[0]
-
-
-def test_evaluate_eval_complete_alerts_silent_when_passed():
-    assert evaluate_eval_complete_alerts({"sealbot_gate_passed": True}) == []
+# D-J DASH WP3: check_sealbot_gate_failed (BIASED sealbot-FAILED badge) + the
+# display-only evaluate_*_alerts aggregators were DELETED. The multi-rule firing
+# they exercised is now covered headless in
+# hexo_rl/monitoring/tests/test_headless_alerts.py (emit_training_step_alerts_headless).
+# The individual check_* rule tests above remain the unit coverage.

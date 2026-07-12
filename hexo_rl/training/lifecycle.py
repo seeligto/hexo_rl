@@ -308,12 +308,9 @@ def build_subsystems(
     dashboards: list = []
     mon_cfg = config.get("monitoring", {})
     if mon_cfg.get("enabled", True) and not args.no_dashboard:
-        if mon_cfg.get("terminal_dashboard", True):
-            from hexo_rl.monitoring.terminal_dashboard import TerminalDashboard
-            td = TerminalDashboard(config)
-            td.start()
-            register_renderer(td)
-            dashboards.append(td)
+        # D-J DASH WP3: terminal_dashboard (A2) retired. Its 4 headless-worthy
+        # alerts now fire via emit_training_step_alerts_headless in the step
+        # coordinator (structlog, dashboard-independent). See docs/audits/dash_teardown.md §5.
         if mon_cfg.get("web_dashboard", True) and not getattr(args, "no_web_dashboard", False):
             from hexo_rl.monitoring.web_dashboard import WebDashboard
             wd = WebDashboard(config)

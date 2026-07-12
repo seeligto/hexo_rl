@@ -139,7 +139,6 @@ class TestNoWebDashboardFlagGate:
         config = {
             "monitoring": {
                 "enabled": True,
-                "terminal_dashboard": True,
                 "web_dashboard": True,
             }
         }
@@ -156,20 +155,18 @@ class TestNoWebDashboardFlagGate:
              patch.object(lifecycle, "register_renderer", MagicMock()), \
              patch.object(lifecycle, "register_jsonl_sink", MagicMock()), \
              patch("hexo_rl.monitoring.metrics_writer.MetricsWriter", MagicMock()), \
-             patch("hexo_rl.monitoring.terminal_dashboard.TerminalDashboard") as TD, \
              patch("hexo_rl.monitoring.web_dashboard.WebDashboard") as WD:
             lifecycle.build_subsystems(args, config, torch.device("cpu"), "run_test")
-        return TD, WD
+        return WD
 
     def test_web_dashboard_suppressed_when_flag_set(self, tmp_path):
-        TD, WD = self._build(no_web_dashboard=True, tmp_path=tmp_path)
+        # D-J DASH WP3: terminal_dashboard (A2) retired — only the web gate remains.
+        WD = self._build(no_web_dashboard=True, tmp_path=tmp_path)
         assert WD.call_count == 0, "--no-web-dashboard must suppress the web dashboard"
-        assert TD.call_count == 1, "terminal dashboard must stay up"
 
     def test_web_dashboard_built_when_flag_absent(self, tmp_path):
-        TD, WD = self._build(no_web_dashboard=False, tmp_path=tmp_path)
+        WD = self._build(no_web_dashboard=False, tmp_path=tmp_path)
         assert WD.call_count == 1, "web dashboard built when flag not set (config web_dashboard: true)"
-        assert TD.call_count == 1
 
 
 def test_train_argparser_exposes_no_web_dashboard():

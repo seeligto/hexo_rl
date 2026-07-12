@@ -6,10 +6,7 @@ from pathlib import Path
 import pytest
 import torch
 
-from hexo_rl.monitoring.alert_rules import (
-    check_value_spread_canary,
-    evaluate_value_spread_alerts,
-)
+from hexo_rl.monitoring.alert_rules import check_value_spread_canary
 from hexo_rl.monitoring.value_spread_canary import (
     ALT_BANK_SHA256,
     ALT_SOFT_ABORT_THRESHOLD,
@@ -82,9 +79,11 @@ def test_alert_handles_missing_or_nan():
     assert check_value_spread_canary({"spread": float("nan")}) is None
 
 
-def test_aggregator_returns_fired_messages():
-    assert evaluate_value_spread_alerts({"spread": 0.10})
-    assert evaluate_value_spread_alerts({"spread": 0.50}) == []
+def test_canary_fires_on_low_spread_only():
+    # display aggregator retired (D-J DASH WP3); the underlying canary check
+    # stays (demoted-informational, headless via fire_canary).
+    assert check_value_spread_canary({"spread": 0.10}) is not None
+    assert check_value_spread_canary({"spread": 0.50}) is None
 
 
 # ── Anchor reproduction + model-mode safety (needs the v6 anchor) ────────

@@ -107,58 +107,6 @@ def test_eval_complete_sealbot_gate_none_when_stride_skipped() -> None:
     assert payload["sealbot_gate_passed"] is None
 
 
-# ── D-003/D-004: terminal dashboard ignores stride-skipped sealbot ────────────
-
-def test_terminal_dashboard_ignores_stride_skipped_sealbot() -> None:
-    """Alert must NOT fire when sealbot_gate_passed is None (stride-skipped)."""
-    from hexo_rl.monitoring.terminal_dashboard import TerminalDashboard
-
-    dash = TerminalDashboard.__new__(TerminalDashboard)
-    dash._alerts = []
-    dash._alert_loss_window = 5
-    dash._alert_grad_max = 10.0
-    dash._recent_losses = []  # type: ignore[attr-defined]
-    import collections
-    dash._recent_losses = collections.deque(maxlen=10)
-
-    # stride-skipped: sealbot_gate_passed=None, anchor_promoted=False
-    import time
-    payload = {
-        "event": "eval_complete",
-        "anchor_promoted": False,
-        "sealbot_gate_passed": None,
-        "win_rate_vs_sealbot": None,
-    }
-    expiry = time.time() + 60
-    now = time.time()
-
-    # Replicate just the alert check logic
-    event = payload.get("event")
-    if event == "eval_complete" and payload.get("sealbot_gate_passed") is False:
-        wr = payload.get("win_rate_vs_sealbot")
-        wr_str = f"{wr:.1%}" if wr is not None else "?"
-        dash._alerts.append((expiry, f"SealBot eval FAILED — {wr_str} win rate"))
-
-    assert len(dash._alerts) == 0, "Alert must not fire when sealbot_gate_passed is None"
-
-
-def test_terminal_dashboard_alert_fires_on_sealbot_false() -> None:
-    """Alert fires when sealbot_gate_passed=False, no crash on None wr."""
-    alerts: list[tuple] = []
-    import time
-
-    payload = {
-        "event": "eval_complete",
-        "anchor_promoted": False,
-        "sealbot_gate_passed": False,
-        "win_rate_vs_sealbot": None,  # D-004: must not crash
-    }
-    expiry = time.time() + 60
-
-    if payload.get("sealbot_gate_passed") is False:
-        wr = payload.get("win_rate_vs_sealbot")
-        wr_str = f"{wr:.1%}" if wr is not None else "?"
-        alerts.append((expiry, f"SealBot eval FAILED — {wr_str} win rate"))
-
-    assert len(alerts) == 1
-    assert "?" in alerts[0][1]  # None formatted as "?" not crashed
+# D-J DASH WP3: the terminal_dashboard sealbot-FAILED badge tests were removed —
+# the sealbot_gate_passed pass/fail badge is DROPPED (BIASED: wr>=0.5 bar vs ~18%
+# fair WR). Raw win_rate_vs_sealbot survives as a slope panel (promo.sealbot_slope).
