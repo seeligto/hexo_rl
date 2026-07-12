@@ -18,7 +18,14 @@ import torch
 from hexo_rl.eval.eval_board import make_eval_board
 from hexo_rl.model.network import HexTacToeNet
 
-from scripts.e1.validate_ckpt import ROW_KEYS, validate_ckpt
+from scripts.e1.validate_ckpt import (
+    ROW_KEYS,
+    DEFAULT_PROBE,
+    DEFAULT_NEGATIVES,
+    _PROBE_SHA256,
+    _NEGATIVES_SHA256,
+    validate_ckpt,
+)
 
 ENCODING = "v6_live2_ls"
 RADIUS = 4
@@ -145,6 +152,10 @@ def test_scalar_row_schema_and_metrics(tmp_path: Path):
     expected_fp = sum(1 for s in safe_scores if s["v"] <= -0.5) / len(safe_scores)
     assert abs(row["false_pessimism"] - expected_fp) < 1e-9
 
+    # recognition_lag_mean_v_on_losses must be null (harness not wired).
+    assert row["recognition_lag_mean_v_on_losses"] is None
+    assert row["recognition_lag_note"] == "harness not wired; use mean_v_on_losses"
+
     # One row appended to out.
     lines = [l for l in out.read_text().splitlines() if l.strip()]
     assert len(lines) == 1
@@ -212,6 +223,78 @@ def test_arm_mismatch_scalar_ckpt_scored_as_dist_is_caught(tmp_path: Path):
             str(ckpt), "dist65", str(out),
             probe_path=str(probe_path), negatives_path=str(negatives_path),
             games_path=str(games_path),
+        )
+
+
+# ── probe SHA guard ───────────────────────────────────────────────────────────
+
+
+def test_sha_guard_tampered_default_probe_raises(tmp_path: Path, monkeypatch):
+    """When DEFAULT_PROBE is re-pointed to a wrong-SHA file, validate_ckpt halts."""
+    import scripts.e1.validate_ckpt as _vc
+
+    games_path, probe_path, negatives_path = _build_game_and_rows(tmp_path)
+    net = _make_net("scalar")
+    ckpt = _save_ckpt(tmp_path / "scalar.pt", net)
+    out = tmp_path / "series.jsonl"
+
+    # Tamper: write valid JSON but wrong content -> wrong SHA.
+    tampered = tmp_path / "tampered_probe.jsonl"
+    tampered.write_text(probe_path.read_text() + json.dumps({"extra": "row"}) + "\n")
+
+    # Point DEFAULT_PROBE + DEFAULT_NEGATIVES at files that look like defaults
+    # (same path strings) but with a wrong SHA for probe.
+    monkeypatch.setattr(_vc, "DEFAULT_PROBE", str(tampered))
+    monkeypatch.setattr(_vc, "DEFAULT_NEGATIVES", str(tampered))
+
+    with pytest.raises(RuntimeError, match="SHA mismatch"):
+        validate_ckpt(
+            str(ckpt), "scalar", str(out),
+            # Pass the monkeypatched DEFAULT values so the guard fires.
+            probe_path=str(tampered),
+            negatives_path=str(tampered),
+            games_path=str(games_path),
+        )
+
+
+def test_sha_guard_custom_path_bypasses(tmp_path: Path):
+    """Custom --probe/--negatives paths bypass the SHA guard (no raise)."""
+    games_path, probe_path, negatives_path = _build_game_and_rows(tmp_path)
+    net = _make_net("scalar")
+    ckpt = _save_ckpt(tmp_path / "scalar.pt", net)
+    out = tmp_path / "series.jsonl"
+
+    # Custom paths (neither equals DEFAULT_PROBE nor DEFAULT_NEGATIVES) — guard
+    # is unconditionally skipped for non-default paths regardless of SHA.
+    row = validate_ckpt(
+        str(ckpt), "scalar", str(out),
+        probe_path=str(probe_path),
+        negatives_path=str(negatives_path),
+        games_path=str(games_path),
+    )
+    assert set(row.keys()) == set(ROW_KEYS)
+    assert row["n_loss"] == 3
+
+
+def test_unresolved_loss_set_raises(tmp_path: Path):
+    """All loss rows unresolvable (empty games index) -> RuntimeError."""
+    # Build probe rows that reference opening_idx=0, but provide an EMPTY games
+    # index so resolve_game returns None for all rows -> loss_scores = [].
+    games_path, probe_path, negatives_path = _build_game_and_rows(tmp_path)
+    net = _make_net("scalar")
+    ckpt = _save_ckpt(tmp_path / "scalar.pt", net)
+    out = tmp_path / "series.jsonl"
+
+    # Empty games file -> every row skipped.
+    empty_games = tmp_path / "empty_games.jsonl"
+    empty_games.write_text("")
+
+    with pytest.raises(RuntimeError, match="no loss positions resolved"):
+        validate_ckpt(
+            str(ckpt), "scalar", str(out),
+            probe_path=str(probe_path),
+            negatives_path=str(negatives_path),
+            games_path=str(empty_games),
         )
 
 

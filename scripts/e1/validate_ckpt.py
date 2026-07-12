@@ -71,11 +71,11 @@ if str(_REPO_ROOT) not in sys.path:
 
 import numpy as np
 import torch
+from hexo_rl.encoding import EncodingSpec
 from hexo_rl.env.game_state import GameState
 from hexo_rl.eval.checkpoint_loader import load_model_with_encoding
 from hexo_rl.eval.eval_board import make_eval_board
 from hexo_rl.model.network import HexTacToeNet
-from hexo_rl.training.binned_value import decode_binned_value
 from scripts.headswap.targets import LOSS_TAIL_BIN
 from scripts.headswap.metrics import auc, false_pessimism
 from scripts.valprobe.value_health import compute_ece
@@ -101,6 +101,11 @@ _WP2_BOOK_IDS = (
     "evalfair_r5_wp2_b4",
 )
 
+# SHA256 of the FROZEN default probe files (e1_metric_freeze.md §1).
+# Halt E1 read if either default file differs from these values.
+_PROBE_SHA256 = "7899fa136ac083f0a428f5f6fa4c89918f1ba82c85618e8c7369a19506a9adb6"
+_NEGATIVES_SHA256 = "8faa6af74a7640f869cc3b1c4cb058b62660a052c5381e8ab7ad740a38cafef3"
+
 FALSE_PESS_THRESHOLD = -0.5  # metrics.py:36 (also loss-tail threshold)
 
 # STABLE row schema (WP3 + the run3 watcher consume it). Order fixed.
@@ -115,6 +120,7 @@ ROW_KEYS: Tuple[str, ...] = (
     "decoded_auc",
     "false_pessimism",
     "recognition_lag_mean_v_on_losses",
+    "recognition_lag_note",
     "n_loss",
     "n_safe",
 )
@@ -130,6 +136,44 @@ def ckpt_sha(path: str) -> str:
         for chunk in iter(lambda: f.read(1 << 20), b""):
             h.update(chunk)
     return h.hexdigest()[:16]
+
+
+def _file_sha256(path: str) -> str:
+    """Full SHA256 hex digest of a file."""
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _verify_probe_shas(probe_path: str, negatives_path: str) -> None:
+    """e1_metric_freeze.md §1: sha256sum both files == pinned SHAs; halt if differ.
+
+    Called ONLY when probe_path == DEFAULT_PROBE and negatives_path ==
+    DEFAULT_NEGATIVES (i.e. the caller is using the frozen default files). Custom
+    paths (unit tests, dev) SKIP this guard — a stderr note is emitted instead.
+    """
+    probe_hash = _file_sha256(probe_path)
+    if probe_hash != _PROBE_SHA256:
+        raise RuntimeError(
+            f"E1 probe SHA mismatch — HALTING (e1_metric_freeze.md §1).\n"
+            f"  file : {probe_path}\n"
+            f"  got  : {probe_hash}\n"
+            f"  want : {_PROBE_SHA256}\n"
+            "The frozen probe file has been modified or replaced. "
+            "This read is INVALID for E1 gating."
+        )
+    neg_hash = _file_sha256(negatives_path)
+    if neg_hash != _NEGATIVES_SHA256:
+        raise RuntimeError(
+            f"E1 negatives SHA mismatch — HALTING (e1_metric_freeze.md §1).\n"
+            f"  file : {negatives_path}\n"
+            f"  got  : {neg_hash}\n"
+            f"  want : {_NEGATIVES_SHA256}\n"
+            "The frozen negatives file has been modified or replaced. "
+            "This read is INVALID for E1 gating."
+        )
 
 
 def _ckpt_step(ckpt_path: str) -> Optional[int]:
@@ -194,7 +238,7 @@ def _load_rows(path: str) -> List[dict]:
 
 def _load_net(
     ckpt_path: str, arm: str, device: torch.device
-) -> Tuple[HexTacToeNet, "object", str]:
+) -> Tuple[HexTacToeNet, EncodingSpec, str]:
     """Load the checkpoint via the gated eval loader (encoding asserted
     v6_live2_ls; dist65 value head auto-detected from value_fc2_bins) and
     enforce that the checkpoint's value-head type MATCHES the declared arm.
@@ -352,9 +396,11 @@ def _compute_metrics(
         "tail_mass_auc": tail_mass_auc,
         "decoded_auc": decoded_auc,
         "false_pessimism": fp,
-        # Diagnostic (non-gating): per-checkpoint mean-v-on-losses; the WP3
-        # series consumer diffs this across steps for recognition lag.
-        "recognition_lag_mean_v_on_losses": m1,
+        # recognition_lag_mean_v_on_losses: the recognition-lag harness is NOT
+        # wired — emits null to avoid the misleading duplicate of M1. Use
+        # mean_v_on_losses (M1) directly. See recognition_lag_note.
+        "recognition_lag_mean_v_on_losses": None,
+        "recognition_lag_note": "harness not wired; use mean_v_on_losses",
     }
 
 
@@ -371,6 +417,7 @@ def validate_ckpt(
     games_path: str = DEFAULT_GAMES,
     wp2_games: Optional[Dict[str, str]] = None,
     device: Optional[torch.device] = None,
+    no_sha_check: bool = False,
 ) -> dict:
     """Score one E1 checkpoint on the frozen loss/safe sets, compute M1-M4,
     APPEND one JSON row to ``out_jsonl`` and return it (stable ROW_KEYS schema).
@@ -382,11 +429,37 @@ def validate_ckpt(
     positions. ``None`` -> auto-discover under DEFAULT_WP2_GAMES_DIR; books whose
     regen games are absent leave their rows UNRESOLVED (skipped + counted in
     ``n_loss_skipped``), NOT a hard failure.
+
+    ``no_sha_check`` disables the frozen-probe SHA guard (dev / CI only). When
+    the DEFAULT probe/negatives paths are used AND this flag is False (default),
+    both files are SHA256-verified against e1_metric_freeze.md §1 pinned values
+    before any scoring begins — mismatches HALT with RuntimeError.
     """
     if device is None:
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     if wp2_games is None:
         wp2_games = _default_wp2_games()
+
+    # SHA guard (e1_metric_freeze.md §1): verify frozen probe files when using
+    # the default paths. Custom paths skip the guard (unit tests / dev workflows).
+    using_default_probe = probe_path == DEFAULT_PROBE
+    using_default_negatives = negatives_path == DEFAULT_NEGATIVES
+    if using_default_probe and using_default_negatives:
+        if no_sha_check:
+            print(
+                "[validate_ckpt] WARN --no-sha-check active: skipping frozen-probe "
+                "SHA verification (e1_metric_freeze.md §1). For E1 gating, remove "
+                "this flag.",
+                file=sys.stderr,
+            )
+        else:
+            _verify_probe_shas(probe_path, negatives_path)
+    else:
+        print(
+            "[validate_ckpt] NOTE custom probe/negatives paths — SHA guard skipped "
+            f"(probe={probe_path!r}, negatives={negatives_path!r}).",
+            file=sys.stderr,
+        )
 
     model, spec, label = _load_net(ckpt_path, arm, device)
     sha = ckpt_sha(ckpt_path)
@@ -405,8 +478,6 @@ def validate_ckpt(
     )
 
     if loss_skipped or safe_skipped:
-        import sys
-
         print(
             f"[validate_ckpt] WARN unresolved source games: "
             f"loss_skipped={loss_skipped}/{len(loss_rows)} "
@@ -440,9 +511,8 @@ def validate_ckpt(
         "tail_mass_auc": _round(metrics["tail_mass_auc"]),
         "decoded_auc": _round(metrics["decoded_auc"]),
         "false_pessimism": _round(metrics["false_pessimism"]),
-        "recognition_lag_mean_v_on_losses": _round(
-            metrics["recognition_lag_mean_v_on_losses"]
-        ),
+        "recognition_lag_mean_v_on_losses": None,
+        "recognition_lag_note": metrics["recognition_lag_note"],
         "n_loss": len(loss_scores),
         "n_safe": len(safe_scores),
     }
@@ -480,6 +550,10 @@ def main() -> None:
              "loss positions). Omit to auto-discover under DEFAULT_WP2_GAMES_DIR.",
     )
     ap.add_argument("--no-cuda", action="store_true")
+    ap.add_argument(
+        "--no-sha-check", action="store_true",
+        help="Skip frozen-probe SHA verification (dev only; invalid for E1 gating).",
+    )
     args = ap.parse_args()
 
     wp2_games: Optional[Dict[str, str]] = None
@@ -504,6 +578,7 @@ def main() -> None:
         games_path=args.games,
         wp2_games=wp2_games,
         device=device,
+        no_sha_check=args.no_sha_check,
     )
     print(json.dumps(row, indent=2))
 
