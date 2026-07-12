@@ -385,6 +385,39 @@ def evaluate_training_step_alerts(
     return out
 
 
+def emit_training_step_alerts_headless(
+    payload: dict, cfg: MonitoringConfig, loss_window, logger
+) -> list[str]:
+    """Fire the 4 training-step alerts HEADLESS via structlog (D-J DASH WP3).
+
+    Replaces the display-only ``evaluate_training_step_alerts`` path that the
+    retired terminal_dashboard (A2) owned. Same thresholds, same rules, same
+    order — but the caller (step coordinator) invokes this every log_interval
+    so the alerts keep firing with NO dashboard active. ``loss_window`` is the
+    caller-owned deque (loss_total tail); this appends the current step's
+    ``loss_total`` before running the window rule. Each fired alert is logged
+    ``logger.warning("training_alert", rule=..., message=..., step=...)``.
+    Returns the fired messages (for tests / any consumer).
+    """
+    lt = payload.get("loss_total")
+    if lt is not None:
+        loss_window.append(float(lt))
+    rules = (
+        ("entropy_collapse", check_entropy_collapse(payload, cfg)),
+        ("selfplay_entropy_collapse", check_selfplay_entropy_collapse(payload, cfg)),
+        ("grad_norm_spike", check_grad_norm_spike(payload, cfg)),
+        ("loss_increase_window", check_loss_increase_window(loss_window, cfg)),
+    )
+    out: list[str] = []
+    for rule, msg in rules:
+        if msg is not None:
+            out.append(msg)
+            logger.warning(
+                "training_alert", rule=rule, message=msg, step=payload.get("step")
+            )
+    return out
+
+
 def evaluate_eval_complete_alerts(payload: dict) -> list[str]:
     """Run every ``eval_complete`` rule, returning fired messages."""
     out: list[str] = []

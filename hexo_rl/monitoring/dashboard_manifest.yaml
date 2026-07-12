@@ -1,0 +1,264 @@
+# dashboard_manifest.yaml — D-J DASH panel contract (THE ONE LAW)
+#
+# Every rebuilt dashboard panel has exactly one row here. tests/test_event_contract.py
+# (extended in WP3) loads this file and asserts every binding cites a LIVE producer in
+# its declared channel. A panel with no manifest row does not render; a manifest row
+# citing a nonexistent producer FAILS the test. This makes the silent-dead-instrument
+# class (root_concentration on Gumbel, the empty value_spread chart) impossible.
+#
+# Design: docs/designs/dash_rebuild_design.md   Teardown: docs/audits/dash_teardown.md
+# fable5 WP2 review fixes applied (BF-1..5, NB-1..12): web binds load-bearing fields to
+# the structlog channel (web tails BOTH jsonl files); planner-guard for depth is
+# planner-config not null; eff_n is the distinct-per-pair field; startup carries config.
+# NOTE: skeleton for WP3. Field-path exactness is verified by WP3 smoke-render;
+# the contract test verifies EVENT/producer existence per channel.
+
+# ── Two producer channels (design §1.1) ──────────────────────────────────────
+# Both renderers tail BOTH files. Each binding's `event` is checked against the
+# produced-set for its `channel`. structlog producer-set = whole-file re.finditer
+# (NOT line-based: train_step_summary emit is multiline, events.py:336).
+channels:
+  emit_event:                    # logs/events_<run_id>.jsonl (JSONLSink)
+    jsonl_glob: logs/events_*.jsonl
+    producer_pattern: '"event"\s*:\s*"([^"]+)"'
+    producer_dirs: [hexo_rl]
+  structlog:                     # logs/<run_name>.jsonl (configure.py rotating log)
+    jsonl_glob: logs/*.jsonl
+    producer_pattern: '\.(?:info|warning|error)\(\s*["\x27]([a-z_][a-z0-9_]*)["\x27]'
+    producer_dirs: [hexo_rl, scripts]   # startup emitted in scripts/train.py:192
+
+# regime source for planner-guarded panels (no producer change — startup already emits config)
+planner_regime:
+  source_type: event
+  channel: structlog
+  event: startup
+  field: config.selfplay.gumbel_mcts   # is_gumbel; run_feed_reader.py:534 already reads this
+
+# ── Panels ────────────────────────────────────────────────────────────────────
+# renderer: a1 = remote TUI, web = local dashboard (both tail both jsonl files)
+# source_type: event {channel,event,field} | derived {producer_path,symbol} |
+#              file {producer_path}
+panels:
+
+  # ── group 1: RUN HEADER ───────────────────────────────────────────────────
+  - id: header.step
+    group: run_header
+    render: number
+    renderer: [a1, web]
+    bindings:
+      web: {source_type: event, channel: emit_event, event: training_step, field: step}   # per-step, hi-res
+      a1:  {source_type: event, channel: structlog, event: train_step_summary, field: step} # log_interval cadence
+
+  - id: header.steps_per_hr
+    group: run_header
+    render: number
+    renderer: [a1, web]
+    note: gap-skip effective rate (excludes restart gaps + resume step-resets)
+    bindings:
+      both: {source_type: derived, producer_path: hexo_rl/monitoring/run_feed_reader.py, symbol: parse_feed, output: rate_effective}
+
+  - id: header.eta
+    group: run_header
+    render: number
+    renderer: [a1, web]
+    note: total_steps from the startup config payload (run_feed_reader.py:530 already reads it)
+    bindings:
+      rate:  {source_type: derived, producer_path: hexo_rl/monitoring/run_feed_reader.py, symbol: parse_feed, output: rate_effective}
+      total: {source_type: event, channel: structlog, event: startup, field: config.total_steps}
+
+  - id: header.gpu_util
+    group: run_header
+    render: gauge
+    renderer: [a1, web]
+    bindings:
+      web: {source_type: event, channel: emit_event, event: system_stats, field: gpu_util_pct}
+      a1:  {source_type: event, channel: structlog, event: train_step_summary, field: gpu_util}
+
+  - id: header.watchdog
+    group: run_header
+    render: status
+    renderer: [a1, web]
+    note: armed-state from startup config; last-progress from newest game ts; stale-log/live-tip override (run_feed_reader) guards file-sync lag. NO new instrumentation.
+    bindings:
+      armed:         {source_type: event, channel: structlog, event: startup, field: config.selfplay_stall_timeout_sec}
+      last_progress: {source_type: event, channel: emit_event, event: game_complete, field: ts}
+
+  - id: header.resolved_config
+    group: run_header
+    render: link
+    renderer: [web]
+    note: CONFRES provenance — the ONE resolved_config event (single source of executing config); payload key is `knobs`
+    bindings:
+      web: {source_type: event, channel: emit_event, event: resolved_config, field: knobs}
+
+  # ── group 2: TRAINING HEALTH strip ────────────────────────────────────────
+  - id: health.entropy
+    group: training_health
+    render: chart
+    renderer: [a1, web]
+    band: [2.1, 2.9]           # healthy band drawn; collapse floor <1.5 marked
+    note: canonical policy_entropy_selfplay; drop selfplay_model_entropy_batch alias
+    bindings:
+      web: {source_type: event, channel: emit_event, event: training_step, field: policy_entropy_selfplay}
+      a1:  {source_type: event, channel: structlog, event: train_step_summary, field: policy_entropy_selfplay}
+
+  - id: health.draw_rate
+    group: training_health
+    render: chart
+    renderer: [a1, web]
+    note: hard-abort line at resolved monitors.hard_abort_draw_rate (dispatcher intent 0.55x3)
+    bindings:
+      web: {source_type: event, channel: emit_event, event: iteration_complete, field: draw_rate}
+      a1:  {source_type: event, channel: structlog, event: train_step_summary, field: draw_rate}
+
+  - id: health.value_bce_gap
+    group: training_health
+    render: chart
+    renderer: [a1, web]
+    note: selfplay vs corpus BCE gap; fields live ONLY on structlog train_step (trainer.py:1048) — web tails structlog
+    bindings:
+      both: {source_type: event, channel: structlog, event: train_step, field: [value_bce_selfplay, value_bce_corpus]}
+
+  - id: health.colony
+    group: training_health
+    render: chart
+    renderer: [a1, web]
+    bindings:
+      web: {source_type: event, channel: emit_event, event: game_complete, field: colony_extension_fraction}
+      a1:  {source_type: event, channel: structlog, event: game_complete, field: colony_extension_fraction}
+
+  - id: health.fp16_scale
+    group: training_health
+    render: sparkline
+    renderer: [a1, web]
+    note: loss-scale sharp-drop alert; fp16_scale lives ONLY on structlog train_step (trainer.py:1062)
+    bindings:
+      both: {source_type: event, channel: structlog, event: train_step, field: fp16_scale}
+
+  - id: health.forced_win_conv
+    group: training_health
+    render: chart
+    renderer: [a1, web]
+    note: golong coherence cluster; structlog-only (forced_win_detector.py:406) — web tails structlog
+    bindings:
+      both: {source_type: event, channel: structlog, event: forced_win_trend, field: [forced_win_conversion, off_window_forced_win_rate]}
+
+  - id: health.root_concentration
+    group: training_health
+    render: chart
+    renderer: [a1, web]
+    planner_guard: gumbel_hidden    # CONFRES S2 nulls (emit) / OMITS (structlog) under Gumbel → render iff present & non-null
+    note: PUCT-only diagnostic; SH-pinned flat under Gumbel (stat_audit WRONG as health signal)
+    bindings:
+      web: {source_type: event, channel: emit_event, event: iteration_complete, field: mcts_root_concentration}
+      a1:  {source_type: event, channel: structlog, event: train_step_summary, field: mcts_root_concentration}
+
+  - id: health.mcts_depth
+    group: training_health
+    render: chart
+    renderer: [a1, web]
+    planner_guard: planner_puct     # depth is UNCONDITIONAL (events.py:284) — guard on resolved planner, NOT null-ness (BF-3)
+    note: cumulative-mean artifact under Gumbel (game_runner:669); render iff planner_regime==PUCT
+    bindings:
+      web: {source_type: event, channel: emit_event, event: iteration_complete, field: mcts_mean_depth}
+      a1:  {source_type: event, channel: structlog, event: train_step_summary, field: mcts_mean_depth}
+
+  # ── group 3: PROMOTION (structlog evaluation_round_complete — emit eval_complete
+  #    payload lacks wr_best/ci_best/distinct-n; eval_drain.py:45. web tails structlog) ──
+  - id: promo.wr_best
+    group: promotion
+    render: chart
+    renderer: [a1, web]
+    note: slope-based; level = descriptive tooltip only
+    bindings:
+      both: {source_type: event, channel: structlog, event: evaluation_round_complete, field: wr_best}
+
+  - id: promo.ci_best
+    group: promotion
+    render: ci_band
+    renderer: [a1, web]
+    bindings:
+      both: {source_type: event, channel: structlog, event: evaluation_round_complete, field: ci_best}
+
+  - id: promo.eff_n
+    group: promotion
+    render: number
+    renderer: [a1, web]
+    note: eff_n = distinct-game bootstrap n (§D-ARGMAX); deploy-round only (stride-4), shown next to raw n; hidden on non-deploy rounds
+    bindings:
+      both: {source_type: event, channel: structlog, event: evaluation_round_complete, field: deploy_strength_distinct_per_pair_min}
+
+  - id: promo.marker
+    group: promotion
+    render: marker
+    renderer: [a1, web]
+    bindings:
+      both: {source_type: event, channel: structlog, event: evaluation_round_complete, field: promoted}
+
+  - id: promo.sealbot_slope
+    group: promotion
+    render: chart
+    renderer: [a1, web]
+    note: Theil-Sen + measurement-error CI (false-green guard); per-point sigma from evaluation_round_complete.ci_sealbot; DROP the sealbot-FAILED badge
+    bindings:
+      both: {source_type: derived, producer_path: hexo_rl/monitoring/run_feed_reader.py, symbol: sealbot_slope}
+
+  # ── group 4: VALUE-HEALTH (laptop JSONL, read-only) ───────────────────────
+  - id: vh.recognition_lag
+    group: value_health
+    render: chart
+    renderer: [web]
+    note: synced/uploaded laptop JSONL; read-only, zero coupling to training host
+    bindings:
+      web: {source_type: file, producer_path: scripts/valprobe/measure_recognition_lag.py}
+
+  - id: vh.ece
+    group: value_health
+    render: chart
+    renderer: [web]
+    bindings:
+      web: {source_type: file, producer_path: scripts/valprobe/value_health.py}
+
+  # ── group 5: EXTERNAL BARS (evalfair fair-book series; n distinct-by-construction) ──
+  - id: ext.d5_series
+    group: external_bars
+    render: chart
+    renderer: [web]
+    note: stage boundaries (R 4->5->6->8) marked as discontinuities, never spliced
+    bindings:
+      web: {source_type: file, producer_path: scripts/evalfair/compute_slope_report.py}
+
+  - id: ext.kraken_series
+    group: external_bars
+    render: chart
+    renderer: [web]
+    note: kraken producer is head_vs_krakenbot.py (compute_slope_report is d5-only) — NB-3
+    bindings:
+      web: {source_type: file, producer_path: scripts/evalfair/head_vs_krakenbot.py}
+
+  - id: ext.slope_ci
+    group: external_bars
+    render: annotation
+    renderer: [web]
+    note: one-resolver law — reuse evalfair Theil-Sen + pair-bootstrap CI, no reimplementation
+    bindings:
+      web: {source_type: derived, producer_path: scripts/evalfair/retro_slope.py, symbol: theil_sen_slope}
+
+# ── DROPPED (no panel row → not rendered; producer disposition noted) ─────────
+dropped:
+  - what: mcts_root_concentration as a health signal
+    keep_producer: true
+    reason: SH-pinned flat under Gumbel (stat_audit WRONG); kept only as planner-guarded PUCT diagnostic (health.root_concentration)
+  - what: value_spread t3/alt panels + ALERT block
+    keep_producer: true
+    reason: VOID instrument (empty all run2); fire_canary kept demoted-informational in JSONL/structlog, display dropped
+  - what: sealbot FAILED pass/fail badge
+    keep_producer: n/a
+    reason: BIASED (wr>=0.5 bar vs ~18% fair WR); raw WR kept as slope (promo.sealbot_slope)
+
+# ── ORPHAN PRODUCERS (produced, no display consumer — fine, named per WP4) ────
+orphan_producers:
+  - {event: strength_regression_hard_abort, channel: emit_event, note: headless abort; fed by phantom strength_aggregate (default OFF)}
+  - {event: sealbot_wr_revert_abort, channel: emit_event, note: headless; default OFF}
+  - {event: robustness_hard_abort, channel: emit_event, note: headless abort}
+  - {event: disk_free, channel: emit_event, note: display-optional; SIGTERM path is the real guard}

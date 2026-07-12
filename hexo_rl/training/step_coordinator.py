@@ -39,6 +39,7 @@ from hexo_rl.monitoring.alert_rules import (
     check_sealbot_wr_hard_abort,
     check_strength_regression_abort,
     check_strength_warn,
+    emit_training_step_alerts_headless,
 )
 from hexo_rl.monitoring.config import MonitoringConfig
 from hexo_rl.monitoring.events import emit_event
@@ -498,6 +499,12 @@ class StepCoordinator:
         # site does not own filesystem state).
         self._initial_policy_loss: float | None = None
         self._last_loss_info: dict[str, float] = {}
+        # D-J DASH WP3: headless training-step alerts (rewired off the retired
+        # terminal_dashboard). Loss-increase window state lives here; the 4 rules
+        # fire via structlog every log_interval, dashboard-independent.
+        self._recent_losses: deque = deque(
+            maxlen=int(self._monitoring_cfg.alert_loss_increase_window) + 1
+        )
         self._eval_thread: threading.Thread | None = None
         self._best_model_step: int | None = anchor_state.best_model_step
         self._schedule_idx = 1  # first schedule entry already applied at buffer construction
@@ -1448,6 +1455,22 @@ class StepCoordinator:
                     early_game_probe=self.subsystems.early_game_probe,
                     trainer_model=self.trainer.model,
                     solver_deltas=_solver_deltas,
+                )
+                # D-J DASH WP3: headless training-step alerts (dashboard-independent).
+                # Same 4 rules/thresholds the retired terminal_dashboard fired, now
+                # via structlog at log_interval cadence. loss_info carries every field.
+                emit_training_step_alerts_headless(
+                    {
+                        "step": self._train_step,
+                        "policy_entropy": loss_info.get("policy_entropy"),
+                        "policy_entropy_selfplay": loss_info.get("policy_entropy_selfplay"),
+                        "selfplay_model_entropy_batch": loss_info.get("selfplay_model_entropy_batch"),
+                        "grad_norm": loss_info.get("grad_norm"),
+                        "loss_total": loss_info.get("loss"),
+                    },
+                    self._monitoring_cfg,
+                    self._recent_losses,
+                    self._logger,
                 )
                 self.last_iter_games = self._games_played
 
