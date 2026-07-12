@@ -136,16 +136,10 @@ HELP = {
                      "GAP trend (currently widening).",
     "value_accuracy": "value_accuracy_selfplay/masked should rise; decline >10pp over 10k "
                       "steps = flag.",
-    "avg_sigma": "value-spread V-spread canary (also alt_spread/t3_spread). A sustained "
-                 "excursion not self-correcting by 200-300k = pre-registered reactive-lever "
-                 "trigger.",
-    "t3_spread": "colony-capture canary V_spread = mean V(colony bank) - mean V(extension "
-                 "bank) over a frozen 40-pos T3 bank. HIGH = healthy (anchor +0.617); "
-                 "COLLAPSE toward 0 = value head can't tell a dead blob from a winning open "
-                 "run. WARN <0.30, SOFT-ABORT <0.20. Should hold high, NOT trend to zero.",
-    "alt_spread": "same canary on the bot-corpus alt bank (T3 amplifies ~3x). Anchor +0.212; "
-                  "gates T3/3: WARN <0.10, SOFT-ABORT <0.07. NaN when the run's plane count "
-                  "differs from the v6 alt fixture (verdict rests on t3 then).",
+    "avg_sigma": "value-spread canary (v_spread avg_sigma). A sustained excursion not "
+                 "self-correcting by 200-300k = pre-registered reactive-lever trigger.",
+    # t3_spread / alt_spread HELP entries removed — display DROPPED (VOID instrument,
+    # empty all run2). Producer (fire_canary) stays demoted-informational in structlog.
     "draw_rate": "HARD-ABORT at >=0.55 for 3 consecutive evals. Currently ~0.",
     "grad_norm": "HARD-ABORT at >=10. Currently ~1.5.",
     "lr": "cosine annealing over the 1M horizon (monotone ~2e-3 -> 5e-4). If it ever ticks "
@@ -197,10 +191,6 @@ def cls(metric, v):
             # NO absolute depth floor. Depth is shallow-by-design under Gumbel;
             # the verdict comes from depth_health()'s run-relative baseline.
             return ""
-        if metric == "t3_spread":   # HIGH healthy: WARN<0.30, SOFT-ABORT<0.20
-            return "red" if v < 0.20 else ("yellow" if v < 0.30 else "green")
-        if metric == "alt_spread":  # alt gates = T3/3: WARN<0.10, SOFT-ABORT<0.07
-            return "red" if v < 0.07 else ("yellow" if v < 0.10 else "green")
         if metric == "xo_winrate":
             return "green" if 0.47 <= v <= 0.56 else ("yellow" if 0.42 <= v <= 0.60 else "red")
         if metric == "colony":
@@ -450,8 +440,6 @@ def build(data, show_help, use_charts, cfg, default_encoding):
     depth_series = [(r["step"], r["depth"]) for r in traj if "depth" in r]
     conc_series = [(r["step"], r["conc"]) for r in traj if "conc" in r]
     sigma_series = [(r["step"], r["sigma"]) for r in traj if "sigma" in r]
-    t3_series = [(r["step"], r["t3"]) for r in traj if "t3" in r]
-    alt_series = [(r["step"], r["alt"]) for r in traj if "alt" in r]
     is_gumbel = data.get("is_gumbel")
     dh = depth_health(depth_series, conc_series, is_gumbel,
                       DEPTH_STABLE_FRAC, DEPTH_REGRESS_FRAC, CONC_MOVE)
@@ -507,7 +495,9 @@ def build(data, show_help, use_charts, cfg, default_encoding):
     )
     st = Table(title=None, expand=True, show_edge=False)
     # value-head fields per eval round -> vfc2 (numeric) + g4 (pass/fail bool)
-    for c in ("step", "prom", "wr_best", "wr_sealbot", "vs_boot", "wr_random", "elo",
+    # eff_n = deploy_strength_distinct_per_pair_min (§D-ARGMAX distinct-game n);
+    # shown on deploy rounds only (stride-4), '-' otherwise.
+    for c in ("step", "prom", "wr_best", "eff_n", "wr_sealbot", "vs_boot", "wr_random", "elo",
               "vfc2_wmax", "g4_band"):
         st.add_column(c, justify="right" if c != "prom" else "center")
     if rounds:
@@ -517,10 +507,13 @@ def build(data, show_help, use_charts, cfg, default_encoding):
             wbo = d.get("wr_bootstrap_anchor")
             g4 = d.get("g4_value_head_band_pass")
             g4txt = ("[green]pass[/]" if g4 else "[red]FAIL[/]") if g4 is not None else "[dim]-[/]"
+            eff_n = d.get("deploy_strength_distinct_per_pair_min")
+            eff_n_txt = (str(int(eff_n)) if isinstance(eff_n, (int, float)) else "[dim]-[/]")
             st.add_row(
                 str(d.get("step", "?")),
                 "[green]yes[/]" if d.get("promoted") else "no",
                 Text(wrci(wb, d.get("ci_best")), style=cls("wr_best", wb)),
+                eff_n_txt,
                 # wsb cell DESCRIPTIVE (level shown), color from the SLOPE read
                 Text(wrci(wsb, d.get("ci_sealbot")), style=sb_slope["style"]),
                 (fmt(wbo, 3) if wbo is not None else "[dim]-[/]"),
@@ -710,37 +703,28 @@ def build(data, show_help, use_charts, cfg, default_encoding):
                    style=cls("policy_entropy_selfplay", pe)))
     xw, ow = ls.get("x_winrate"), ls.get("o_winrate")
     he.add_row("x/o winrate", Text("%s / %s" % (fmt(xw, 3), fmt(ow, 3)), style=cls("xo_winrate", xw)))
-    dvals = [d for _, d in depth_series]
-    cvals = [c for _, c in conc_series]
-    he.add_row("mcts depth / root_conc",
-               Text("%s  d=%s  conc=%s" % (
-                   sparkline(dvals) if dvals else "(no data)",
-                   fmt(ls.get("mcts_mean_depth"), 2), fmt(ls.get("mcts_root_concentration"), 2)),
-                   style=(dh["style"] if dh else cls("mcts_mean_depth", ls.get("mcts_mean_depth")))))
-    if dh:
-        he.add_row("  depth read", Text("%s  %s" % (dh["label"], dh["detail"]), style=dh["style"]))
-    elif dvals:
-        he.add_row("  depth read", Text("warming up (need >=3 bins for a baseline)", style="dim"))
+    # mcts depth + root_conc: PUCT-only — cumulative-mean artifact under Gumbel
+    # (game_runner:669); unconditional emit so null-guard is WRONG. Guard on planner.
+    if is_gumbel is False:
+        dvals = [d for _, d in depth_series]
+        cvals = [c for _, c in conc_series]
+        he.add_row("mcts depth / root_conc",
+                   Text("%s  d=%s  conc=%s" % (
+                       sparkline(dvals) if dvals else "(no data)",
+                       fmt(ls.get("mcts_mean_depth"), 2), fmt(ls.get("mcts_root_concentration"), 2)),
+                       style=(dh["style"] if dh else cls("mcts_mean_depth", ls.get("mcts_mean_depth")))))
+        if dh:
+            he.add_row("  depth read", Text("%s  %s" % (dh["label"], dh["detail"]), style=dh["style"]))
+        elif dvals:
+            he.add_row("  depth read", Text("warming up (need >=3 bins for a baseline)", style="dim"))
     he.add_row("gpu / vram", "%s%% | %s GB" % (fmt(ls.get("gpu_util"), 0), fmt(ls.get("vram_gb"), 1)))
     svals = [g for _, g in sigma_series]
     he.add_row("avg_sigma (v_spread)",
                "%s   %s" % (sparkline(svals) if svals else "(no data)",
                             fmt(ls.get("avg_sigma"), 3)))
-    # value-spread canary t3/alt — HIGH = healthy (t3 anchor +0.617; abort <0.20)
-    vc = data.get("vspread_canary_last") or {}
-    t3vals = [t for _, t in t3_series]
-    if vc or t3vals:
-        cur_t3 = vc.get("t3_spread")
-        he.add_row("t3/alt v_spread",
-                   Text("%s   t3=%s alt=%s" % (
-                       sparkline(t3vals) if t3vals else "(no data)",
-                       fmt(cur_t3, 3), fmt(vc.get("alt_spread"), 3)),
-                       style=cls("t3_spread", cur_t3)))
-    vs = data.get("vspread_last")
-    if vs:
-        he.add_row("v_spread ALERT", Text("t3=%s alt=%s" % (
-            fmt(vs.get("t3_spread"), 3), fmt(vs.get("alt_spread"), 3)),
-            style="yellow" if not vs.get("both_pass") else "green"))
+    # t3/alt v_spread display DROPPED — VOID instrument (empty all run2); producer
+    # (fire_canary) stays demoted-informational in structlog. See manifest dropped[].
+    # v_spread ALERT row also dropped (same instrument).
     panels.append(Panel(he, title="health", border_style="green"))
 
     # ---- charts ----
@@ -770,35 +754,31 @@ def build(data, show_help, use_charts, cfg, default_encoding):
                       "wr_best + wr_sealbot vs step")
             if s:
                 ch_strs.append(s)
-        # mcts mean depth with the run's OWN baseline (green) + the -12% floor (red)
-        if depth_series:
-            hl = []
-            if dh:
-                hl = [(dh["base"], "green"), (dh["floor"], "red")]
-            s = chart([("depth", [x for x, _ in depth_series],
-                        [d for _, d in depth_series], "cyan+")],
-                      "mcts_mean_depth vs step (line=run baseline; red=-12%% floor)",
-                      hlines=hl)
-            if s:
-                ch_strs.append(s)
-        if conc_series:
-            s = chart([("root_conc", [x for x, _ in conc_series],
-                        [c for _, c in conc_series], "magenta")],
-                      "mcts_root_concentration vs step (co-read with depth)")
-            if s:
-                ch_strs.append(s)
+        # mcts depth + root_conc: PUCT-only (planner_guard: planner_puct).
+        # Depth is emitted unconditionally — null-guard would NOT hide it.
+        # Guard on planner config (is_gumbel is False = confirmed PUCT).
+        if is_gumbel is False:
+            if depth_series:
+                hl = []
+                if dh:
+                    hl = [(dh["base"], "green"), (dh["floor"], "red")]
+                s = chart([("depth", [x for x, _ in depth_series],
+                            [d for _, d in depth_series], "cyan+")],
+                          "mcts_mean_depth vs step (line=run baseline; red=-12%% floor)",
+                          hlines=hl)
+                if s:
+                    ch_strs.append(s)
+            if conc_series:
+                s = chart([("root_conc", [x for x, _ in conc_series],
+                            [c for _, c in conc_series], "magenta")],
+                          "mcts_root_concentration vs step (co-read with depth; PUCT only)")
+                if s:
+                    ch_strs.append(s)
+        # t3/alt v_spread chart DROPPED — VOID instrument (empty all run2).
         if sigma_series:
             s = chart([("sigma", [x for x, _ in sigma_series],
                         [g for _, g in sigma_series], "yellow+")],
                       "v_spread (avg_sigma) vs step")
-            if s:
-                ch_strs.append(s)
-        if t3_series:
-            vsser = [("t3", [x for x, _ in t3_series], [g for _, g in t3_series], "green+")]
-            if alt_series:
-                vsser.append(("alt", [x for x, _ in alt_series],
-                              [g for _, g in alt_series], "magenta"))
-            s = chart(vsser, "t3/alt v_spread vs step (HIGH=healthy; t3 abort <0.20)")
             if s:
                 ch_strs.append(s)
         if ch_strs:
@@ -806,22 +786,23 @@ def build(data, show_help, use_charts, cfg, default_encoding):
             danger = Table.grid(padding=(0, 1))
             danger.add_column(style="bold", justify="right", no_wrap=True)
             danger.add_column()
-            _rc_legend = ("[dim]rising = expected under Gumbel-SH (descriptive, not an alarm)[/]"
-                          if is_gumbel else
-                          "[yellow]up while depth down = overconfident shallow cutoffs (PUCT)[/]")
-            for k, v in (
+            legend_rows = [
                 ("conversion", "[yellow]down >20% from baseline + colony up = golong coherence break[/]"),
                 ("value-bce gap", "[yellow]WIDENING / selfplay floors ~0.69 = corpus-overfit[/]"),
                 ("colony", "[red]up above 0.15 = colony-attractor[/]"),
-                ("depth", "[yellow]sharp drop (>12%) vs run self-baseline = search regression; "
-                          "shallow-by-design under Gumbel[/]"),
-                ("root_conc", _rc_legend),
-                ("t3 / alt v_spread", "[red]down toward 0 (t3<0.20, alt<0.07) = value head can't separate colony[/]"),
                 ("avg_sigma", "[yellow]sustained excursion not self-correcting by 200-300k[/]"),
                 ("wr_sealbot", "[green]read the SLOPE (robust Theil-Sen, measurement-error CI lower "
                                "bound >0, above effect-size floor); level descriptive only — "
                                "~0.55 a soft anchor (temp-0.5, n=100), NEVER a single-point gate[/]"),
-            ):
+            ]
+            # depth + root_conc legend entries: PUCT-only (planner_guard)
+            if is_gumbel is False:
+                legend_rows += [
+                    ("depth", "[yellow]sharp drop (>12%) vs run self-baseline = search regression; "
+                              "shallow-by-design under Gumbel[/]"),
+                    ("root_conc", "[yellow]up while depth down = overconfident shallow cutoffs (PUCT)[/]"),
+                ]
+            for k, v in legend_rows:
                 danger.add_row(k, Text.from_markup(v))
             cap = Text("danger -> look (read SLOPE, not single points):", style="italic dim")
             panels.append(Panel(Group(cols, Text(""), cap, danger),
