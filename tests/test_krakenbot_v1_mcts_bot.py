@@ -4,12 +4,21 @@ TDD protocol: RED before implementation, GREEN after.
 Uses n_sims=8 so each test completes quickly on CPU.
 
 Board fixtures mirror test_krakenbot_v1_bot.py (make_eval_board + GameState).
+
+Skips all tests if checkpoints/external/kraken_v1.pt absent (CI / pre-asset envs).
 """
+
+from pathlib import Path
 
 import pytest
 from engine import Board
 from hexo_rl.env.game_state import GameState
 from hexo_rl.eval.eval_board import make_eval_board
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+_KRAKEN = REPO_ROOT / "checkpoints" / "external" / "kraken_v1.pt"
+
+pytestmark = pytest.mark.skipif(not _KRAKEN.exists(), reason="kraken_v1.pt absent")
 
 
 # ── fixtures ──────────────────────────────────────────────────────────────────

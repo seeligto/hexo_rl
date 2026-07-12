@@ -7,12 +7,21 @@ determinism).
 
 Tests use make_eval_board + GameState per the harness entry point pattern
 (scripts/evalfair/core.py::play_from_opening).
+
+Skips all tests if checkpoints/external/kraken_v1.pt absent (CI / pre-asset envs).
 """
+
+from pathlib import Path
 
 import pytest
 from engine import Board
 from hexo_rl.env.game_state import GameState
 from hexo_rl.eval.eval_board import make_eval_board
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+_KRAKEN = REPO_ROOT / "checkpoints" / "external" / "kraken_v1.pt"
+
+pytestmark = pytest.mark.skipif(not _KRAKEN.exists(), reason="kraken_v1.pt absent")
 
 
 # ── fixture: a Board after P1's opening stone (now P2's double turn) ──────────
