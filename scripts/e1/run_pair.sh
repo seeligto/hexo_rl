@@ -32,6 +32,18 @@ echo "=== E1 run_pair — one-key-diff gate ==="
 # HARD GATE: refuse to launch unless the resolved diff is EXACTLY value_head_type.
 "$PY" -m scripts.e1.assert_one_key_diff "$SCALAR_VARIANT" "$DIST_VARIANT"
 
+# ── A2 provenance: bind this launch to the FROZEN metric-freeze doc ──────────
+# Records the frozen-metric doc's git blob hash into the launch log (pre-reg
+# integrity). Refuses to launch if the A2 doc is missing. The doc was frozen at
+# commit 685c617; the reader (validate_ckpt.py) additionally SHA-pins the probe.
+E1_METRIC_FREEZE_DOC="docs/designs/e1_metric_freeze.md"
+if [[ ! -f "$E1_METRIC_FREEZE_DOC" ]]; then
+  echo "ERROR: frozen A2 metric doc missing: $E1_METRIC_FREEZE_DOC" >&2
+  exit 3
+fi
+E1_METRIC_FREEZE_SHA="$(git rev-parse "HEAD:$E1_METRIC_FREEZE_DOC" 2>/dev/null || echo unknown)"
+echo "A2 frozen metrics: $E1_METRIC_FREEZE_DOC @ blob $E1_METRIC_FREEZE_SHA (frozen commit 685c617)"
+
 if [[ ! -f "$E1_TRUNK" ]]; then
   echo "ERROR: weights-only trunk not found: $E1_TRUNK" >&2
   echo "  mint it: $PY scripts/make_ws3v3_warmstart.py \\" >&2
