@@ -657,6 +657,20 @@ def init_trainer(
             cluster_window_size=combined_config.get("cluster_window_size"),
             cluster_threshold=combined_config.get("cluster_threshold"),
         )
+        # E1 T8 — warm-start the VALUE HEAD from the pre-registered HEADSWAP head
+        # (default-OFF, so every non-E1 launch is byte-identical). Fires ONLY on a
+        # weights-only warm launch (loaded_from_full_checkpoint False); a mid-run
+        # full resume already has the trained head and is skipped. Runs AFTER the
+        # checkpoint load (trunk seeded), BEFORE return (net handed to the loop).
+        from hexo_rl.training.warmstart_launch import (
+            maybe_warmstart_value_head,
+            assert_dist65_bins_seeded,
+        )
+        _warmstart_fired = maybe_warmstart_value_head(trainer, combined_config, log=log)
+        # E1 footgun guard — raises when dist65 + scalar trunk + no warm-start
+        # (value_fc2_bins would be random/untrained). No-op for scalar arm,
+        # dist65+warm-start ON (E1 path), or a genuine dist65 full-ckpt resume.
+        assert_dist65_bins_seeded(trainer, combined_config, warmstart_fired=_warmstart_fired)
     else:
         in_channels_arg, input_channels_cfg = _resolve_fresh_in_channels(combined_config)
         from hexo_rl.training.model_defaults import MODEL_HPARAM_DEFAULTS as _MHPD
