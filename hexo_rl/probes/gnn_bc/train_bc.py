@@ -285,26 +285,35 @@ def train(arm: str, lr: float, steps: int, batch_size: int, out: Path,
 
     spec = _lookup_encoding("v6_live2_ls")
 
-    def _gnn_positions():
-        # re-instantiate the source each epoch pass (streaming over the corpus)
-        while True:
-            source = HumanGameSource(raw_dir)
-            yield from iter_corpus_positions(source)
-            if smoke:
-                return  # one pass only in smoke
+    # ── GNN dataset MATERIALIZATION (the perf fix) ────────────────────────────
+    # build_axis_graph_raw is ~95% of GNN main-thread cost (cProfile), and a
+    # 40k-step run re-walks the ~500k-position corpus ~20× — rebuilding every
+    # graph every epoch. Instead build each example ONCE (parallel, order-
+    # preserving via parallel_ordered_map — bit-identical to the serial stream),
+    # hold the list, and re-iterate it per epoch. Steady-state cost drops to
+    # collate+GPU only. RAM ~a few GB for the corpus (box has 60G).
+    gnn_dataset: List = []
+    if arm == "gnn" and not smoke:
+        t_build = time.time()
+        src = HumanGameSource(raw_dir)
+        if par > 0:
+            built = parallel_ordered_map(_gnn_example, iter_corpus_positions(src),
+                                         par, max_inflight=max(par * 64, batch_size * 4))
+        else:
+            built = (_gnn_example(p) for p in iter_corpus_positions(src))
+        gnn_dataset = [e for e in built if e is not None]
+        print(f"[bc] materialized {len(gnn_dataset):,} gnn examples in "
+              f"{time.time() - t_build:.1f}s (workers={par})")
 
     def example_stream():
         if arm == "gnn":
-            # Parallel graph build (par>0) is ORDER-PRESERVING → the (None-filtered
-            # by _batched) example stream is identical to the serial path. Bounded
-            # in-flight so an unbounded epoch stream stays memory-light.
-            if par > 0:
-                yield from parallel_ordered_map(
-                    _gnn_example, _gnn_positions(), par,
-                    max_inflight=max(par * 4, batch_size * 2))
-            else:
-                for pos in _gnn_positions():
+            if smoke:
+                # single pass, serial — a 3-step build-verify never materializes
+                for pos in iter_corpus_positions(HumanGameSource(raw_dir)):
                     yield _gnn_example(pos)   # None dropped by _batched
+            else:
+                while True:                   # re-iterate the materialized dataset
+                    yield from gnn_dataset
         else:
             while True:
                 source = HumanGameSource(raw_dir)

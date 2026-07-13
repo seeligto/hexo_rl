@@ -50,25 +50,53 @@ On a 5080 use `--device cuda`. These are the multi-hour runs; run them however y
 
 ```bash
 cd /workspace/hexo_rl   # or the box's checkout
+# THREAD CAPS ARE MANDATORY for the GNN arm (see PERF note below):
+export OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1
 
-# GNN-BC arm
-.venv/bin/python -m hexo_rl.probes.gnn_bc.train_bc --arm gnn --lr 1e-3 \
-    --steps 40000 --batch-size 256 --device cuda \
+# GNN-BC arm  (--workers = parallel graph-build processes; see PERF note)
+.venv/bin/python -u -m hexo_rl.probes.gnn_bc.train_bc --arm gnn --lr 1e-3 \
+    --steps 40000 --batch-size 256 --device cuda --workers 12 \
     --out checkpoints/probes/gnn_bc/gnn_lr1e-3
-.venv/bin/python -m hexo_rl.probes.gnn_bc.train_bc --arm gnn --lr 3e-3 \
-    --steps 40000 --batch-size 256 --device cuda \
+.venv/bin/python -u -m hexo_rl.probes.gnn_bc.train_bc --arm gnn --lr 3e-3 \
+    --steps 40000 --batch-size 256 --device cuda --workers 12 \
     --out checkpoints/probes/gnn_bc/gnn_lr3e-3
 
-# CNN-BC control arm (SAME steps/batch/corpus/protocol)
-.venv/bin/python -m hexo_rl.probes.gnn_bc.train_bc --arm cnn --lr 1e-3 \
+# CNN-BC control arm (SAME steps/batch/corpus/protocol; --workers ignored, CNN is fast)
+.venv/bin/python -u -m hexo_rl.probes.gnn_bc.train_bc --arm cnn --lr 1e-3 \
     --steps 40000 --batch-size 256 --device cuda \
     --out checkpoints/probes/gnn_bc/cnn_lr1e-3
-.venv/bin/python -m hexo_rl.probes.gnn_bc.train_bc --arm cnn --lr 3e-3 \
+.venv/bin/python -u -m hexo_rl.probes.gnn_bc.train_bc --arm cnn --lr 3e-3 \
     --steps 40000 --batch-size 256 --device cuda \
     --out checkpoints/probes/gnn_bc/cnn_lr3e-3
 ```
 
 Each run writes `<out>/<arm>_bc_040000.pt` + `<out>/train_log.jsonl` (step / loss / top1 / lr).
+Or just run the two-LR streams via the wrapper `wp3_gnn_stream.sh` / (CNN is ~7 min/run).
+
+### PERF (D-L 2026-07-13 — the GNN arm was ~24h/run as first shipped)
+
+Diagnosis (cProfile): `build_axis_graph_raw` is **~95%** of GNN main-thread cost, and a
+40k-step run re-walks the ~500k-position corpus **~20×** — rebuilding every graph every
+epoch. The original `_gnn_loss` also did a 256-iteration Python loop with a per-graph
+`.item()` GPU sync/step (GPU idle ~22%). CNN by contrast is ~7 min/run (dense scatter).
+
+Fixes landed (equivalence-proven — see `tests/test_gnn_bc_probe.py`):
+1. **Vectorized `_gnn_loss`** — segmented log-softmax over `legal_offsets`, no Python
+   loop, no per-graph sync (`_gnn_loss_reference` kept as the oracle; loss value+grad
+   match). Removes the GPU sync stall.
+2. **Materialize-once build** — build each example ONCE (parallel, order-preserving via
+   `parallel_ordered_map`, bit-identical to serial — verified 0 mismatches on 800 real
+   positions), hold the ~500k-example list (~a few GB RAM), re-iterate per epoch. Every
+   training step is then collate+GPU only. `--workers` sizes the one-time build pool.
+3. **Thread caps (MANDATORY)** — each build worker imports torch, which otherwise grabs
+   ~ncores OpenMP threads → `workers × ncores` thread explosion (load hit 42 on a 24-thread
+   box, ssh starved). Export `OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1`
+   (the wrapper script does this). Workers do pure-Python builds; main uses CUDA — neither
+   needs CPU threads. Without this the parallelism is net-negative.
+
+The one-time materialize (~several min, IPC-bound on the main process's deserialize) makes
+the box ssh-sluggish while it runs; it recovers once training starts. Steps must still be
+EQUAL across arms — none of the above touches the matched-protocol invariant.
 
 **Notes / tradeoffs**
 - The GNN arm's graph-building + segmented per-graph CE is Python-side per position; it is
