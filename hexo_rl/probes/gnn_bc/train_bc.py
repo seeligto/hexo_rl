@@ -28,8 +28,10 @@ import json
 import random
 import sys
 import time
+from collections import deque
+from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
-from typing import Iterator, List
+from typing import Callable, Iterable, Iterator, List
 
 import numpy as np
 import torch
@@ -109,9 +111,14 @@ def _collate_gnn(examples, device):
     return x, edge_index, edge_attr, legal_mask, target_idx, legal_offsets, w
 
 
-def _gnn_loss(net, batch):
+def _gnn_loss_reference(net, batch):
     """Per-graph cross-entropy over each graph's legal-node logits (segmented
-    softmax via legal_offsets), weighted by the Elo-band weight."""
+    softmax via legal_offsets), weighted by the Elo-band weight.
+
+    REFERENCE implementation — the frozen spec. Kept as the equivalence oracle
+    for ``test_vectorized_gnn_loss_matches_reference``; the training path uses the
+    vectorized ``_gnn_loss`` below (256 per-graph ``.item()`` GPU syncs/step here
+    made this the ~24h bottleneck — see the perf note in the WP3 runbook)."""
     x, edge_index, edge_attr, legal_mask, target_idx, legal_offsets, w = batch
     logits = net.forward_batch(x, edge_index, edge_attr, legal_mask)  # (num_legal_total,)
     n_graphs = legal_offsets.numel() - 1
@@ -132,6 +139,58 @@ def _gnn_loss(net, batch):
             correct += 1
     loss = torch.stack(losses).sum() / w.sum()
     return loss, correct, n_graphs
+
+
+def _gnn_loss(net, batch):
+    """Vectorized equivalent of ``_gnn_loss_reference`` — segmented log-softmax
+    over ``legal_offsets`` with NO Python per-graph loop and NO per-graph
+    ``.item()`` GPU sync. Math-identical (up to float reduction order)."""
+    x, edge_index, edge_attr, legal_mask, target_idx, legal_offsets, w = batch
+    logits = net.forward_batch(x, edge_index, edge_attr, legal_mask)  # (num_legal_total,)
+    n_graphs = legal_offsets.numel() - 1
+    dev, dt = logits.device, logits.dtype
+    counts = (legal_offsets[1:] - legal_offsets[:-1])                 # (n_graphs,) legal nodes/graph
+    seg_id = torch.repeat_interleave(torch.arange(n_graphs, device=dev), counts)  # (num_legal_total,)
+    # per-segment max (detached stabilization constant, exactly as F.log_softmax does)
+    seg_max = torch.full((n_graphs,), float("-inf"), device=dev, dtype=dt)
+    seg_max = seg_max.scatter_reduce(0, seg_id, logits, reduce="amax", include_self=True).detach()
+    seg_sumexp = torch.zeros(n_graphs, device=dev, dtype=dt).index_add(
+        0, seg_id, (logits - seg_max[seg_id]).exp())
+    seg_logz = seg_max + seg_sumexp.log()                            # (n_graphs,)
+    logp = logits - seg_logz[seg_id]                                 # per-segment log-softmax, all nodes
+    logp_tgt = logp[target_idx]                                      # (n_graphs,) target is a GLOBAL index
+    seg_sum_logp = torch.zeros(n_graphs, device=dev, dtype=dt).index_add(0, seg_id, logp)
+    smooth = LABEL_SMOOTH / counts.to(dt)                            # (n_graphs,) label smoothing over legal set
+    loss_g = -((1 - LABEL_SMOOTH) * logp_tgt + smooth * seg_sum_logp)
+    loss = (w * loss_g).sum() / w.sum()
+    # top1 (diagnostic only, not in the gradient): target achieves its segment max
+    correct = int((logits[target_idx] == seg_max).sum().item())
+    return loss, correct, n_graphs
+
+
+def parallel_ordered_map(func: Callable, iterable: Iterable, workers: int,
+                         max_inflight: int) -> Iterator:
+    """Apply ``func`` across ``workers`` processes, yielding results in INPUT
+    order, with at most ``max_inflight`` tasks in flight (bounded memory over an
+    unbounded input). Order-preserving so the built-example stream is identical
+    to the serial path."""
+    it = iter(iterable)
+    with ProcessPoolExecutor(max_workers=workers) as pool:
+        pending: deque = deque()
+        exhausted = False
+        while len(pending) < max_inflight and not exhausted:
+            try:
+                pending.append(pool.submit(func, next(it)))
+            except StopIteration:
+                exhausted = True
+        while pending:
+            result = pending.popleft().result()   # FIFO → yields in submission (input) order
+            if not exhausted:
+                try:
+                    pending.append(pool.submit(func, next(it)))
+                except StopIteration:
+                    exhausted = True
+            yield result
 
 
 # ── CNN example building (v6_live2_ls per-cluster-row scatter) ─────────────────
@@ -205,7 +264,7 @@ def _batched(stream, batch_size):
 
 
 def train(arm: str, lr: float, steps: int, batch_size: int, out: Path,
-          raw_dir: str, device: str, smoke: bool, seed: int = 42):
+          raw_dir: str, device: str, smoke: bool, seed: int = 42, workers: int = 8):
     torch.manual_seed(seed); random.seed(seed); np.random.seed(seed)
     dev = torch.device(device)
     out.mkdir(parents=True, exist_ok=True)
@@ -217,26 +276,41 @@ def train(arm: str, lr: float, steps: int, batch_size: int, out: Path,
     else:
         raise ValueError(f"unknown arm {arm!r}")
     n_params = sum(p.numel() for p in net.parameters())
-    print(f"[bc] arm={arm} lr={lr} steps={steps} bs={batch_size} params={n_params:,} device={device}")
+    par = workers if (arm == "gnn" and workers > 0 and not smoke) else 0
+    print(f"[bc] arm={arm} lr={lr} steps={steps} bs={batch_size} params={n_params:,} "
+          f"device={device} build_workers={par}")
 
     opt = torch.optim.AdamW(net.parameters(), lr=lr, weight_decay=WEIGHT_DECAY)
     sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=steps, eta_min=ETA_MIN)
 
     spec = _lookup_encoding("v6_live2_ls")
 
-    def example_stream():
+    def _gnn_positions():
         # re-instantiate the source each epoch pass (streaming over the corpus)
         while True:
             source = HumanGameSource(raw_dir)
-            if arm == "gnn":
-                for pos in iter_corpus_positions(source):
-                    ex = _gnn_example(pos)
-                    if ex is not None:
-                        yield ex
-            else:
-                yield from iter_cnn_examples(source, spec)
+            yield from iter_corpus_positions(source)
             if smoke:
                 return  # one pass only in smoke
+
+    def example_stream():
+        if arm == "gnn":
+            # Parallel graph build (par>0) is ORDER-PRESERVING → the (None-filtered
+            # by _batched) example stream is identical to the serial path. Bounded
+            # in-flight so an unbounded epoch stream stays memory-light.
+            if par > 0:
+                yield from parallel_ordered_map(
+                    _gnn_example, _gnn_positions(), par,
+                    max_inflight=max(par * 4, batch_size * 2))
+            else:
+                for pos in _gnn_positions():
+                    yield _gnn_example(pos)   # None dropped by _batched
+        else:
+            while True:
+                source = HumanGameSource(raw_dir)
+                yield from iter_cnn_examples(source, spec)
+                if smoke:
+                    return
 
     net.train()
     step = 0
@@ -284,10 +358,13 @@ def main() -> int:
     ap.add_argument("--raw-dir", default="data/corpus/raw_human")
     ap.add_argument("--out", required=True)
     ap.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
+    ap.add_argument("--workers", type=int, default=8,
+                    help="GNN graph-build worker processes (order-preserving; 0=serial). "
+                         "No effect on the CNN arm or --smoke.")
     ap.add_argument("--smoke", action="store_true", help="single-pass build-verify (NOT the real run)")
     args = ap.parse_args()
     train(args.arm, args.lr, args.steps, args.batch_size, Path(args.out),
-          args.raw_dir, args.device, args.smoke)
+          args.raw_dir, args.device, args.smoke, workers=args.workers)
     return 0
 
 

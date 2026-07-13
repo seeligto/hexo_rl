@@ -18,6 +18,9 @@ from hexo_rl.bots.strix_v1_graph import build_axis_graph_raw
 from hexo_rl.probes.gnn_bc.graph_check import axis_edge_set, reference_edge_set
 from hexo_rl.probes.gnn_bc.gnn_bc_net import GnnBcNet
 from hexo_rl.probes.gnn_bc.cnn_bc_net import build_cnn_bc_net, num_params
+from hexo_rl.probes.gnn_bc.train_bc import (
+    _collate_gnn, _gnn_loss, _gnn_loss_reference, parallel_ordered_map,
+)
 
 
 def _positions():
@@ -135,3 +138,64 @@ def test_cnn_bot_plays_legal_move(tmp_path):
     q, r = bot.get_move(s, b)
     assert (q, r) in b.legal_moves()
     assert bot.name() == "cnn-bc"
+
+
+# ── perf-rewrite equivalence: vectorized loss + parallel build ────────────────
+# The vectorized _gnn_loss and the parallel graph build must be equivalent to the
+# frozen serial path (D-L WP3 perf fix). _gnn_loss_reference is the oracle.
+
+def _equiv_batch(device="cpu"):
+    """A mixed batch of real axis-graphs (varying legal-set sizes + weights)."""
+    positions = [
+        ({(0, 0): 1, (1, 0): -1, (2, 0): 1}, 1, 2),
+        ({(0, 0): 1, (0, 1): -1}, 1, 2),
+        ({(3, 3): 1, (3, 4): -1, (4, 4): 1, (2, 2): -1}, 1, 2),
+        ({(-1, 2): -1, (0, 0): 1}, 1, 2),
+    ]
+    examples = []
+    for i, (stones, cp, mr) in enumerate(positions):
+        g = build_axis_graph_raw(stones, cp, mr, win_length=6, radius=6,
+                                 prune_empty_edges=True, threat_features=True,
+                                 relative_stones=True)
+        n_legal = int(sum(g["legal_mask"]))
+        target_local = (i * 3) % n_legal
+        examples.append((g, target_local, float(1 + i)))
+    return _collate_gnn(examples, torch.device(device))
+
+
+def test_vectorized_gnn_loss_matches_reference():
+    torch.manual_seed(0)
+    net = GnnBcNet(); net.eval()
+    batch = _equiv_batch()
+    loss_ref, correct_ref, n_ref = _gnn_loss_reference(net, batch)
+    loss_new, correct_new, n_new = _gnn_loss(net, batch)
+    assert n_new == n_ref
+    assert correct_new == correct_ref
+    torch.testing.assert_close(loss_new, loss_ref, rtol=1e-4, atol=1e-5)
+
+
+def test_vectorized_gnn_loss_grad_matches_reference():
+    torch.manual_seed(0)
+    net = GnnBcNet(); net.train()
+    batch = _equiv_batch()
+    loss_ref, _, _ = _gnn_loss_reference(net, batch)
+    net.zero_grad(set_to_none=True); loss_ref.backward()
+    g_ref = [p.grad.clone() for p in net.parameters() if p.grad is not None]
+    loss_new, _, _ = _gnn_loss(net, batch)
+    net.zero_grad(set_to_none=True); loss_new.backward()
+    g_new = [p.grad.clone() for p in net.parameters() if p.grad is not None]
+    assert len(g_ref) == len(g_new) and len(g_ref) > 0
+    for a, b in zip(g_ref, g_new):
+        torch.testing.assert_close(a, b, rtol=1e-3, atol=1e-5)
+
+
+def test_parallel_ordered_map_preserves_order_and_values():
+    # max_inflight < len exercises the streaming refill path; abs is picklable.
+    data = list(range(-50, 50))
+    got = list(parallel_ordered_map(abs, iter(data), workers=4, max_inflight=8))
+    assert got == [abs(x) for x in data]
+
+
+def test_parallel_ordered_map_input_smaller_than_inflight():
+    got = list(parallel_ordered_map(abs, iter([-1, -2, -3]), workers=4, max_inflight=8))
+    assert got == [1, 2, 3]
