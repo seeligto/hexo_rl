@@ -9,6 +9,11 @@ Operator-triggered script that:
   Stage 3   kraken-MCTS (200 sims, temp0, 32 pairs): reuses
             scripts/evalfair/head_vs_krakenbot.py; gated behind --skip-kraken /
             absent-asset skip-with-reason.
+  Stage 3b  strix-g128 bar (128 sims, Gumbel-AZ, 32 pairs): reuses
+            scripts/evalfair/head_vs_strix.py; gated behind --with-strix (default OFF) /
+            absent-asset skip-with-reason. Runs strix in ITS OWN venv (hexo_rs +
+            torch_geometric); the delegation child is strix_g128_child.py.
+            D-K tournament field ceiling (+313 Elo). run3 bar from day one.
   Stage 4   append a per-bar row to the series, print slope table (Theil-Sen) + verdict.
 
 Done-marker pattern: each processed checkpoint gets a <stem>.mantis_done sentinel.
@@ -29,10 +34,17 @@ CLI::
         --ckpt checkpoints/run2_retro/checkpoint_00248000.pt \\
         --skip-kraken
 
+    # With strix-g128 bar (D-K ceiling, run3):
+    .venv/bin/python scripts/eval/mantis_pull_eval.py \\
+        --ckpt checkpoints/run3/checkpoint_00050000.pt \\
+        --with-strix
+
 Constraints:
   - Read-only wrt vast. Serial, niced. workers=1 (load-34 crash on record at higher).
   - Gated loader (encoding v6_live2_ls). No new eval math — composes existing tools.
   - Deterministic series rows.
+  - strix-g128 requires strix's dedicated venv (hexo_rs + torch_geometric); gated
+    behind --with-strix so default runs are unaffected (byte-identical when absent).
 """
 from __future__ import annotations
 
@@ -244,7 +256,7 @@ def stage2_d5_eval(
     return result
 
 
-# ── Stage 3: kraken eval ──────────────────────────────────────────────────────
+# ── Stage 3: kraken eval ─────────────────────────────────────────────────────
 
 
 def _run_kraken_eval(
@@ -315,6 +327,81 @@ def _stage3_kraken(
         n_pairs=n_pairs,
         kraken_sims=kraken_sims,
         kraken_temp=kraken_temp,
+        n_boot=n_boot,
+        expect_encoding=expect_encoding,
+    )
+
+
+# ── Stage 3b: strix-g128 eval ────────────────────────────────────────────────
+
+
+def _run_strix_eval(
+    ckpt_path: str,
+    book_r5: str,
+    out_dir: str,
+    strix_ckpt: str,
+    n_pairs: int = 32,
+    strix_n_sims: int = 128,
+    n_boot: int = 2000,
+    expect_encoding: str = "v6_live2_ls",
+) -> Dict[str, Any]:
+    """Run strix-g128 bar (128 sims, Gumbel-AZ, 32 pairs). Returns result dict."""
+    from scripts.evalfair.head_vs_strix import run_head_vs_strix
+    from scripts.evalfair.book import load_book
+
+    book = load_book(Path(book_r5))
+    return run_head_vs_strix(
+        ckpt=ckpt_path,
+        book=book,
+        out_dir=out_dir,
+        strix_ckpt=strix_ckpt,
+        strix_n_sims=strix_n_sims,
+        n_pairs=n_pairs,
+        n_boot=n_boot,
+        book_seed=book.get("seed", 20260710),
+        expect_encoding=expect_encoding,
+    )
+
+
+def _stage3b_strix(
+    ckpt_path: str,
+    out_dir: str,
+    book_r5: Optional[str],
+    with_strix: bool,
+    strix_ckpt: str,
+    n_pairs: int = 32,
+    strix_n_sims: int = 128,
+    n_boot: int = 2000,
+    expect_encoding: str = "v6_live2_ls",
+) -> Dict[str, Any]:
+    """Gate and run strix-g128 eval. Returns dict with 'skipped' + optional result fields.
+
+    Mirrors _stage3_kraken exactly: skip-with-reason on flag / absent-asset / no-book.
+    When enabled, delegates to strix_g128_child.py in strix's own venv (subprocess).
+    """
+    if not with_strix:
+        return {"skipped": True, "reason": "with_strix=False (default OFF; pass --with-strix to enable)"}
+
+    if not Path(strix_ckpt).exists():
+        return {
+            "skipped": True,
+            "reason": f"strix asset absent: {strix_ckpt} (tie to absent weights — run3 from day one)",
+        }
+
+    if book_r5 is None:
+        return {"skipped": True, "reason": "no --book-r5 supplied; strix needs r5 book"}
+
+    result_path = Path(out_dir) / "result.json"
+    if result_path.exists():
+        return json.loads(result_path.read_text())
+
+    return _run_strix_eval(
+        ckpt_path=ckpt_path,
+        book_r5=book_r5,
+        out_dir=out_dir,
+        strix_ckpt=strix_ckpt,
+        n_pairs=n_pairs,
+        strix_n_sims=strix_n_sims,
         n_boot=n_boot,
         expect_encoding=expect_encoding,
     )
@@ -433,6 +520,7 @@ def _build_wp3_row(
     vh_row: Dict[str, Any],
     d5_result: Dict[str, Any],
     kraken_result: Dict[str, Any],
+    strix_result: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Assemble the per-bar WP3 series row."""
     # D5 fields
@@ -448,6 +536,15 @@ def _build_wp3_row(
     else:
         wr_kraken = kraken_result.get("wr_head")
         ci_kraken = kraken_result.get("pair_ci")
+
+    # Strix-g128 fields (optional bar — None when --with-strix absent or skipped)
+    _strix = strix_result or {}
+    if _strix.get("skipped") or not _strix:
+        wr_strix = None
+        ci_strix = None
+    else:
+        wr_strix = _strix.get("wr_head")
+        ci_strix = _strix.get("pair_ci")
 
     return {
         "step": step or vh_row.get("step"),
@@ -472,7 +569,56 @@ def _build_wp3_row(
         # Kraken strength
         "wr_kraken": wr_kraken,
         "pair_ci_kraken": ci_kraken,
+        # Strix-g128 strength (D-K ceiling bar; None when --with-strix absent)
+        "wr_strix": wr_strix,
+        "pair_ci_strix": ci_strix,
     }
+
+
+def _print_budget_table(
+    n_ckpts: int,
+    skip_kraken: bool,
+    with_strix: bool,
+    kraken_n_pairs: int,
+    strix_n_pairs: int,
+    kraken_sims: int,
+    strix_n_sims: int,
+) -> None:
+    """Print per-bar budget (pairs x games, est wall) for every active bar.
+
+    Wall estimates (laptop CPU, single-threaded, based on D-K timing report):
+      d5 (SealBot depth-5): ~0.05 s/ply, 60 plies, 2 games/pair -> ~6 s/pair
+      kraken-MCTS-200: ~0.25 s/move, 60 plies, 2 games/pair -> ~30 s/pair
+      strix-g128: ~0.57 s/stone-search, 2 stones/turn, 30 turns, 2 games/pair -> ~68 s/pair
+    These are ROUGH estimates; actual wall depends on position/hardware.
+    """
+    print("\n[mantis] Per-bar budget:")
+    d5_pairs = 64
+    d5_games = d5_pairs * 2
+    d5_wall_est = d5_games * 60 * 0.05  # ~360 s
+    print(f"  {'d5 (SealBot-d5)':30s}: {d5_pairs} pairs x {d5_games} games  est ~{d5_wall_est/60:.0f} min/ckpt")
+
+    if not skip_kraken:
+        k_games = kraken_n_pairs * 2
+        k_wall_est = k_games * 60 * 0.25  # ~30 s/pair
+        print(f"  {'kraken-MCTS-'+str(kraken_sims):30s}: {kraken_n_pairs} pairs x {k_games} games  est ~{k_wall_est/60:.0f} min/ckpt")
+    else:
+        print(f"  {'kraken':30s}: SKIPPED (--skip-kraken)")
+
+    if with_strix:
+        s_games = strix_n_pairs * 2
+        s_wall_est = strix_n_pairs * 2 * 30 * 2 * 0.57  # ~68 s/pair
+        print(f"  {'strix-g128 (D-K ceiling +313 Elo)':30s}: {strix_n_pairs} pairs x {s_games} games  est ~{s_wall_est/60:.0f} min/ckpt  [venv delegation]")
+    else:
+        print(f"  {'strix-g128':30s}: SKIPPED (default OFF; pass --with-strix to enable)")
+
+    total_min_per_ckpt = d5_wall_est / 60
+    if not skip_kraken:
+        total_min_per_ckpt += (kraken_n_pairs * 2 * 60 * 0.25) / 60
+    if with_strix:
+        total_min_per_ckpt += (strix_n_pairs * 2 * 30 * 2 * 0.57) / 60
+    print(f"  {'TOTAL est':30s}: ~{total_min_per_ckpt:.0f} min/ckpt x {n_ckpts} ckpts = ~{total_min_per_ckpt*n_ckpts:.0f} min")
+    print()
 
 
 def run_pull_eval(
@@ -482,6 +628,7 @@ def run_pull_eval(
     book_r4: Optional[str],
     book_r5: Optional[str],
     skip_kraken: bool = False,
+    with_strix: bool = False,
     workers: int = 1,
     n_boot: int = 2000,
     expect_encoding: str = "v6_live2_ls",
@@ -494,9 +641,12 @@ def run_pull_eval(
     kraken_n_pairs: int = 32,
     kraken_sims: int = 200,
     kraken_temp: float = 0.0,
+    strix_ckpt: Optional[str] = None,
+    strix_n_pairs: int = 32,
+    strix_n_sims: int = 128,
     t7_series_out: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
-    """Process each checkpoint in order: Stage 1 -> Stage 2 -> Stage 3 -> Stage 4.
+    """Process each checkpoint in order: Stage 1 -> Stage 2 -> Stage 3 -> Stage 3b -> Stage 4.
 
     Serial, niced. workers=1 enforced (load-34 crash record at higher values).
     Returns list of emitted WP3 series rows.
@@ -505,17 +655,35 @@ def run_pull_eval(
       - Stage 1 T7 rows -> t7_series_out  (default: reports/e1/t7_value_health_series.jsonl)
       - Stage 4 WP3 rows -> series_out    (default: reports/e1/wp3_series.jsonl)
     These are SEPARATE files to avoid incompatible-schema dual-write.
+
+    strix-g128 bar (Stage 3b): gated behind with_strix=True (default OFF).
+    When enabled, delegates to strix_g128_child.py in strix's dedicated venv.
+    Byte-identical to prior behavior when with_strix=False.
     """
     workers = 1  # mandatory — load-34 crash on record at higher
 
     default_kraken = str(_REPO / "checkpoints/external/kraken_v1.pt")
     kraken_path = kraken_asset or default_kraken
 
+    default_strix = str(_REPO / "strix_checkpoint_00237000.pt")
+    strix_path = strix_ckpt or default_strix
+
     # Stage 1 T7 rows go to a dedicated file (separate schema from WP3)
     t7_path = str(
         Path(t7_series_out)
         if t7_series_out is not None
         else _REPO / "reports/e1/t7_value_health_series.jsonl"
+    )
+
+    # Budget table: print once before processing
+    _print_budget_table(
+        n_ckpts=len(ckpt_paths),
+        skip_kraken=skip_kraken,
+        with_strix=with_strix,
+        kraken_n_pairs=kraken_n_pairs,
+        strix_n_pairs=strix_n_pairs,
+        kraken_sims=kraken_sims,
+        strix_n_sims=strix_n_sims,
     )
 
     emitted: List[Dict[str, Any]] = []
@@ -596,6 +764,34 @@ def run_pull_eval(
                 flush=True,
             )
 
+        # Stage 3b: strix-g128 eval (optional D-K ceiling bar)
+        strix_out_dir = str(Path(retro_out) / stem / "strix_g128")
+        print(
+            f"[mantis] Stage 3b: strix-g128 eval (with_strix={with_strix}, asset_exists={Path(strix_path).exists()}) ...",
+            flush=True,
+        )
+        strix_result = _stage3b_strix(
+            ckpt_path=ckpt_path,
+            out_dir=strix_out_dir,
+            book_r5=book_r5,
+            with_strix=with_strix,
+            strix_ckpt=strix_path,
+            n_pairs=strix_n_pairs,
+            strix_n_sims=strix_n_sims,
+            n_boot=n_boot,
+            expect_encoding=expect_encoding,
+        )
+        if strix_result.get("skipped"):
+            print(f"[mantis] Stage 3b skipped: {strix_result.get('reason')}", flush=True)
+        else:
+            wr_s = strix_result.get("wr_head", float("nan"))
+            ci_s = strix_result.get("pair_ci", [float("nan"), float("nan")])
+            print(
+                f"[mantis] Stage 3b done: WR_head={wr_s:.3f}  CI=[{ci_s[0]:.3f},{ci_s[1]:.3f}]  "
+                f"(vs strix-g128 +313 Elo D-K ceiling)",
+                flush=True,
+            )
+
         # Stage 4: assemble + emit per-bar WP3 row to series_out (WP3 schema only)
         wp3_row = _build_wp3_row(
             ckpt_path=ckpt_path,
@@ -604,6 +800,7 @@ def run_pull_eval(
             vh_row=vh_row,
             d5_result=d5_result,
             kraken_result=kraken_result,
+            strix_result=strix_result,
         )
         append_series_row(Path(series_out), wp3_row)
         emitted.append(wp3_row)
@@ -615,7 +812,8 @@ def run_pull_eval(
             f"[mantis] Step {step}: verdict bar "
             f"M1={wp3_row.get('mean_v_on_losses'):.4f}  "
             f"WR_d5={wp3_row.get('wr_d5'):.3f}  "
-            f"WR_kraken={wp3_row.get('wr_kraken')}",
+            f"WR_kraken={wp3_row.get('wr_kraken')}  "
+            f"WR_strix={wp3_row.get('wr_strix')}",
             flush=True,
         )
 
@@ -633,7 +831,7 @@ def run_pull_eval(
 
 def main() -> None:
     ap = argparse.ArgumentParser(
-        description="WP3 mantis on-demand external eval reader (value-health + d5 + kraken)"
+        description="WP3 mantis on-demand external eval reader (value-health + d5 + kraken + optional strix-g128)"
     )
     # Checkpoint selection
     ap.add_argument("--ckpt", default=None, help="Target a specific checkpoint .pt")
@@ -674,6 +872,23 @@ def main() -> None:
         default=str(_REPO / "checkpoints/external/kraken_v1.pt"),
         dest="kraken_asset",
     )
+
+    # Strix-g128 (optional D-K ceiling bar)
+    ap.add_argument("--with-strix", action="store_true", dest="with_strix",
+                    help="Enable Stage 3b strix-g128 bar (D-K ceiling +313 Elo). "
+                         "Requires strix venv (hexo_rs + torch_geometric) at "
+                         "STRIX_REPO/.venv (default /home/timmy/Work/Hexo/hexo-strix). "
+                         "Default OFF — run3 bar from day one.")
+    ap.add_argument(
+        "--strix-ckpt",
+        default=str(_REPO / "strix_checkpoint_00237000.pt"),
+        dest="strix_ckpt",
+        help="strix-g128 checkpoint path (default: strix_checkpoint_00237000.pt in repo root)",
+    )
+    ap.add_argument("--strix-n-pairs", type=int, default=32, dest="strix_n_pairs",
+                    help="Number of pairs for strix-g128 bar (default: 32)")
+    ap.add_argument("--strix-n-sims", type=int, default=128, dest="strix_n_sims",
+                    help="strix Gumbel sim budget (default: 128 — D-K canonical eval tier)")
 
     # Vast pull
     ap.add_argument("--vast-host", default=None, dest="vast_host",
@@ -741,6 +956,7 @@ def main() -> None:
         book_r4=args.book_r4,
         book_r5=args.book_r5,
         skip_kraken=args.skip_kraken,
+        with_strix=args.with_strix,
         workers=1,
         n_boot=args.n_boot,
         expect_encoding=args.expect_encoding,
@@ -749,6 +965,9 @@ def main() -> None:
         games_path=args.games_path,
         no_sha_check=args.no_sha_check,
         kraken_asset=args.kraken_asset,
+        strix_ckpt=args.strix_ckpt,
+        strix_n_pairs=args.strix_n_pairs,
+        strix_n_sims=args.strix_n_sims,
         t7_series_out=args.t7_series_out,
     )
 

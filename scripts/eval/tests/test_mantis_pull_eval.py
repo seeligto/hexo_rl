@@ -521,6 +521,211 @@ def test_e2e_two_ckpts_end_to_end_skip_kraken(tmp_path: Path) -> None:
         done.unlink()  # restore so re-running the test suite doesn't skip these ckpts
 
 
+# ── unit tests: strix-g128 flag (Stage 3b) ────────────────────────────────────
+
+
+def test_with_strix_default_off_is_noop(tmp_path: Path) -> None:
+    """Default run (with_strix=False): strix stage skipped, WP3 row is byte-identical to prior.
+
+    Regression: existing bars (value-health, d5, kraken) must be unchanged when --with-strix absent.
+    """
+    from scripts.eval.mantis_pull_eval import run_pull_eval
+
+    ckpt = _stub_ckpt(tmp_path / "checkpoint_00050000.pt", step=50000)
+    series_out = tmp_path / "wp3_series.jsonl"
+    t7_out = tmp_path / "t7_series.jsonl"
+
+    fake_vh = {
+        "step": 50000, "arm": "scalar", "ckpt_sha": "abc", "encoding": "v6_live2_ls",
+        "mean_v_on_losses": -0.5, "ece": 0.3, "tail_mass_auc": 0.6,
+        "decoded_auc": 0.7, "false_pessimism": 0.1,
+        "n_loss": 41, "n_safe": 651,
+    }
+    fake_d5 = {
+        "wr": 0.42, "pair_ci": [0.35, 0.50], "eff_n": 64,
+        "radius": 4, "per_pair_scores": [[1, 0, 1]],
+    }
+
+    strix_called = []
+
+    def fake_strix(*a, **kw):
+        strix_called.append(1)
+        return {}
+
+    with (
+        patch("scripts.eval.mantis_pull_eval.stage1_value_health", return_value=fake_vh),
+        patch("scripts.eval.mantis_pull_eval.stage2_d5_eval", return_value=fake_d5),
+        patch("scripts.eval.mantis_pull_eval._stage3_kraken", return_value={"skipped": True, "reason": "test"}),
+        patch("scripts.eval.mantis_pull_eval._run_strix_eval", fake_strix),
+    ):
+        rows = run_pull_eval(
+            ckpt_paths=[str(ckpt)],
+            series_out=str(series_out),
+            retro_out=str(tmp_path / "retro"),
+            book_r4=None,
+            book_r5=None,
+            skip_kraken=True,
+            with_strix=False,  # DEFAULT
+            t7_series_out=str(t7_out),
+        )
+
+    # strix eval must never be called when with_strix=False
+    assert strix_called == [], "_run_strix_eval must not be called when with_strix=False"
+
+    assert len(rows) == 1
+    row = rows[0]
+    # Strix fields must be None (skipped) in the WP3 row
+    assert row["wr_strix"] is None, "wr_strix must be None when with_strix=False"
+    assert row["pair_ci_strix"] is None, "pair_ci_strix must be None when with_strix=False"
+
+    # Existing bars unchanged
+    assert row["wr_d5"] == fake_d5["wr"]
+    assert row["wr_kraken"] is None  # kraken skipped in this test
+
+
+def test_with_strix_flag_calls_strix_eval(tmp_path: Path) -> None:
+    """With with_strix=True and asset present, _run_strix_eval is called once per ckpt."""
+    from scripts.eval.mantis_pull_eval import run_pull_eval
+
+    ckpt = _stub_ckpt(tmp_path / "checkpoint_00050000.pt", step=50000)
+    series_out = tmp_path / "wp3_series.jsonl"
+    t7_out = tmp_path / "t7_series.jsonl"
+    # Create a fake strix checkpoint so the asset-exists check passes
+    strix_ckpt = tmp_path / "strix_checkpoint_00237000.pt"
+    strix_ckpt.write_bytes(b"fake_strix")
+    book_r5 = tmp_path / "book_r5.json"
+    book_r5.write_text('{"book_id": "test", "radius_stage": 5, "seed": 42, "openings": []}')
+
+    fake_vh = {
+        "step": 50000, "arm": "scalar", "ckpt_sha": "abc", "encoding": "v6_live2_ls",
+        "mean_v_on_losses": -0.5, "ece": 0.3, "tail_mass_auc": 0.6,
+        "decoded_auc": 0.7, "false_pessimism": 0.1,
+        "n_loss": 41, "n_safe": 651,
+    }
+    fake_d5 = {
+        "wr": 0.42, "pair_ci": [0.35, 0.50], "eff_n": 64,
+        "radius": 4, "per_pair_scores": [[1, 0, 1]],
+    }
+    fake_strix_result = {
+        "wr_head": 0.22, "pair_ci": [0.12, 0.32], "n": 64, "eff_n": 60,
+        "n_pairs": 32, "opponent": "strix-g128",
+    }
+
+    strix_calls = []
+
+    def fake_run_strix(*a, **kw):
+        strix_calls.append(kw)
+        return fake_strix_result
+
+    with (
+        patch("scripts.eval.mantis_pull_eval.stage1_value_health", return_value=fake_vh),
+        patch("scripts.eval.mantis_pull_eval.stage2_d5_eval", return_value=fake_d5),
+        patch("scripts.eval.mantis_pull_eval._stage3_kraken", return_value={"skipped": True, "reason": "test"}),
+        patch("scripts.eval.mantis_pull_eval._run_strix_eval", fake_run_strix),
+    ):
+        rows = run_pull_eval(
+            ckpt_paths=[str(ckpt)],
+            series_out=str(series_out),
+            retro_out=str(tmp_path / "retro"),
+            book_r4=None,
+            book_r5=str(book_r5),
+            skip_kraken=True,
+            with_strix=True,
+            strix_ckpt=str(strix_ckpt),
+            t7_series_out=str(t7_out),
+        )
+
+    assert len(strix_calls) == 1, "_run_strix_eval must be called exactly once per ckpt"
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["wr_strix"] == fake_strix_result["wr_head"], "wr_strix must carry strix result"
+    assert row["pair_ci_strix"] == fake_strix_result["pair_ci"]
+
+
+def test_strix_absent_asset_skips_with_reason(tmp_path: Path) -> None:
+    """When strix checkpoint absent and with_strix=True, stage skips with reason (non-fatal)."""
+    from scripts.eval.mantis_pull_eval import _stage3b_strix
+
+    result = _stage3b_strix(
+        ckpt_path="dummy.pt",
+        out_dir=str(tmp_path),
+        book_r5=None,
+        with_strix=True,
+        strix_ckpt=str(tmp_path / "does_not_exist.pt"),
+    )
+    assert result["skipped"] is True
+    assert "absent" in result["reason"].lower() or "missing" in result["reason"].lower()
+
+
+def test_strix_with_strix_false_skips_immediately(tmp_path: Path) -> None:
+    """_stage3b_strix returns skipped immediately when with_strix=False."""
+    from scripts.eval.mantis_pull_eval import _stage3b_strix
+
+    called = []
+
+    def fake_strix_inner(*a, **kw):
+        called.append(1)
+        return {}
+
+    with patch("scripts.eval.mantis_pull_eval._run_strix_eval", fake_strix_inner):
+        result = _stage3b_strix(
+            ckpt_path="dummy.pt",
+            out_dir=str(tmp_path),
+            book_r5="dummy_book.json",
+            with_strix=False,
+            strix_ckpt=str(tmp_path / "fake.pt"),
+        )
+
+    assert called == [], "_run_strix_eval must not be called when with_strix=False"
+    assert result["skipped"] is True
+    assert "with_strix=False" in result["reason"]
+
+
+def test_strix_wp3_row_has_strix_fields(tmp_path: Path) -> None:
+    """WP3 row must carry wr_strix and pair_ci_strix (both None when skipped)."""
+    from scripts.eval.mantis_pull_eval import _build_wp3_row
+
+    vh = {
+        "step": 50000, "arm": "scalar", "ckpt_sha": "abc", "encoding": "v6_live2_ls",
+        "mean_v_on_losses": -0.5, "ece": 0.3, "tail_mass_auc": 0.6,
+        "decoded_auc": 0.7, "false_pessimism": 0.1, "n_loss": 41, "n_safe": 651,
+    }
+    d5 = {"wr": 0.42, "pair_ci": [0.35, 0.50], "eff_n": 64, "radius": 4, "per_pair_scores": []}
+    kraken = {"skipped": True, "reason": "test"}
+
+    # Default: strix_result=None -> strix fields are None
+    row_default = _build_wp3_row("ck.pt", 50000, "scalar", vh, d5, kraken, strix_result=None)
+    assert "wr_strix" in row_default, "wr_strix must be present in WP3 row"
+    assert "pair_ci_strix" in row_default, "pair_ci_strix must be present in WP3 row"
+    assert row_default["wr_strix"] is None
+    assert row_default["pair_ci_strix"] is None
+
+    # With strix result: fields populated
+    strix_result = {"wr_head": 0.25, "pair_ci": [0.15, 0.35]}
+    row_with = _build_wp3_row("ck.pt", 50000, "scalar", vh, d5, kraken, strix_result=strix_result)
+    assert row_with["wr_strix"] == 0.25
+    assert row_with["pair_ci_strix"] == [0.15, 0.35]
+
+
+def test_strix_no_book_r5_skips_with_reason(tmp_path: Path) -> None:
+    """When book_r5 is None and with_strix=True, stage skips with reason."""
+    from scripts.eval.mantis_pull_eval import _stage3b_strix
+
+    # Create a fake strix ckpt so asset-exists check passes
+    fake_ckpt = tmp_path / "strix.pt"
+    fake_ckpt.write_bytes(b"fake")
+
+    result = _stage3b_strix(
+        ckpt_path="dummy.pt",
+        out_dir=str(tmp_path),
+        book_r5=None,  # no book
+        with_strix=True,
+        strix_ckpt=str(fake_ckpt),
+    )
+    assert result["skipped"] is True
+    assert "book" in result["reason"].lower() or "r5" in result["reason"].lower()
+
+
 @pytest.mark.integration
 @pytest.mark.slow
 def test_d5_248k_matches_cached_result(tmp_path: Path) -> None:
