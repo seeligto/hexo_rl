@@ -563,7 +563,7 @@ Do not re-litigate. Each row points at the § that closed it.
 | §S185 | The residual ~44% `legal_moves_set` self-time is `cells.contains_key`-dominated (the §S184 post-mortem's interim inference) | §S185 laptop flamegraph | `FxHashSet::insert` 56.8% vs `contains_key` 27.7% — insert is dominant. δ's failure was a fix-design error, not a contains_key mechanism. |
 | §S186 | Strategy β: incremental `legal_cov` delta maintenance amortizes below the once-per-leaf rebuild | §S186 vast + laptop bench | −49.5% sims/s. The delta runs once per descent *step* (`apply_move` ×depth + `undo_move` ×2·depth), not once per leaf — de-amortized to ~3× the rebuild's work, on the hot path. The residual `legal_moves_set` cost is a structural floor; see the "Perf-investigation arc" appendix. |
 | §D-LADDER (2026-06-24) | The d1m 150k+ stall is a colony-attractor / off-window divergence (self-play-strong-but-SealBot-weak mid cluster) | §D-LADDER fixed-depth-SealBot reproduction | The "SealBot exploits the 150k mid cluster" trajectory FLIPPED between a wall-clock time-limited bar (s150k WR 0.35) and a reproducible fixed-depth-5 bar (s150k 0.55) → a SealBot-instance artifact, NOT a model off-window defect. The single-axis model⊥minimax intransitivity is itself real + reproducible (transitive-null P≈0.003→0.004, 8/9 cycles SealBot-routed) but its specific shape is bar-dependent. Endpoint verdict = TRUE-STALL (deploy-matched Gumbel@150 self-ladder 120k→226k flat; brief s200k peak not held). |
-| §D-STRIX S3 (2026-07-02) | Custom CUDA kernel (hexo-strix/Vladdy pattern) would speed HeXO forward path | §D-STRIX S3 verdict, RED-TEAM confirmed | Their kernel solves GNN variable-size ragged batching — a problem HeXO's dense CNN+attention does not have. K-cluster multi-window batching varies batch COUNT, not tensor SHAPE (fixed-geometry windows `torch.cat`'d on batch dim; `hexo_rl/selfplay/inference.py`) — the standard variable-N case cuDNN/flash already handles. If forward-throughput ever binds: torch.compile → smaller net → quantized eval, in that order. |
+| §D-STRIX S3 (2026-07-02) | Custom CUDA kernel (hexo-strix/Vladdy pattern) would speed HeXO forward path | §D-STRIX S3 verdict, RED-TEAM confirmed | Their kernel solves GNN variable-size ragged batching — a problem HeXO's dense CNN+attention does not have. K-cluster multi-window batching varies batch COUNT, not tensor SHAPE (fixed-geometry windows `torch.cat`'d on batch dim; `hexo_rl/selfplay/inference.py`) — the standard variable-N case cuDNN/flash already handles. If forward-throughput ever binds: torch.compile → smaller net → quantized eval, in that order. **[SCOPE (D-L WP2, 2026-07-13): this row is CUDA-kernel / ragged-batch-perf ONLY — it does NOT adjudicate the axis-graph REPRESENTATION, which was banked NOTE-ONLY and never falsified. Representation status advanced to RE-OPENED pending D-L WP3 probe; see `docs/designs/gnn_readjudication.md`. Kernel verdict here unchanged.]** |
 
 
 ### Consolidated Falsified-Register additions (relocated from split-out phase bodies)
@@ -2893,6 +2893,30 @@ than briefed).
 caveat applies to operator's own wins over their bot too, n undocumented" — VOID. No head-to-head
 vs hexo-strix (or its bot) exists at all; strength ordering vs hexo-strix = UNKNOWN in both
 directions, not an undocumented-n result.
+
+### §D-STRIX axis-graph re-adjudication (2026-07-13, D-L WP2) — representation card RE-OPENED (probe-gated)
+
+Full re-proposal record: `docs/designs/gnn_readjudication.md` (the sanctioned path; register
+discipline). Two dispositions, kept distinct:
+
+- **CUDA kernel (falsified-register row above, §D-STRIX S3): UNCHANGED.** Still correct — HeXO's
+  dense CNN+attention has no ragged-batching problem; the D-K tournament does not touch that
+  premise. A scope footnote was added to the register row so it cannot be misread as an
+  architecture kill.
+- **Axis-graph line-topology REPRESENTATION card (banked NOTE-ONLY / restart-gated above): status
+  advanced → `RE-OPENED pending D-L WP3 probe`.** The 2026-07-02 bank explicitly did NOT falsify
+  it ("frozen-trunk context does not formally falsify from-scratch"); it deferred on absence of a
+  measured strength read. That blocker is now removed by the D-K bridge tournament:
+  strix-g128 **#1 deploy at +313 Elo** (`reports/tourney/TOURNAMENT.md`); strix-**raw** **#1 at
+  +121 Elo**, a **+229 raw gap** over mantis-261k-raw (`argmax/ARGMAX_FINAL.md`, after the
+  turn-assembly fidelity fix re-verified 18/18); **222,146 params**, 33.8 ms/turn. A large share
+  of strix's strength lives in the net, not only search.
+
+The re-open asserts only that the question now warrants a discriminating probe — NOT that the
+architecture works. Discriminator = D-L WP3 axis-graph BC-prefit (GNN-BC vs CNN-BC, matched;
+`docs/designs/gnn_bc_probe_design.md`), frozen verdicts ARCH-DOMINANT / ARCH-NULL / MIXED. run3's
+primary-variable decision is deferred to the D-L convene (after WP1 + WP3); this addendum does not
+change it. Nothing deleted here; history preserved.
 
 ## §D-EVALGATE — eval-side encoding-inference gate (G1) + record corrections (G2) + head-to-head protocol (G3) — 2026-07-03
 
