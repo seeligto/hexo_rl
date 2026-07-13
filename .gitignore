@@ -215,3 +215,5 @@ scripts/migrations/2026_05_12_checkpoint_manifest.json
 # D-H CONSOLIDATE (2026-07-11) — tool cache + stray root checkpoint, never committed
 /.superpowers/
 /strix_checkpoint_*.pt
+# D-K tourney (2026-07-12) — competitor weights live at repo root, never committed (weights via HF/vendor, not git)
+/shrimp_*.pt
