@@ -28,7 +28,7 @@ import json
 import random
 import sys
 import time
-from collections import deque
+from collections import deque, namedtuple
 from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 from typing import Callable, Iterable, Iterator, List
@@ -72,10 +72,49 @@ def _gnn_example(pos: BcPosition):
     return g, target_local, pos.weight
 
 
-def _collate_gnn(examples, device):
-    """Disjoint-union batch of axis-graphs. Node/edge tensors concatenated with
-    per-graph offsets; legal-node targets remapped into the concatenated legal
-    index space. Returns (x, edge_index, edge_attr, legal_mask, target_idx, w)."""
+# Compact per-example representation (the MEMORY fix): numpy arrays instead of
+# the Python-list dict from build_axis_graph_raw (~100KB/example → ~27KB). Small
+# dtypes (float32/int32/bool). Picklable (namedtuple of np arrays) → workers ship
+# it fast (buffer protocol, not slow list-pickle). ``n_legal`` precomputed so the
+# hot collate never recomputes it.
+CompactGnnExample = namedtuple(
+    "CompactGnnExample", "x edge eattr lmask target_local weight n_legal")
+
+
+def _compact_from_graph(g, target_local: int, weight) -> "CompactGnnExample":
+    """Pack a build_axis_graph_raw dict into a CompactGnnExample (numpy)."""
+    n, fdim, E = g["num_nodes"], g["fdim"], len(g["edge_src"])
+    x = np.asarray(g["features"], dtype=np.float32).reshape(n, fdim)
+    if E:
+        edge = np.asarray([g["edge_src"], g["edge_dst"]], dtype=np.int32)      # (2, E)
+        eattr = np.asarray(g["edge_attr"], dtype=np.float32).reshape(E, 5)
+    else:
+        edge = np.zeros((2, 0), dtype=np.int32)
+        eattr = np.zeros((0, 5), dtype=np.float32)
+    lmask = np.asarray(g["legal_mask"], dtype=np.bool_)
+    return CompactGnnExample(x, edge, eattr, lmask, int(target_local),
+                             np.float32(weight), int(lmask.sum()))
+
+
+def _compact_example(pos: BcPosition):
+    """Build ONE axis-graph example as compact numpy. None if the played move is
+    not a representable legal node (out of radius — rare)."""
+    g = build_axis_graph_raw(
+        pos.stones, pos.current_player, pos.moves_remaining,
+        win_length=_STRIX_WIN_LENGTH, radius=_STRIX_RADIUS,
+        prune_empty_edges=True, threat_features=True, relative_stones=True,
+    )
+    try:
+        target_local = g["legal_coords"].index(pos.move)
+    except ValueError:
+        return None
+    return _compact_from_graph(g, target_local, pos.weight)
+
+
+def _collate_gnn_dict(examples, device):
+    """REFERENCE disjoint-union collate from the raw build_axis_graph_raw dicts.
+    Kept as the equivalence oracle for the fast compact ``_collate_gnn`` below.
+    Returns (x, edge_index, edge_attr, legal_mask, target_idx, legal_offsets, w)."""
     xs, eis, eas, lms = [], [], [], []
     legal_offsets = []          # start index of each graph's legal block (in concat legal order)
     per_graph_targets = []
@@ -105,6 +144,38 @@ def _collate_gnn(examples, device):
     edge_index = torch.cat(eis, 1).to(device)
     edge_attr = torch.cat(eas, 0).to(device)
     legal_mask = torch.cat(lms, 0).to(device)
+    target_idx = torch.tensor(per_graph_targets, dtype=torch.int64, device=device)
+    legal_offsets = torch.tensor(legal_offsets + [legal_count], dtype=torch.int64, device=device)
+    w = torch.tensor(weights, dtype=torch.float32, device=device)
+    return x, edge_index, edge_attr, legal_mask, target_idx, legal_offsets, w
+
+
+def _collate_gnn(examples, device):
+    """FAST disjoint-union collate over CompactGnnExample (numpy). One
+    ``np.concatenate`` + ``torch.from_numpy`` per field (no per-graph
+    ``torch.tensor(list)``). Tensors are IDENTICAL to ``_collate_gnn_dict``."""
+    xs, edges, eas, lms = [], [], [], []
+    legal_offsets = []          # start index of each graph's legal block
+    per_graph_targets = []
+    weights = []
+    node_offset = 0
+    legal_count = 0
+    for e in examples:
+        xs.append(e.x)
+        # offset this graph's LOCAL edge indices into the concatenated node space
+        edges.append(e.edge + np.int32(node_offset) if e.edge.shape[1] else e.edge)
+        eas.append(e.eattr)
+        lms.append(e.lmask)
+        legal_offsets.append(legal_count)
+        per_graph_targets.append(legal_count + e.target_local)
+        weights.append(e.weight)
+        node_offset += e.x.shape[0]
+        legal_count += e.n_legal
+    x = torch.from_numpy(np.concatenate(xs, axis=0)).to(device)
+    edge_index = torch.from_numpy(
+        np.concatenate(edges, axis=1).astype(np.int64, copy=False)).to(device)
+    edge_attr = torch.from_numpy(np.concatenate(eas, axis=0)).to(device)
+    legal_mask = torch.from_numpy(np.concatenate(lms, axis=0)).to(device)
     target_idx = torch.tensor(per_graph_targets, dtype=torch.int64, device=device)
     legal_offsets = torch.tensor(legal_offsets + [legal_count], dtype=torch.int64, device=device)
     w = torch.tensor(weights, dtype=torch.float32, device=device)
@@ -288,19 +359,22 @@ def train(arm: str, lr: float, steps: int, batch_size: int, out: Path,
     # ── GNN dataset MATERIALIZATION (the perf fix) ────────────────────────────
     # build_axis_graph_raw is ~95% of GNN main-thread cost (cProfile), and a
     # 40k-step run re-walks the ~500k-position corpus ~20× — rebuilding every
-    # graph every epoch. Instead build each example ONCE (parallel, order-
-    # preserving via parallel_ordered_map — bit-identical to the serial stream),
-    # hold the list, and re-iterate it per epoch. Steady-state cost drops to
-    # collate+GPU only. RAM ~a few GB for the corpus (box has 60G).
+    # graph every epoch. Instead build each example ONCE as COMPACT numpy
+    # (_compact_example — float32/int32, ~72KB vs the raw dict's ~250KB+ of
+    # Python-list objects; the dict path OOM'd a single 60G box). ~500k examples
+    # ≈ ~36GB → fits ONE dataset at a time; run the two arms SEQUENTIALLY (two
+    # concurrent = ~72GB = OOM). Hold the list, re-iterate per epoch → steady
+    # state is fast numpy collate + GPU only. Parallel build ships numpy via the
+    # buffer protocol (cheap pickle), scaling far better than the dict path.
     gnn_dataset: List = []
     if arm == "gnn" and not smoke:
         t_build = time.time()
         src = HumanGameSource(raw_dir)
         if par > 0:
-            built = parallel_ordered_map(_gnn_example, iter_corpus_positions(src),
+            built = parallel_ordered_map(_compact_example, iter_corpus_positions(src),
                                          par, max_inflight=max(par * 64, batch_size * 4))
         else:
-            built = (_gnn_example(p) for p in iter_corpus_positions(src))
+            built = (_compact_example(p) for p in iter_corpus_positions(src))
         gnn_dataset = [e for e in built if e is not None]
         print(f"[bc] materialized {len(gnn_dataset):,} gnn examples in "
               f"{time.time() - t_build:.1f}s (workers={par})")
@@ -310,7 +384,7 @@ def train(arm: str, lr: float, steps: int, batch_size: int, out: Path,
             if smoke:
                 # single pass, serial — a 3-step build-verify never materializes
                 for pos in iter_corpus_positions(HumanGameSource(raw_dir)):
-                    yield _gnn_example(pos)   # None dropped by _batched
+                    yield _compact_example(pos)   # None dropped by _batched
             else:
                 while True:                   # re-iterate the materialized dataset
                     yield from gnn_dataset

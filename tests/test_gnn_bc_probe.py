@@ -19,7 +19,8 @@ from hexo_rl.probes.gnn_bc.graph_check import axis_edge_set, reference_edge_set
 from hexo_rl.probes.gnn_bc.gnn_bc_net import GnnBcNet
 from hexo_rl.probes.gnn_bc.cnn_bc_net import build_cnn_bc_net, num_params
 from hexo_rl.probes.gnn_bc.train_bc import (
-    _collate_gnn, _gnn_loss, _gnn_loss_reference, parallel_ordered_map,
+    _collate_gnn, _collate_gnn_dict, _compact_from_graph, _gnn_loss,
+    _gnn_loss_reference, parallel_ordered_map,
 )
 
 
@@ -144,23 +145,46 @@ def test_cnn_bot_plays_legal_move(tmp_path):
 # The vectorized _gnn_loss and the parallel graph build must be equivalent to the
 # frozen serial path (D-L WP3 perf fix). _gnn_loss_reference is the oracle.
 
-def _equiv_batch(device="cpu"):
-    """A mixed batch of real axis-graphs (varying legal-set sizes + weights)."""
-    positions = [
-        ({(0, 0): 1, (1, 0): -1, (2, 0): 1}, 1, 2),
-        ({(0, 0): 1, (0, 1): -1}, 1, 2),
-        ({(3, 3): 1, (3, 4): -1, (4, 4): 1, (2, 2): -1}, 1, 2),
-        ({(-1, 2): -1, (0, 0): 1}, 1, 2),
-    ]
-    examples = []
-    for i, (stones, cp, mr) in enumerate(positions):
+_EQUIV_POSITIONS = [
+    ({(0, 0): 1, (1, 0): -1, (2, 0): 1}, 1, 2),
+    ({(0, 0): 1, (0, 1): -1}, 1, 2),
+    ({(3, 3): 1, (3, 4): -1, (4, 4): 1, (2, 2): -1}, 1, 2),
+    ({(-1, 2): -1, (0, 0): 1}, 1, 2),
+]
+
+
+def _equiv_examples():
+    """Same graphs as (dict_examples, compact_examples) — for collate equivalence."""
+    dict_ex, compact_ex = [], []
+    for i, (stones, cp, mr) in enumerate(_EQUIV_POSITIONS):
         g = build_axis_graph_raw(stones, cp, mr, win_length=6, radius=6,
                                  prune_empty_edges=True, threat_features=True,
                                  relative_stones=True)
         n_legal = int(sum(g["legal_mask"]))
         target_local = (i * 3) % n_legal
-        examples.append((g, target_local, float(1 + i)))
-    return _collate_gnn(examples, torch.device(device))
+        w = float(1 + i)
+        dict_ex.append((g, target_local, w))
+        compact_ex.append(_compact_from_graph(g, target_local, w))
+    return dict_ex, compact_ex
+
+
+def _equiv_batch(device="cpu"):
+    """A mixed batch of real axis-graphs, collated via the fast compact path."""
+    _, compact_ex = _equiv_examples()
+    return _collate_gnn(compact_ex, torch.device(device))
+
+
+def test_compact_collate_matches_dict_reference():
+    # The fast numpy collate must produce byte-identical tensors to the dict path.
+    dict_ex, compact_ex = _equiv_examples()
+    ref = _collate_gnn_dict(dict_ex, torch.device("cpu"))
+    got = _collate_gnn(compact_ex, torch.device("cpu"))
+    names = ["x", "edge_index", "edge_attr", "legal_mask",
+             "target_idx", "legal_offsets", "w"]
+    for name, a, b in zip(names, ref, got):
+        assert a.shape == b.shape, (name, a.shape, b.shape)
+        assert a.dtype == b.dtype, (name, a.dtype, b.dtype)
+        torch.testing.assert_close(b, a, rtol=0, atol=0)  # exact — same values
 
 
 def test_vectorized_gnn_loss_matches_reference():

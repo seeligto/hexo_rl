@@ -84,10 +84,14 @@ Fixes landed (equivalence-proven — see `tests/test_gnn_bc_probe.py`):
 1. **Vectorized `_gnn_loss`** — segmented log-softmax over `legal_offsets`, no Python
    loop, no per-graph sync (`_gnn_loss_reference` kept as the oracle; loss value+grad
    match). Removes the GPU sync stall.
-2. **Materialize-once build** — build each example ONCE (parallel, order-preserving via
-   `parallel_ordered_map`, bit-identical to serial — verified 0 mismatches on 800 real
-   positions), hold the ~500k-example list (~a few GB RAM), re-iterate per epoch. Every
-   training step is then collate+GPU only. `--workers` sizes the one-time build pool.
+2. **Materialize-once + COMPACT numpy** — build each example ONCE (parallel, order-
+   preserving via `parallel_ordered_map`, bit-identical to serial — 0 mismatches on 800
+   real positions), stored as compact numpy (`_compact_example`: float32/int32, ~72KB vs
+   the raw dict's ~250KB+ of Python-list objects — the dict path OOM'd a 60G box). ~500k
+   examples ≈ **~36GB → fits ONE dataset; run the two LRs SEQUENTIALLY** (two concurrent ≈
+   72GB = OOM). Re-iterate per epoch → every step is a fast numpy-concat collate
+   (`_collate_gnn`, byte-identical to the dict collate) + GPU only. `--workers` sizes the
+   one-time build pool; numpy ships via the buffer protocol so the build parallelizes well.
 3. **Thread caps (MANDATORY)** — each build worker imports torch, which otherwise grabs
    ~ncores OpenMP threads → `workers × ncores` thread explosion (load hit 42 on a 24-thread
    box, ssh starved). Export `OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1`
