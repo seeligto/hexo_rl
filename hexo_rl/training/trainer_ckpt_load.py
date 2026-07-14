@@ -29,6 +29,8 @@ import structlog
 
 from hexo_rl.model.network import HexTacToeNet
 from hexo_rl.training.checkpoints import (
+    assert_full_gnn_checkpoint_or_raise,
+    infer_gnn_hparams_from_state_dict,
     normalize_model_state_dict_keys,
 )
 from hexo_rl.training.model_defaults import MODEL_HPARAM_DEFAULTS
@@ -593,61 +595,102 @@ def load_checkpoint(
             # idempotent.
             _propagate_encoding_into_config(config, resolved_spec)
 
-    model_hparams = _resolve_model_hparams(cls, config, model_state)
-
-    model = HexTacToeNet(
-        board_size=model_hparams["board_size"],
-        in_channels=model_hparams["in_channels"],
-        res_blocks=model_hparams["res_blocks"],
-        filters=model_hparams["filters"],
-        se_reduction_ratio=model_hparams.get("se_reduction_ratio", MODEL_HPARAM_DEFAULTS["se_reduction_ratio"]),
-        input_channels=config.get("input_channels"),
-        value_head_type=model_hparams.get("value_head_type", MODEL_HPARAM_DEFAULTS["value_head_type"]),
-        n_value_bins=model_hparams.get("n_value_bins", MODEL_HPARAM_DEFAULTS["n_value_bins"]),
+    # WP-4 (C4/C7, contract node 11d) — graph resume branch. `resolved_spec`
+    # is None only for a non-canonical state-dict shape (e.g. a tiny test
+    # fixture); representation defaults to "grid" in that case, preserving
+    # the pre-WP-4 fallback to `_resolve_model_hparams` byte-for-byte.
+    _representation = (
+        getattr(resolved_spec, "representation", "grid") if resolved_spec is not None else "grid"
     )
-    # If input_channels was explicitly nulled (e.g. loading a sweep checkpoint
-    # as a full-18ch anchor), strip input_channel_index from the state dict so
-    # _load_state_dict_strict doesn't reject it as an unexpected key.
-    if config.get("input_channels") is None and "input_channel_index" in model_state:
-        model_state = {k: v for k, v in model_state.items() if k != "input_channel_index"}
+    if _representation == "graph":
+        # Ground-truth gnn_hidden/gnn_num_layers/gnn_policy_hidden/
+        # gnn_value_hidden from the checkpoint's OWN tensor shapes —
+        # single-sourced with the C4 eval loader
+        # (`hexo_rl.eval.checkpoint_loader._build_gnn_model`, same
+        # `infer_gnn_hparams_from_state_dict` helper) — and persist them
+        # into `config` (-> `trainer.config`) so every downstream rebuild
+        # (`lifecycle.build_inference_model` / `build_eval_model`,
+        # `anchor.resolve_anchor`) reconstructs the IDENTICAL architecture,
+        # not `build_net`'s probe-284k defaults (which could silently drift
+        # from what was actually trained — the same F1 class the C7
+        # red-team named for the BC warm-start transfer).
+        assert_full_gnn_checkpoint_or_raise(model_state, checkpoint_label=str(checkpoint_path))
+        from hexo_rl.model.build_net import build_net
+        _gnn_inferred = infer_gnn_hparams_from_state_dict(model_state)
+        # Only the `gnn_*`-prefixed keys are `build_net` config knobs
+        # (node_feat_dim/edge_feat_dim come from the registry spec, not
+        # config; n_value_bins is threaded as a kwarg below) — persist just
+        # those four so a later rebuild (lifecycle/anchor) reads the SAME
+        # ground-truthed hparams, without polluting config with keys no
+        # consumer reads.
+        for _gnn_key, _gnn_val in _gnn_inferred.items():
+            if _gnn_key.startswith("gnn_"):
+                config[_gnn_key] = _gnn_val
+        config["value_head_type"] = config.get("value_head_type", "dist65")
+        if "n_value_bins" in _gnn_inferred:
+            config["n_value_bins"] = _gnn_inferred["n_value_bins"]
+        model = build_net(
+            resolved_spec,
+            config,
+            value_head_type=config["value_head_type"],
+            n_value_bins=config.get("n_value_bins", MODEL_HPARAM_DEFAULTS["n_value_bins"]),
+        )
+    else:
+        model_hparams = _resolve_model_hparams(cls, config, model_state)
 
-    # Sliced warm-start: when loading a full-18ch checkpoint (e.g. bootstrap)
-    # into a sweep variant model with reduced in_channels, slice the input
-    # conv weight along the input dim to keep only the variant's channels.
-    # All other layers (after the first conv) are architecturally identical
-    # so they load directly. Without this branch, the strict load below
-    # would reject the (filters, 18, k, k) → (filters, N<18, k, k) shape
-    # mismatch. The variant model also registers an `input_channel_index`
-    # buffer (initialized in HexTacToeNet.__init__ from input_channels);
-    # full-channel checkpoints don't have it, so we copy the model's own
-    # buffer into the state dict to satisfy the strict-load missing-key
-    # check without disturbing the actual indices.
-    input_channels_cfg = config.get("input_channels")
-    if input_channels_cfg is not None:
-        from hexo_rl.model.network import WIRE_CHANNELS as _WIRE_CHANNELS
-        _conv_key = "trunk.input_conv.weight"
-        _w = model_state.get(_conv_key)
-        _state_was_modified = False
-        if (_w is not None
-                and _w.dim() == 4
-                and _w.shape[1] == _WIRE_CHANNELS
-                and _w.shape[1] != len(input_channels_cfg)):
-            model_state = dict(model_state)
-            model_state[_conv_key] = _w[:, list(input_channels_cfg), :, :].contiguous()
-            _state_was_modified = True
-            log.info(
-                "anchor_input_conv_sliced",
-                src_channels=_WIRE_CHANNELS,
-                dst_channels=len(input_channels_cfg),
-                input_channels=list(input_channels_cfg),
-                msg="warm-starting reduced-channel sweep variant from full-channel checkpoint",
-            )
-        if "input_channel_index" not in model_state and hasattr(model, "input_channel_index"):
-            _idx = model.input_channel_index
-            if isinstance(_idx, torch.Tensor):
-                if not _state_was_modified:
-                    model_state = dict(model_state)
-                model_state["input_channel_index"] = _idx.detach().clone()
+        model = HexTacToeNet(
+            board_size=model_hparams["board_size"],
+            in_channels=model_hparams["in_channels"],
+            res_blocks=model_hparams["res_blocks"],
+            filters=model_hparams["filters"],
+            se_reduction_ratio=model_hparams.get("se_reduction_ratio", MODEL_HPARAM_DEFAULTS["se_reduction_ratio"]),
+            input_channels=config.get("input_channels"),
+            value_head_type=model_hparams.get("value_head_type", MODEL_HPARAM_DEFAULTS["value_head_type"]),
+            n_value_bins=model_hparams.get("n_value_bins", MODEL_HPARAM_DEFAULTS["n_value_bins"]),
+        )
+        # If input_channels was explicitly nulled (e.g. loading a sweep checkpoint
+        # as a full-18ch anchor), strip input_channel_index from the state dict so
+        # _load_state_dict_strict doesn't reject it as an unexpected key.
+        if config.get("input_channels") is None and "input_channel_index" in model_state:
+            model_state = {k: v for k, v in model_state.items() if k != "input_channel_index"}
+
+        # Sliced warm-start: when loading a full-18ch checkpoint (e.g. bootstrap)
+        # into a sweep variant model with reduced in_channels, slice the input
+        # conv weight along the input dim to keep only the variant's channels.
+        # All other layers (after the first conv) are architecturally identical
+        # so they load directly. Without this branch, the strict load below
+        # would reject the (filters, 18, k, k) → (filters, N<18, k, k) shape
+        # mismatch. The variant model also registers an `input_channel_index`
+        # buffer (initialized in HexTacToeNet.__init__ from input_channels);
+        # full-channel checkpoints don't have it, so we copy the model's own
+        # buffer into the state dict to satisfy the strict-load missing-key
+        # check without disturbing the actual indices.
+        input_channels_cfg = config.get("input_channels")
+        if input_channels_cfg is not None:
+            from hexo_rl.model.network import WIRE_CHANNELS as _WIRE_CHANNELS
+            _conv_key = "trunk.input_conv.weight"
+            _w = model_state.get(_conv_key)
+            _state_was_modified = False
+            if (_w is not None
+                    and _w.dim() == 4
+                    and _w.shape[1] == _WIRE_CHANNELS
+                    and _w.shape[1] != len(input_channels_cfg)):
+                model_state = dict(model_state)
+                model_state[_conv_key] = _w[:, list(input_channels_cfg), :, :].contiguous()
+                _state_was_modified = True
+                log.info(
+                    "anchor_input_conv_sliced",
+                    src_channels=_WIRE_CHANNELS,
+                    dst_channels=len(input_channels_cfg),
+                    input_channels=list(input_channels_cfg),
+                    msg="warm-starting reduced-channel sweep variant from full-channel checkpoint",
+                )
+            if "input_channel_index" not in model_state and hasattr(model, "input_channel_index"):
+                _idx = model.input_channel_index
+                if isinstance(_idx, torch.Tensor):
+                    if not _state_was_modified:
+                        model_state = dict(model_state)
+                    model_state["input_channel_index"] = _idx.detach().clone()
 
     cls._load_state_dict_strict(model, model_state)
 

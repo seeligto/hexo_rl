@@ -86,6 +86,105 @@ def infer_model_hparams(state_dict: Dict[str, torch.Tensor]) -> Dict[str, int]:
     return inferred
 
 
+_GNN_CONV_LAYER_PATTERN = re.compile(r"^representation\.convs\.(\d+)\.")
+
+
+def infer_gnn_hparams_from_state_dict(state_dict: Dict[str, torch.Tensor]) -> Dict[str, int]:
+    """Infer `GnnNet` ctor hparams from a graph checkpoint's own tensor shapes.
+
+    Resume-side analog of `infer_model_hparams` (grid): ground-truths the
+    ACTUAL on-disk architecture instead of trusting `gnn_*` config knobs
+    that could silently drift from what was actually trained (the same
+    silent-partial-load risk class the C7 red-team named for the BC
+    warm-start transfer, `docs/designs/gnn_integration_scope.md` §Red-team
+    pass finding 3). Single-sourced (WP-4, contract nodes 11d-e) between
+    `hexo_rl.eval.checkpoint_loader._build_gnn_model` (C4) and
+    `hexo_rl.training.trainer_ckpt_load.load_checkpoint`'s graph resume
+    branch (C7) — both read the SAME shapes off the SAME keys instead of
+    duplicating inference logic.
+
+    Keys read (`hexo_rl.bots.strix_v1_net.RepresentationNetwork` /
+    `PolicyHead`; `hexo_rl.model.gnn_net.GnnDist65ValueHead`):
+      - `representation.input_proj.weight` -> (gnn_hidden, node_feat_dim)
+      - `representation.edge_proj.weight`  -> (gnn_hidden, edge_feat_dim)
+      - `representation.convs.<i>.*`       -> gnn_num_layers = max(i) + 1
+      - `policy_head.mlp.0.weight`         -> (gnn_policy_hidden, head_in)
+      - `value_head.fc1.weight`            -> (gnn_value_hidden, head_in)
+      - `value_head.fc2_bins.weight`       -> (n_value_bins, gnn_value_hidden)
+
+    Any key that is absent is simply omitted from the returned dict —
+    callers merge onto config/registry defaults, mirroring
+    `infer_model_hparams`'s partial-dict contract.
+    """
+    inferred: Dict[str, int] = {}
+
+    input_proj_w = state_dict.get("representation.input_proj.weight")
+    if input_proj_w is not None and input_proj_w.ndim == 2:
+        inferred["gnn_hidden"] = int(input_proj_w.shape[0])
+        inferred["node_feat_dim"] = int(input_proj_w.shape[1])
+
+    edge_proj_w = state_dict.get("representation.edge_proj.weight")
+    if edge_proj_w is not None and edge_proj_w.ndim == 2:
+        inferred["edge_feat_dim"] = int(edge_proj_w.shape[1])
+
+    layer_idxs = {
+        int(m.group(1))
+        for key in state_dict
+        for m in [_GNN_CONV_LAYER_PATTERN.match(key)]
+        if m is not None
+    }
+    if layer_idxs:
+        inferred["gnn_num_layers"] = max(layer_idxs) + 1
+
+    policy_w = state_dict.get("policy_head.mlp.0.weight")
+    if policy_w is not None and policy_w.ndim == 2:
+        inferred["gnn_policy_hidden"] = int(policy_w.shape[0])
+
+    value_w = state_dict.get("value_head.fc1.weight")
+    if value_w is not None and value_w.ndim == 2:
+        inferred["gnn_value_hidden"] = int(value_w.shape[0])
+
+    bins_w = state_dict.get("value_head.fc2_bins.weight")
+    if bins_w is not None and bins_w.ndim == 2:
+        inferred["n_value_bins"] = int(bins_w.shape[0])
+
+    return inferred
+
+
+def assert_full_gnn_checkpoint_or_raise(
+    state_dict: Dict[str, torch.Tensor], *, checkpoint_label: str = "checkpoint",
+) -> None:
+    """Raise a clear, named error when ``state_dict`` looks like a BC-prefit-only
+    graph state dict rather than a full production `GnnNet` checkpoint.
+
+    WP-4 (C4/C7) loaders (`hexo_rl.eval.checkpoint_loader._build_gnn_model`,
+    `hexo_rl.training.trainer_ckpt_load.load_checkpoint`'s graph resume
+    branch) load ONLY full production `GnnNet` checkpoints
+    (representation + policy_head + `GnnDist65ValueHead` all present). The
+    BC-prefit warm-start TRANSFER (representation+policy_head onto a FRESH
+    value head, e.g. `checkpoints/probes/gnn_bc/gnn_bc_040000.pt`) is a
+    separate, not-yet-built loader
+    (`docs/designs/gnn_integration_scope.md` §C7 lead-time table: "GNN
+    warm-start loader (new)") — out of WP-4 scope. A bare `strict=True`
+    load would eventually raise on the missing `value_head.*` keys anyway;
+    this gives the SAME failure a clear diagnosis up front instead of a
+    generic missing-key dump.
+    """
+    has_graph_trunk = "representation.input_proj.weight" in state_dict
+    has_dist65_value_head = "value_head.fc2_bins.weight" in state_dict
+    if has_graph_trunk and not has_dist65_value_head:
+        raise ValueError(
+            f"{checkpoint_label}: graph state dict has representation.*/"
+            "policy_head.* keys but NO value_head.fc2_bins.weight — this "
+            "looks like a BC-prefit-only state dict (e.g. gnn_bc_040000.pt), "
+            "not a full production GnnNet checkpoint. The BC-prefit "
+            "warm-start transfer is a separate, not-yet-built loader "
+            "(docs/designs/gnn_integration_scope.md §C7); this loader only "
+            "resumes/evaluates a FULL GnnNet checkpoint (representation + "
+            "policy_head + value_head all present)."
+        )
+
+
 # §172 A5.1 metadata schema version. Bump if a metadata key is renamed/removed.
 CHECKPOINT_METADATA_SCHEMA_VERSION = 1
 

@@ -19,7 +19,6 @@ from typing import Any, Optional
 import structlog
 import torch
 
-from hexo_rl.model.network import HexTacToeNet
 from hexo_rl.training.trainer import Trainer
 
 log = structlog.get_logger(__name__)
@@ -386,7 +385,7 @@ class AnchorState:
     the loaded checkpoint.
     """
 
-    best_model: Optional[HexTacToeNet]
+    best_model: Optional[torch.nn.Module]
     best_model_step: Optional[int]
     best_model_path: Path
 
@@ -431,7 +430,7 @@ def resolve_anchor(
             "best_model_path", "checkpoints/best_model.pt"
         )
     )
-    best_model: HexTacToeNet | None = None
+    best_model: torch.nn.Module | None = None
     best_model_step: int | None = None
     if eval_pipeline is None:
         return AnchorState(None, None, best_model_path)
@@ -566,7 +565,18 @@ def resolve_anchor(
             msg="No anchor or bootstrap available — initialising best_model.pt from current trainer.model. "
                 "Drop a bootstrap_model.pt (or one of _BOOTSTRAP_ANCHOR_CANDIDATES) into checkpoints/ to anchor wr_best meaningfully.",
         )
-        best_model = HexTacToeNet(
+        # WP-4 (C4, contract node 11c) — single construction authority. See
+        # `hexo_rl.training.orchestrator.init_trainer`'s fresh-run branch for
+        # the full rationale; dispatches on the encoding resolved from
+        # `config` ("grid" -> byte-identical HexTacToeNet(**kwargs), "graph"
+        # -> GnnNet). `config={}` (every pre-WP-4 caller/test) resolves to
+        # the v6 grid default — unchanged behavior.
+        from hexo_rl.encoding import resolve_from_config as _registry_resolve_anchor
+        from hexo_rl.model.build_net import build_net
+        _anchor_spec = _registry_resolve_anchor(config)
+        best_model = build_net(
+            _anchor_spec,
+            config,
             board_size=board_size, res_blocks=res_blocks, filters=filters,
             in_channels=in_channels, input_channels=input_channels,
             se_reduction_ratio=se_reduction_ratio,

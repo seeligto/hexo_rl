@@ -21,7 +21,6 @@ from typing import Any, Optional
 import structlog
 import torch
 
-from hexo_rl.model.network import HexTacToeNet
 from hexo_rl.training.model_defaults import MODEL_HPARAM_DEFAULTS
 from hexo_rl.monitoring.disk_guard import DiskGuard
 from hexo_rl.monitoring.early_game_probe import EarlyGameProbe
@@ -43,6 +42,14 @@ class InfModelArch:
     input_channels: Any
     value_head_type: str = "scalar"
     n_value_bins: int = 65
+    # WP-4 (C4) — resolved registry spec + the `gnn_*` config subset actually
+    # used to build the graph net, threaded through so `build_eval_model`
+    # (which only sees `arch`, not the full config) reconstructs the SAME
+    # architecture `build_inference_model` built. `spec=None` (every pre-WP-4
+    # caller/test that constructs `InfModelArch` directly) defaults to "grid"
+    # in `build_net` — byte-identical to the pre-WP-4 behavior.
+    spec: Any = None
+    gnn_hparams: dict = field(default_factory=dict)
 
 
 def build_inference_model(
@@ -51,7 +58,8 @@ def build_inference_model(
 ) -> tuple[torch.nn.Module, InfModelArch]:
     # ── Inference model — separate instance owned by InferenceServer ──────────
     from hexo_rl.encoding import resolve_from_config as _registry_resolve
-    board_size         = _registry_resolve(trainer.config).trunk_size
+    _spec              = _registry_resolve(trainer.config)
+    board_size         = _spec.trunk_size
     res_blocks         = int(trainer.config.get("res_blocks",         MODEL_HPARAM_DEFAULTS["res_blocks"]))
     filters            = int(trainer.config.get("filters",            MODEL_HPARAM_DEFAULTS["filters"]))
     in_channels        = int(trainer.config.get("in_channels",        MODEL_HPARAM_DEFAULTS["in_channels"]))
@@ -59,11 +67,26 @@ def build_inference_model(
     input_channels     = trainer.config.get("input_channels", None)
     value_head_type    = str(trainer.config.get("value_head_type",    MODEL_HPARAM_DEFAULTS["value_head_type"]))
     n_value_bins       = int(trainer.config.get("n_value_bins",       MODEL_HPARAM_DEFAULTS["n_value_bins"]))
+    # gnn_* hparams (graph path only; harmless no-op dict for a grid run) —
+    # threaded onto `arch` so `build_eval_model` rebuilds the identical GNN
+    # shape without needing the full trainer.config.
+    _gnn_hparams = {
+        k: trainer.config[k] for k in
+        ("gnn_hidden", "gnn_num_layers", "gnn_policy_hidden", "gnn_value_hidden")
+        if k in trainer.config
+    }
 
     _torch_compile_enabled = (
         trainer.config.get("torch_compile", False) and device.type == "cuda"
     )
-    inf_model = HexTacToeNet(
+    # WP-4 (C4, contract node 11b) — single construction authority. See
+    # `hexo_rl.training.orchestrator.init_trainer`'s fresh-run branch for the
+    # full rationale; `_spec.representation` picks HexTacToeNet ("grid",
+    # byte-identical kwargs) vs GnnNet ("graph").
+    from hexo_rl.model.build_net import build_net
+    inf_model = build_net(
+        _spec,
+        trainer.config,
         board_size=board_size,
         in_channels=in_channels,
         input_channels=input_channels,
@@ -100,6 +123,8 @@ def build_inference_model(
         input_channels=input_channels,
         value_head_type=value_head_type,
         n_value_bins=n_value_bins,
+        spec=_spec,
+        gnn_hparams=_gnn_hparams,
     )
     return inf_model, arch
 
@@ -168,8 +193,15 @@ def cuda_stream_audit(
             log.warning("cuda_stream_audit_failed", context="training_thread", error=str(exc))
 
 
-def build_eval_model(arch: InfModelArch, device: torch.device) -> HexTacToeNet:
-    eval_model = HexTacToeNet(
+def build_eval_model(arch: InfModelArch, device: torch.device) -> torch.nn.Module:
+    # WP-4 (C4, contract node 11b) — same `build_net` authority as
+    # `build_inference_model`; `arch.spec`/`arch.gnn_hparams` carry the
+    # dispatch discriminant + graph hparams so this reconstructs the
+    # IDENTICAL architecture (grid or graph) from just `arch`.
+    from hexo_rl.model.build_net import build_net
+    eval_model = build_net(
+        arch.spec,
+        arch.gnn_hparams,
         board_size=arch.board_size, res_blocks=arch.res_blocks, filters=arch.filters,
         in_channels=arch.in_channels, input_channels=arch.input_channels,
         se_reduction_ratio=arch.se_reduction_ratio,

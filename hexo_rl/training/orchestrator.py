@@ -37,7 +37,6 @@ import structlog
 import torch
 
 from engine import ReplayBuffer
-from hexo_rl.model.network import HexTacToeNet
 from hexo_rl.monitoring.events import emit_event
 from hexo_rl.selfplay.utils import N_ACTIONS as _N_ACTIONS
 from hexo_rl.training.batch_assembly import allocate_batch_buffers
@@ -252,8 +251,19 @@ def _resolve_fresh_in_channels(combined_config: dict) -> tuple[int, "list | None
     Sweep-variant support preserved: an `input_channels: [list]` picks a subset
     of the source wire planes and derives in_channels from its length (mutating
     combined_config in-place, as before).
+
+    WP-4 (C4) — `in_channels`/`input_channels` are grid-only concepts (a
+    graph net has `node_feat_dim` instead, resolved from the registry spec
+    inside `build_net`). `resolve_arch`'s `ArchSpec` assumes a non-empty
+    `kept_plane_indices` (`cur_stone_slot`/`opp_stone_slot` lookups) and
+    raises `ValueError` on the graph encoding's empty list — short-circuit
+    entirely for `representation="graph"` and return an inert placeholder;
+    `build_net`'s graph branch never reads either return value.
     """
-    from hexo_rl.encoding import resolve_arch
+    from hexo_rl.encoding import resolve_arch, resolve_from_config
+
+    if getattr(resolve_from_config(combined_config), "representation", "grid") == "graph":
+        return int(combined_config.get("in_channels", 0)), combined_config.get("input_channels")
 
     input_channels_cfg = combined_config.get("input_channels")
     if input_channels_cfg is None:
@@ -674,7 +684,17 @@ def init_trainer(
     else:
         in_channels_arg, input_channels_cfg = _resolve_fresh_in_channels(combined_config)
         from hexo_rl.training.model_defaults import MODEL_HPARAM_DEFAULTS as _MHPD
-        model = HexTacToeNet(
+        # WP-4 (C4, contract node 11a) — single construction authority.
+        # `build_net` dispatches on `_fresh_spec.representation`: byte-
+        # identical `HexTacToeNet(**kwargs)` for "grid" (every pre-WP-4
+        # encoding); `GnnNet` for "graph" — the SILENT-CORRUPT hole this
+        # closes (a `representation=graph` config used to build a CNN here
+        # unconditionally and self-play it with no error).
+        from hexo_rl.model.build_net import build_net
+        _fresh_spec = _registry_resolve(combined_config)
+        model = build_net(
+            _fresh_spec,
+            combined_config,
             board_size=board_size,
             res_blocks=res_blocks,
             filters=filters,

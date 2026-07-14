@@ -180,6 +180,84 @@ def test_resilient_load_encoding_mismatch_never_quarantines(tmp_path):
     assert corpses == [], f"valid anchor quarantined: {corpses}"
 
 
+# ── GNN-integration WP-4 (C4, contract node 11c) — graph fresh-init ────────
+
+
+@patch("hexo_rl.training.anchor.load_best_model_resilient", return_value=None)
+@patch("hexo_rl.training.anchor.save_best_model_atomic")
+def test_resolve_anchor_fresh_init_graph_builds_gnn_net(mock_save, mock_load, tmp_path):
+    """Pre-WP-4 this branch built a HexTacToeNet UNCONDITIONALLY — a
+    representation=graph config anchored a CNN with no error (contract node
+    11c, the SILENT-CORRUPT hole). `resolve_anchor` now resolves the
+    encoding from `config` and dispatches through `build_net`."""
+    from hexo_rl.model.gnn_net import GnnNet
+
+    device = torch.device("cpu")
+    real_model = GnnNet(hidden=16, num_layers=2, policy_hidden=8, value_hidden=4)
+    trainer = MagicMock(spec=["model", "step", "inference_state_dict"])
+    trainer.model = real_model
+    trainer.step = 3
+    trainer.inference_state_dict.return_value = real_model.state_dict()
+
+    graph_config = {
+        "encoding": "gnn_axis_v1",
+        "value_head_type": "dist65",
+        "gnn_hidden": 16,
+        "gnn_num_layers": 2,
+        "gnn_policy_hidden": 8,
+        "gnn_value_hidden": 4,
+    }
+
+    state = resolve_anchor(
+        eval_pipeline=object(),  # not None -> eval branch
+        eval_ext_config=_ext_cfg(str(tmp_path / "best_model.pt")),
+        inf_model=MagicMock(spec=["in_channels", "load_state_dict"]),
+        trainer=trainer,
+        args=MagicMock(checkpoint_dir=str(tmp_path)),
+        config=graph_config,
+        device=device,
+        # grid-only geometry — ignored by the graph path (contract §"Load-
+        # bearing audit finding": a graph net has no board_size/filters/
+        # res_blocks meaning).
+        board_size=19, res_blocks=1, filters=16,
+        in_channels=8, input_channels=None, se_reduction_ratio=4,
+        value_head_type="dist65", n_value_bins=65,
+    )
+    assert isinstance(state.best_model, GnnNet)
+    assert state.best_model.representation.num_layers == 2
+    assert state.best_model_step == 3
+    mock_save.assert_called_once()
+
+
+def test_resolve_anchor_fresh_init_empty_config_still_grid(tmp_path):
+    """`config={}` (every pre-WP-4 caller) resolves to the v6 grid default —
+    unchanged behavior, no regression from threading `config` into
+    `build_net`."""
+    device = torch.device("cpu")
+    real_model = HexTacToeNet(board_size=5, res_blocks=1, filters=16).to(device)
+    trainer = MagicMock(spec=["model", "step", "inference_state_dict"])
+    trainer.model = real_model
+    trainer.step = 1
+    trainer.inference_state_dict.return_value = real_model.state_dict()
+
+    with (
+        patch("hexo_rl.training.anchor.load_best_model_resilient", return_value=None),
+        patch("hexo_rl.training.anchor.save_best_model_atomic"),
+    ):
+        state = resolve_anchor(
+            eval_pipeline=object(),
+            eval_ext_config=_ext_cfg(str(tmp_path / "best_model.pt")),
+            inf_model=MagicMock(spec=["in_channels", "load_state_dict"]),
+            trainer=trainer,
+            args=MagicMock(checkpoint_dir=str(tmp_path)),
+            config={},
+            device=device,
+            board_size=5, res_blocks=1, filters=16,
+            in_channels=8, input_channels=None, se_reduction_ratio=4,
+        )
+    assert isinstance(state.best_model, HexTacToeNet)
+
+
 def test_resilient_load_foreign_bootstrap_mismatch_skips_not_raises(
     tmp_path, monkeypatch,
 ):
