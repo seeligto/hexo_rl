@@ -36,6 +36,22 @@ wasm = []
 # does not target wasm32-unknown-unknown. Not in `default`: `engine`
 # doesn't depend on this crate yet, so nothing needs it on by default.
 python = ["dep:pyo3"]
+# Native-only JSON parity/bench harness (`src/bin/harness.rs`, `benches/`):
+# pulls serde_json for the position/graph JSON contract the pytest parity test
+# and the criterion bench drive. NEVER combined with `wasm` — serde_json +
+# the bin/bench targets are the non-core, non-wasm surface. `cargo check
+# --features wasm` never builds the bin (required-features unmet) or the bench.
+harness = ["dep:serde_json"]
+
+[[bin]]
+name = "hexo_graph_harness"
+path = "src/bin/harness.rs"
+required-features = ["harness"]
+
+[[bench]]
+name = "build_bench"
+harness = false
+required-features = ["harness"]
 
 [dependencies]
 # Intentionally near-empty. Every dependency added to the SHARED core path
@@ -48,6 +64,15 @@ python = ["dep:pyo3"]
 # engine/src/pyo3/") can share types without a version-skew fight. Not a
 # core-path dependency — never pulled into a native or wasm build.
 pyo3 = { version = "0.28", optional = true }
+# serde_json: optional, gated behind `harness` only (bin + bench). Wasm-clean
+# in principle, but deliberately NOT on the core/wasm path — the JSON contract
+# belongs to the native parity harness, not the builder.
+serde_json = { version = "1.0", optional = true }
+
+[dev-dependencies]
+# Reuses the workspace-cached criterion (engine/Cargo.toml pins 0.8). Dev-dep:
+# only compiled for `cargo bench`, never the lib / wasm check.
+criterion = { version = "0.8", default-features = false }
 
 [lints.clippy]
 pedantic = { level = "warn", priority = -1 }
