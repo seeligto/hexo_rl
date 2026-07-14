@@ -467,6 +467,19 @@ class InferenceServer(threading.Thread):
                         # Segment-softmax in float32 (correct reduced-precision
                         # drift, exactly like the dense path re-normalizes exp()).
                         probs = segment_softmax(policy_logits.float(), batch.legal_offsets)
+                        # Always-on finiteness gate (WP-3 red-team headline): a
+                        # NaN/Inf model output otherwise reaches backup() and
+                        # poisons the tree SILENTLY — fp16 autocast makes this
+                        # reachable in production, and the downstream numeric
+                        # debug_asserts are compiled out of release builds.
+                        if not bool(torch.isfinite(probs).all()) or not bool(
+                            torch.isfinite(value).all()
+                        ):
+                            raise RuntimeError(
+                                "NonFiniteModelOutput: graph forward produced NaN/Inf "
+                                f"(probs finite={bool(torch.isfinite(probs).all())}, "
+                                f"values finite={bool(torch.isfinite(value).all())})"
+                            )
                         probs_np = np.ascontiguousarray(
                             probs.detach().cpu().numpy(), dtype=np.float32
                         )

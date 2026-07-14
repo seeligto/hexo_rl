@@ -917,7 +917,10 @@ fn infer_and_expand_graph(
     let n = leaves.len();
     // Expand frame trunk = spec.trunk_size (`agg_trunk_sz`), which is the SAME
     // trunk the builder used for `policy_dst_slot` (batcher `graph_trunk_size`).
-    debug_assert_eq!(
+    // ALWAYS-ON (graph-only call site; one integer compare per leaf batch —
+    // release builds strip debug_asserts, and a trunk mismatch here misreads
+    // every in-window slot).
+    assert_eq!(
         agg_trunk_sz,
         infer.batcher.graph_trunk_size(),
         "graph trunk mismatch: spec agg_trunk_sz vs batcher graph_trunk_size"

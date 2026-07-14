@@ -484,14 +484,14 @@ pub fn assemble_ls_from_gnn_probs(
     }
 
     // Segmented-softmax invariant: probs already sum to 1 over the legal set.
-    // Loud in debug on a segmentation desync (design §3.4 guard); never renorm.
-    debug_assert!(
-        {
-            let sum: f32 = dense.iter().sum::<f32>() + overflow.values().sum::<f32>();
-            legal_probs.is_empty() || (sum - 1.0).abs() < 1e-3
-        },
-        "assemble_ls_from_gnn_probs: probs do not sum to 1 (segmented-softmax desync)"
-    );
+    // ALWAYS-ON (WP-3 red-team: debug_asserts are inert in the release .so
+    // self-play actually runs) — one f32 sum per position, never renorm.
+    let sum: f32 = dense.iter().sum::<f32>() + overflow.values().sum::<f32>();
+    if !(legal_probs.is_empty() || (sum - 1.0).abs() < 1e-3) {
+        return Err(format!(
+            "assemble_ls_from_gnn_probs: probs sum to {sum} not 1 (segmented-softmax desync)"
+        ));
+    }
 
     Ok(LegalSetPolicy { dense, overflow })
 }
