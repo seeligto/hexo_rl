@@ -178,6 +178,15 @@ standing red-team order.)
 
 ### 2.4 policy_scatter_index — replacing the fixed-policy_len scatter
 
+> **SUPERSEDED for the deploy-policy path (WP-3 ruling, `gnn_inference_seam_design.md` §1,
+> commit daaa21b):** the dense-`[B,362]` output scatter DROPS the 43.55% off-window legal
+> nodes (WP-1 measured) — reproducing the pre-R1 decode handicap the +414 evidence removed.
+> Deploy policy returns RAGGED per-legal-node logits consumed by the existing
+> `LegalSetPolicy` legal-set machinery (option (b)); the dense scatter below remains valid
+> ONLY for consumers that are structurally window-bound. The wire fields
+> (`policy_dst_slot`, `legal_offsets`) are unchanged — `OFF_WINDOW_SLOT = -1` entries are
+> carried, not dropped.
+
 The fixed-`policy_len` scatter break point (`inference_bridge.rs:449` `start=i*policy_len`) is an
 OUTPUT-side assumption; the design keeps the output seam and moves the ragged mapping to the INPUT
 metadata:

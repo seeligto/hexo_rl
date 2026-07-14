@@ -539,3 +539,19 @@ same coord-keyed no-drop discipline this seam establishes.
 - **pd: 10-18** (C3 inference seam, option-b); C8/WP-5 buffer co-designed, excluded.
 
 **SEAM-SOUND — option (b) ruling evidence-bound to the +414 no-drop decode regime.**
+
+---
+
+## §1.4 falsifier — EXECUTED (2026-07-14, dispatcher)
+
+`scripts/research/offwindow_chosen_move_probe.py`, banked `gnn_bc_040000.pt`, 320 real
+self-play positions (`wpa_positions.json`), Rust-harness `policy_dst_slot`:
+
+- off-window **CHOSEN-move** fraction (deploy argmax): **64/320 = 20.0%**
+- mean off-window policy **mass**: **17.5%**
+- off-window CELL fraction sanity: 0.4355 (== WP-1's 43.55%, unit cross-check per §D-COHERENCE)
+
+The option-(a) admissibility bar was <2% chosen-move fraction; measured 20% exceeds it 10×.
+**Option (b) is MANDATORY, not preferred** — a dense-362 deploy seam drops the model's actual
+chosen move in 1 of 5 positions (the pre-R1 handicap class). Ruling upgraded from
+evidence-bound to measurement-confirmed.
