@@ -357,6 +357,11 @@ def expand_auto_paths(config: dict[str, Any], spec: Any) -> None:
     mixing = config.get("mixing")
     if isinstance(mixing, dict) and mixing.get("pretrained_buffer_path") == _AUTO:
         mixing["pretrained_buffer_path"] = str(resolve_corpus_path(spec))
+        # WP0.4 fix-wave FIX-3 (red-team F2): stamp provenance so
+        # `load_pretrained_buffer` can require a sha pin for THIS path —
+        # only <auto>-resolved paths are affected; hardcoded literals never
+        # take this branch and never carry the flag.
+        mixing["_pretrained_buffer_path_auto_resolved"] = True
 
     # Nested: eval_pipeline.opponents.bootstrap_anchor.path
     eval_cfg = config.get("eval_pipeline")

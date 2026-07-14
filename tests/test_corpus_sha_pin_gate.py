@@ -135,3 +135,156 @@ def test_unpinned_encoding_skips_sha_check(tmp_path):
     buf = _load(path)
 
     assert buf is not None
+
+
+# ── FIX-1: sha computed once, sidecar validated without a full array load ───
+
+def test_sha_computed_once_no_full_array_load(tmp_path, monkeypatch):
+    """WP0.4 fix-wave FIX-1 (review Important, batch_assembly.py:203): the
+    belt-and-braces sidecar check must reuse the sha already streamed for
+    the pin comparison — no second sha256 stream, and no eager full-NPZ
+    array materialization via corpus_io._load_arrays (the sidecar check
+    only needs the tiny sidecar JSON + the already-known actual sha)."""
+    path = tmp_path / "corpus.npz"
+    actual_sha = _write_pinned_corpus(path)
+    monkeypatch.setitem(_resolvers._CORPUS_SHA_PINS, "v6", actual_sha)
+
+    from hexo_rl.bootstrap import corpus_io as _cio
+    from hexo_rl.training import batch_assembly as _ba
+
+    _orig_sha = _cio.compute_npz_sha256
+    _orig_load_arrays = _cio._load_arrays
+    sha_calls: list[Path] = []
+    load_arrays_calls: list[Path] = []
+
+    def _counting_sha(p):
+        sha_calls.append(Path(p))
+        return _orig_sha(p)
+
+    def _counting_load_arrays(npz_path):
+        load_arrays_calls.append(Path(npz_path))
+        return _orig_load_arrays(npz_path)
+
+    # Patch both the defining module AND batch_assembly's `from ... import`
+    # binding — either call site would otherwise dodge the counter.
+    monkeypatch.setattr(_cio, "compute_npz_sha256", _counting_sha)
+    monkeypatch.setattr(_ba, "compute_npz_sha256", _counting_sha)
+    monkeypatch.setattr(_cio, "_load_arrays", _counting_load_arrays)
+
+    buf = _load(path)
+
+    assert buf is not None
+    assert len(sha_calls) == 1, (
+        f"compute_npz_sha256 called {len(sha_calls)}x, expected 1 (reuse the "
+        f"streamed sha across the pin check AND the sidecar check)"
+    )
+    assert load_arrays_calls == [], (
+        "sidecar validation must not eager-load the full NPZ array payload "
+        "(corpus_io._load_arrays must not be called)"
+    )
+
+
+# ── FIX-2: pinned encoding + missing/unresolved corpus hard-fails ───────────
+
+def test_pinned_encoding_missing_corpus_raises(tmp_path, monkeypatch):
+    """WP0.4 fix-wave FIX-2 (review Minor / plan-law violation,
+    batch_assembly.py:165-176): a PIN-REGISTERED encoding declares its
+    corpus launch-critical — a missing file must hard ValueError, not warn
+    + silently train corpus-less."""
+    missing_path = tmp_path / "does_not_exist.npz"
+    monkeypatch.setitem(_resolvers._CORPUS_SHA_PINS, "v6", "0" * 64)
+
+    with pytest.raises(ValueError) as excinfo:
+        _load(missing_path)
+
+    msg = str(excinfo.value)
+    assert "v6" in msg
+    assert str(missing_path) in msg
+
+
+def test_pinned_encoding_unexpanded_auto_raises():
+    """FIX-2: an unexpanded "<auto>" literal (e.g. expand_auto_paths never
+    ran, or the key moved under a different config section) must hard-fail
+    for a pinned encoding rather than silently skip the gate."""
+    mixing_cfg = {"pretrained_buffer_path": "<auto>"}
+    config = {"seed": 0, "encoding": "v6_live2_ls"}  # real registry pin
+    emitted: list[dict] = []
+
+    with pytest.raises(ValueError) as excinfo:
+        load_pretrained_buffer(
+            mixing_cfg, config, emitted.append, buffer_size=0, buffer_capacity=0
+        )
+
+    assert "v6_live2_ls" in str(excinfo.value)
+
+
+def test_unpinned_encoding_missing_corpus_still_warns_not_raises(tmp_path):
+    """Back-compat: an unpinned encoding's missing corpus keeps the
+    pre-WP0.4-fix-wave warn+None behavior (no launch-critical guarantee to
+    enforce)."""
+    missing_path = tmp_path / "does_not_exist.npz"
+
+    buf = _load(missing_path)  # default encoding "v6" — unpinned in real registry
+
+    assert buf is None
+
+
+# ── FIX-3: <auto>-resolved corpus for an unpinned encoding hard-fails ───────
+
+def test_auto_resolved_corpus_without_pin_raises(tmp_path):
+    """WP0.4 fix-wave FIX-3 (red-team F2, MEDIUM): a corpus path that came
+    from "<auto>" resolution (flagged by `expand_auto_paths`) for an
+    encoding with NO registered sha pin must hard ValueError — <auto> is
+    exactly the mechanism that lets a one-char encoding typo silently
+    redirect to a different, unpinned, possibly host-divergent corpus past
+    the plane-count check."""
+    path = tmp_path / "corpus.npz"
+    _write_pinned_corpus(path)  # real file+sidecar; must still raise — file
+                                 # existing/matching is irrelevant to this gate
+    mixing_cfg = {
+        "pretrained_buffer_path": str(path),
+        "_pretrained_buffer_path_auto_resolved": True,
+    }
+    config = {"seed": 0, "encoding": "v6"}  # real registry: "v6" has no pin
+    emitted: list[dict] = []
+
+    with pytest.raises(ValueError) as excinfo:
+        load_pretrained_buffer(
+            mixing_cfg, config, emitted.append, buffer_size=0, buffer_capacity=0
+        )
+
+    msg = str(excinfo.value)
+    assert "v6" in msg
+    assert "auto" in msg.lower()
+
+
+def test_auto_resolved_corpus_with_pin_does_not_raise(tmp_path, monkeypatch):
+    """<auto>-resolved + PINNED is exactly run3's declared launch path — the
+    FIX-3 gate must NOT fire when a pin covers the encoding."""
+    path = tmp_path / "corpus.npz"
+    actual_sha = _write_pinned_corpus(path)
+    monkeypatch.setitem(_resolvers._CORPUS_SHA_PINS, "v6", actual_sha)
+    mixing_cfg = {
+        "pretrained_buffer_path": str(path),
+        "_pretrained_buffer_path_auto_resolved": True,
+    }
+    config = {"seed": 0, "encoding": "v6"}
+    emitted: list[dict] = []
+
+    buf = load_pretrained_buffer(
+        mixing_cfg, config, emitted.append, buffer_size=0, buffer_capacity=0
+    )
+
+    assert buf is not None
+
+
+def test_hardcoded_path_without_pin_is_unaffected_by_fix3(tmp_path):
+    """Hardcoded explicit paths (the ~30 legacy variants) never go through
+    `expand_auto_paths`'s "<auto>" branch, so the auto-resolved flag is
+    never set — FIX-3 must not fire for them even though they're unpinned."""
+    path = tmp_path / "corpus.npz"
+    _write_pinned_corpus(path)
+
+    buf = _load(path)  # _load() constructs mixing_cfg directly — no auto flag
+
+    assert buf is not None

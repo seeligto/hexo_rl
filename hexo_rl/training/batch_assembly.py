@@ -23,7 +23,7 @@ from typing import Any, Callable, Optional
 import numpy as np
 import structlog
 
-from hexo_rl.bootstrap.corpus_io import compute_npz_sha256, load_corpus
+from hexo_rl.bootstrap.corpus_io import compute_npz_sha256, validate_corpus_sidecar
 from hexo_rl.encoding import lookup as _lookup_encoding, normalize_encoding_name as _normalize_encoding_name
 from hexo_rl.encoding.resolvers import cur_stone_slot, opp_stone_slot, resolve_corpus_sha_pin
 
@@ -162,9 +162,49 @@ def load_pretrained_buffer(
     from engine import ReplayBuffer  # local import — engine only available post-build
 
     pretrained_path = mixing_cfg.get("pretrained_buffer_path")
-    if not pretrained_path:
-        return None
-    if not Path(pretrained_path).exists():
+
+    # Resolve the active encoding + launch pin up front — WP0.4 fix-wave
+    # FIX-2/FIX-3 both need to know whether this encoding is launch-pinned
+    # (and whether the path came from "<auto>" single-resolver expansion)
+    # BEFORE deciding hard-fail vs. warn-and-skip on a missing/unresolved
+    # path. `_normalize_encoding_name(None)` defaults to "v6" (always
+    # resolvable), so this is safe even when `pretrained_path` is absent.
+    _spec = _lookup_encoding(_normalize_encoding_name(config.get("encoding")))
+    _pin = resolve_corpus_sha_pin(_spec)
+    _auto_resolved = bool(mixing_cfg.get("_pretrained_buffer_path_auto_resolved"))
+
+    # WP0.4 fix-wave FIX-3 (red-team F2, MEDIUM): a corpus path resolved
+    # through the "<auto>" single-resolver for an encoding with NO
+    # registered sha pin is a launch-config footgun — a one-char encoding
+    # typo (e.g. v6_live2_ls -> v6_live2) silently re-resolves to a
+    # different, unpinned, possibly host-divergent corpus that passes the
+    # plane-count check below unnoticed (both are 4-plane). Hardcoded
+    # explicit paths never set this flag (only `expand_auto_paths` does) and
+    # are unaffected.
+    if _auto_resolved and _pin is None:
+        raise ValueError(
+            f"<auto> corpus for encoding {_spec.name!r} requires a sha pin; "
+            f"add to _CORPUS_SHA_PINS or use an explicit path."
+        )
+
+    if not pretrained_path or pretrained_path == "<auto>" or not Path(pretrained_path).exists():
+        # WP0.4 fix-wave FIX-2 (review Minor / plan-law violation): the
+        # ratified config law is "hard ValueError on missing" — a
+        # PIN-REGISTERED (launch-critical) encoding must not silently train
+        # corpus-less. Unpinned encodings keep the pre-existing warn+None
+        # behavior (back-compat).
+        if _pin is not None:
+            raise ValueError(
+                f"pinned corpus for encoding {_spec.name!r} is missing or "
+                f"unresolved: mixing.pretrained_buffer_path={pretrained_path!r}. "
+                f"This corpus is launch-critical (see "
+                f"docs/registers/run3_corpus_manifest.md) — sync the "
+                f"byte-identical corpus to this host; do NOT proceed corpus-less."
+            )
+        if not pretrained_path:
+            # Mixing not configured at all — silent no-op (pre-existing
+            # behavior for unpinned encodings; pinned raised above).
+            return None
         log.warning(
             "corpus_npz_not_found",
             path=pretrained_path,
@@ -175,17 +215,12 @@ def load_pretrained_buffer(
         )
         return None
 
-    # Resolve the active encoding once — shared by the sha-pin gate below and
-    # the plane-count check further down.
-    _spec = _lookup_encoding(_normalize_encoding_name(config.get("encoding")))
-
     # WP0.4: launch-pinned corpus sha — hard gate BEFORE any load work. A
     # stale/re-exported NPZ at the same path (same shape, same plane count)
     # would otherwise pass the plane-count check below silently; this catches
     # a wrong corpus on EITHER host at step 0, before burning GPU-days.
     # Encodings without a registered pin (most of them — see
     # `_CORPUS_SHA_PINS`) are unaffected. See docs/registers/run3_corpus_manifest.md.
-    _pin = resolve_corpus_sha_pin(_spec)
     if _pin is not None:
         _actual_sha = compute_npz_sha256(pretrained_path)
         if _actual_sha != _pin:
@@ -199,8 +234,10 @@ def load_pretrained_buffer(
         # without updating the sidecar, or vice-versa) even when the on-disk
         # file still matches the launch pin above. The pin proves "this is
         # the RIGHT corpus"; the sidecar only proves internal (npz<->sidecar)
-        # consistency — both are needed.
-        load_corpus(pretrained_path, expected_encoding=_spec.name)
+        # consistency — both are needed. WP0.4 fix-wave FIX-1: reuse the sha
+        # already streamed above (no second full-file stream) and validate
+        # only the sidecar JSON — no eager full-NPZ array materialization.
+        validate_corpus_sidecar(pretrained_path, expected_encoding=_spec.name, actual_sha=_actual_sha)
 
     log.info(
         "loading_corpus_npz",

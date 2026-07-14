@@ -11,6 +11,11 @@ Public API:
   - `load_corpus(path, *, expected_encoding=None)` validates sidecar
     sha256 + encoding match; raises `CorpusMetadataError` on mismatch;
     emits `DeprecationWarning` if sidecar absent.
+  - `validate_corpus_sidecar(path, *, expected_encoding=None,
+    actual_sha=None)` — same sidecar validation as `load_corpus` (schema
+    version, sha256, encoding match) WITHOUT the eager full-array load;
+    accepts an already-computed `actual_sha` to avoid re-streaming a large
+    npz a caller has already hashed (WP0.4 fix-wave FIX-1).
   - `CorpusMetadataError` exception type for all metadata failures.
   - `compute_npz_sha256(path)` exposed for backfill script reuse.
 
@@ -170,6 +175,98 @@ def _load_arrays(npz_path: pathlib.Path) -> dict[str, np.ndarray]:
     return out
 
 
+def validate_corpus_sidecar(
+    path: str | pathlib.Path,
+    *,
+    expected_encoding: str | None = None,
+    actual_sha: str | None = None,
+) -> dict[str, Any]:
+    """Validate a corpus npz's sidecar WITHOUT loading the array payload.
+
+    Same validation semantics as `load_corpus` (schema_version, sha256,
+    encoding_name) minus the eager `_load_arrays` copy — for a caller that
+    only needs "is this the right, non-desynced corpus", not the arrays
+    themselves (e.g. `load_pretrained_buffer`, which mmaps separately).
+
+    Args:
+        path: npz path.
+        expected_encoding: raise if sidecar's `encoding_name` differs.
+        actual_sha: an already-computed sha256 of `path`, reused instead of
+            re-streaming the file a second time. Computed fresh (one
+            stream) when omitted.
+
+    Behaviour:
+      - Sidecar present:
+          * parse json; reject `schema_version > SCHEMA_VERSION`.
+          * compare `actual_sha` (or a fresh streaming sha256 of `path`)
+            against the sidecar's declared `sha256`; raise on mismatch.
+          * if `expected_encoding` given and sidecar's `encoding_name`
+            differs, raise.
+          * return metadata.
+      - Sidecar absent:
+          * emit DeprecationWarning naming the path + backfill script.
+          * return {}.
+
+    Raises:
+      CorpusMetadataError on any validation failure.
+      FileNotFoundError if `path` itself is missing.
+    """
+    npz_path = pathlib.Path(path)
+    if not npz_path.exists():
+        raise FileNotFoundError(f"corpus npz not found: {npz_path}")
+
+    sidecar = _sidecar_path(npz_path)
+    if not sidecar.exists():
+        warnings.warn(
+            f"{npz_path} has no metadata sidecar; "
+            f"run python -m scripts.migrations.2026_05_09_stamp_artifact_metadata corpora",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return {}
+
+    try:
+        metadata = json.loads(sidecar.read_text())
+    except (OSError, json.JSONDecodeError) as exc:
+        raise CorpusMetadataError(
+            f"sidecar parse failed: {sidecar} ({exc})"
+        ) from exc
+    if not isinstance(metadata, dict):
+        raise CorpusMetadataError(
+            f"sidecar root must be a JSON object: {sidecar}"
+        )
+
+    sv = metadata.get("schema_version")
+    if not isinstance(sv, int) or sv > SCHEMA_VERSION:
+        raise CorpusMetadataError(
+            f"sidecar schema_version={sv!r} > supported {SCHEMA_VERSION}: "
+            f"{sidecar}; upgrade hexo_rl.bootstrap.corpus_io"
+        )
+
+    declared_sha = metadata.get("sha256")
+    if not isinstance(declared_sha, str) or not declared_sha:
+        raise CorpusMetadataError(
+            f"sidecar missing 'sha256' field: {sidecar}"
+        )
+    resolved_actual_sha = actual_sha if actual_sha is not None else compute_npz_sha256(npz_path)
+    if resolved_actual_sha != declared_sha:
+        raise CorpusMetadataError(
+            f"sha256 mismatch: corpus modified or sidecar stale "
+            f"(declared {declared_sha[:12]}…, actual {resolved_actual_sha[:12]}…) "
+            f"for {npz_path}"
+        )
+
+    if expected_encoding is not None:
+        sidecar_enc = metadata.get("encoding_name")
+        if sidecar_enc != expected_encoding:
+            raise CorpusMetadataError(
+                f"encoding mismatch: sidecar says {sidecar_enc!r}, "
+                f"expected {expected_encoding!r} ({npz_path})"
+            )
+
+    return metadata
+
+
 def load_corpus(
     path: str | pathlib.Path,
     *,
@@ -197,56 +294,7 @@ def load_corpus(
         raise FileNotFoundError(f"corpus npz not found: {npz_path}")
 
     arrays = _load_arrays(npz_path)
-    sidecar = _sidecar_path(npz_path)
-
-    if not sidecar.exists():
-        warnings.warn(
-            f"{npz_path} has no metadata sidecar; "
-            f"run python -m scripts.migrations.2026_05_09_stamp_artifact_metadata corpora",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        return arrays, {}
-
-    try:
-        metadata = json.loads(sidecar.read_text())
-    except (OSError, json.JSONDecodeError) as exc:
-        raise CorpusMetadataError(
-            f"sidecar parse failed: {sidecar} ({exc})"
-        ) from exc
-    if not isinstance(metadata, dict):
-        raise CorpusMetadataError(
-            f"sidecar root must be a JSON object: {sidecar}"
-        )
-
-    sv = metadata.get("schema_version")
-    if not isinstance(sv, int) or sv > SCHEMA_VERSION:
-        raise CorpusMetadataError(
-            f"sidecar schema_version={sv!r} > supported {SCHEMA_VERSION}: "
-            f"{sidecar}; upgrade hexo_rl.bootstrap.corpus_io"
-        )
-
-    declared_sha = metadata.get("sha256")
-    if not isinstance(declared_sha, str) or not declared_sha:
-        raise CorpusMetadataError(
-            f"sidecar missing 'sha256' field: {sidecar}"
-        )
-    actual_sha = compute_npz_sha256(npz_path)
-    if actual_sha != declared_sha:
-        raise CorpusMetadataError(
-            f"sha256 mismatch: corpus modified or sidecar stale "
-            f"(declared {declared_sha[:12]}…, actual {actual_sha[:12]}…) "
-            f"for {npz_path}"
-        )
-
-    if expected_encoding is not None:
-        sidecar_enc = metadata.get("encoding_name")
-        if sidecar_enc != expected_encoding:
-            raise CorpusMetadataError(
-                f"encoding mismatch: sidecar says {sidecar_enc!r}, "
-                f"expected {expected_encoding!r} ({npz_path})"
-            )
-
+    metadata = validate_corpus_sidecar(npz_path, expected_encoding=expected_encoding)
     return arrays, metadata
 
 
@@ -256,4 +304,5 @@ __all__ = [
     "compute_npz_sha256",
     "load_corpus",
     "save_corpus",
+    "validate_corpus_sidecar",
 ]

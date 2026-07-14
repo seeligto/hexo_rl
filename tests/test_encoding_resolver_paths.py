@@ -88,6 +88,31 @@ def test_expand_auto_paths_nested():
     assert cfg["eval_pipeline"]["opponents"]["bootstrap_anchor"]["path"] == "checkpoints/bootstrap_model_v6w25.pt"
 
 
+def test_expand_auto_paths_stamps_auto_resolved_flag_for_pretrained_buffer_path():
+    """WP0.4 fix-wave FIX-3 — `load_pretrained_buffer` needs to distinguish
+    an "<auto>"-resolved corpus path from a hardcoded literal (only the
+    former requires a sha pin). `expand_auto_paths` must stamp a sibling
+    flag in the same `mixing` dict when it expands `pretrained_buffer_path`
+    from the "<auto>" sentinel."""
+    from hexo_rl.encoding import lookup, expand_auto_paths
+    spec = lookup("v6w25")
+    cfg = {"mixing": {"pretrained_buffer_path": "<auto>"}}
+    expand_auto_paths(cfg, spec)
+    assert cfg["mixing"]["pretrained_buffer_path"] == "data/bootstrap_corpus_v6w25.npz"
+    assert cfg["mixing"]["_pretrained_buffer_path_auto_resolved"] is True
+
+
+def test_expand_auto_paths_hardcoded_path_does_not_stamp_flag():
+    """A hardcoded literal `pretrained_buffer_path` must NOT be flagged as
+    auto-resolved — the ~30 legacy hardcoded-path variants stay unaffected
+    by the FIX-3 pin requirement."""
+    from hexo_rl.encoding import lookup, expand_auto_paths
+    spec = lookup("v6w25")
+    cfg = {"mixing": {"pretrained_buffer_path": "data/explicit_path.npz"}}
+    expand_auto_paths(cfg, spec)
+    assert "_pretrained_buffer_path_auto_resolved" not in cfg["mixing"]
+
+
 def test_expand_auto_paths_no_auto_is_noop():
     """No <auto> markers → config dict unchanged."""
     from hexo_rl.encoding import lookup, expand_auto_paths
