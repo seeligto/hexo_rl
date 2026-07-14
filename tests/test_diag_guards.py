@@ -42,6 +42,11 @@ def _cpu_device() -> torch.device:
 class TestPerfSyncCudaWarning:
     """perf_sync_cuda=True + CUDA available → warning; CPU-only → no warning."""
 
+    @pytest.mark.skipif(
+        not torch.cuda.is_available(),
+        reason="Trainer moves the model to cuda once is_available is patched True; "
+        "needs a real CUDA device (CPU-wheel/GPU-less envs, e.g. fresh-clone gate).",
+    )
     def test_trainer_warns_when_perf_sync_cuda_true_and_cuda_available(self, tmp_path: Path):
         from hexo_rl.training.trainer import Trainer
 

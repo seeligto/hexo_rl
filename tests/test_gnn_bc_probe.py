@@ -25,12 +25,9 @@ from hexo_rl.probes.gnn_bc.train_bc import (
 
 
 def _positions():
-    # Load the strix fidelity fixtures by explicit path (the bare name `fixtures`
-    # is shadowed by tests/fixtures/ when the suite runs together).
-    fix_path = REPO / "reports/tourney/strix_fidelity/fixtures.py"
-    spec = importlib.util.spec_from_file_location("_strix_fixtures", fix_path)
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
+    # Vendored copy of the strix fidelity fixtures — the reports/ original is
+    # gitignored, so a fresh clone must not depend on it (D-M gate fix).
+    from tests.fixtures import strix_fidelity_fixtures as mod
     return mod.POSITIONS[:10], mod.WIN_LENGTH, mod.RADIUS
 
 
