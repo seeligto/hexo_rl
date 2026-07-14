@@ -49,6 +49,7 @@ from hexo_rl.probes.gnn_bc.cnn_bc_net import build_cnn_bc_net
 LABEL_SMOOTH = 0.05           # corpus default
 WEIGHT_DECAY = 1e-4
 ETA_MIN = 1e-5
+SAVE_EVERY = 20_000           # intermediate snapshot cadence (crash-resilience)
 
 _STRIX_WIN_LENGTH = 6
 _STRIX_RADIUS = 6
@@ -399,6 +400,17 @@ def train(arm: str, lr: float, steps: int, batch_size: int, out: Path,
     step = 0
     t0 = time.time()
     log_rows = []
+
+    def _save_ckpt(at_step: int) -> Path:
+        p = out / f"{arm}_bc_{at_step:06d}.pt"
+        torch.save({
+            "arm": arm, "lr": lr, "steps": at_step, "n_params": n_params,
+            "model_state_dict": net.state_dict(),
+            "encoding": "v6_live2_ls" if arm == "cnn" else "strix_axis_graph",
+        }, p)
+        (out / "train_log.jsonl").write_text("\n".join(json.dumps(r) for r in log_rows))
+        return p
+
     for buf in _batched(example_stream(), batch_size):
         if arm == "gnn":
             batch = _collate_gnn(buf, dev)
@@ -418,16 +430,16 @@ def train(arm: str, lr: float, steps: int, batch_size: int, out: Path,
                    "elapsed_s": round(time.time() - t0, 1)}
             log_rows.append(row)
             print(f"[bc] step={step} loss={row['loss']:.4f} top1={acc:.3f} lr={lr_now:.2e}")
+        # Periodic snapshot: crash-resilience for multi-hour runs + lets the
+        # scaling-rung red-team read intermediate strength (D-M R2). IO-only,
+        # training math untouched.
+        if step % SAVE_EVERY == 0 and step < steps:
+            p = _save_ckpt(step)
+            print(f"[bc] snapshot {p}")
         if step >= steps:
             break
 
-    ckpt = out / f"{arm}_bc_{step:06d}.pt"
-    torch.save({
-        "arm": arm, "lr": lr, "steps": step, "n_params": n_params,
-        "model_state_dict": net.state_dict(),
-        "encoding": "v6_live2_ls" if arm == "cnn" else "strix_axis_graph",
-    }, ckpt)
-    (out / "train_log.jsonl").write_text("\n".join(json.dumps(r) for r in log_rows))
+    ckpt = _save_ckpt(step)
     print(f"[bc] saved {ckpt}")
     return ckpt
 
