@@ -9,10 +9,113 @@ use numpy::{PyArray1, PyArray2, PyArrayMethods, PyUntypedArrayMethods};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 
+use crate::encoding::Representation;
+use crate::game_runner::records::{assemble_ls_from_gnn_probs, LegalSetPolicy};
+use hexo_graph::{build_axis_graph, AxisGraph, BuildParams, StoneList, BUILDER_IMPL_NATIVE};
+
 #[derive(Clone)]
 struct PendingRequest {
     id: u64,
     features: Vec<f32>,
+}
+
+// ── GNN-integration WP-3 (C3): dormant graph seam ────────────────────────────
+// A PARALLEL graph queue lives beside the dense queue (seam design §3.3). The
+// dense `Vec<f32>` hot path is byte-identical — no branch, no allocation change
+// — so the 10-metric CNN bench gate cannot regress. NO producer enqueues onto
+// this queue yet (no call site in `worker_loop`); it is exercised only from the
+// graph pymethods below + their tests. The graph waiter payload is the ragged
+// `(LegalSetPolicy, value)` (assembled Rust-side from per-legal-node probs),
+// vs the dense `(Arc<Vec<f32>>, Range, value)`.
+
+/// One queued graph inference request (the once-per-leaf `AxisGraph` payload).
+struct PendingGraphRequest {
+    id: u64,
+    graph: AxisGraph,
+}
+
+/// Assemble metadata retained per in-flight graph id: `next_graph_batch` moves
+/// the graph's wire arrays into numpy but keeps the slot map + legal coords so
+/// `submit_graph_inference_results` can build the `LegalSetPolicy` Rust-side
+/// (`policy_dst_slot` is consumed here, never as a Python dense scatter —
+/// contract §6.2 / seam design §3.4).
+struct InFlightGraph {
+    policy_dst_slot: Vec<i32>,
+    legal_coords: Vec<(i32, i32)>,
+}
+
+/// Graph waiter payload — the ragged `(LegalSetPolicy, value)` (vs dense §P74).
+type GraphWaiterPayload = Result<(LegalSetPolicy, f32), String>;
+
+#[derive(Default)]
+struct GraphWaiter {
+    result: Mutex<Option<GraphWaiterPayload>>,
+    cv: Condvar,
+}
+
+/// Build one axis graph from a self-play/test request, enforcing the WP-3
+/// red-team seam obligations BEFORE any narrowing cast
+/// (`reports/probes/gnn_integration/WP1_redteam.md` Attack-2 / Attack-4 +
+/// `WP1_review.md` coord/current_player/moves_remaining notes):
+///   - `current_player ∈ {-1, +1}` (range-validate before the `i8` cast);
+///   - `moves_remaining ∈ [0, 255]` (before the `u8` cast — a negative or >255
+///     value would wrap to a bogus `moves_feat`, Attack-4);
+///   - each stone `|q|,|r|` bounded well below `i32::MAX - radius` (Attack-2:
+///     beyond that the builder's release-mode coordinate math silently wraps —
+///     the only guard today is the debug-build overflow check);
+///   - each stone player ∈ {-1, +1}.
+///
+/// The builder's own always-on `verify_contract` + `builder_impl=1` stamp close
+/// the rest; the handshake is re-asserted on the returned graph (§7 die-loud).
+fn build_graph_from_request(
+    stones: &[(i64, i64, i64)],
+    current_player: i64,
+    moves_remaining: i64,
+    win_length: u8,
+    radius: u16,
+    trunk_size: i32,
+) -> PyResult<AxisGraph> {
+    if current_player != 1 && current_player != -1 {
+        return Err(PyValueError::new_err(format!(
+            "graph request: current_player {current_player} out of range (expected +1 / -1)"
+        )));
+    }
+    if !(0..=i64::from(u8::MAX)).contains(&moves_remaining) {
+        return Err(PyValueError::new_err(format!(
+            "graph request: moves_remaining {moves_remaining} out of range 0..=255 \
+             (narrowing-cast guard, WP1 Attack-4)"
+        )));
+    }
+    let bound = i64::from(i32::MAX) - i64::from(radius) - 1;
+    let mut typed: Vec<(i32, i32, i8)> = Vec::with_capacity(stones.len());
+    for &(q, r, p) in stones {
+        if q.abs() > bound || r.abs() > bound {
+            return Err(PyValueError::new_err(format!(
+                "graph request: stone coord ({q},{r}) exceeds |coord| < i32::MAX-radius \
+                 (WP1 Attack-2 silent-wrap guard)"
+            )));
+        }
+        if p != 1 && p != -1 {
+            return Err(PyValueError::new_err(format!(
+                "graph request: stone player {p} out of range (expected +1 / -1)"
+            )));
+        }
+        typed.push((q as i32, r as i32, p as i8));
+    }
+    let params = BuildParams {
+        win_length,
+        radius,
+        current_player: current_player as i8,
+        moves_remaining: moves_remaining as u8,
+        trunk_size,
+    };
+    let graph = build_axis_graph(&StoneList { stones: typed }, &params);
+    if graph.builder_impl != BUILDER_IMPL_NATIVE {
+        return Err(PyValueError::new_err(
+            "graph request: non-native builder_impl (NonNativeSampleBuilder handshake)",
+        ));
+    }
+    Ok(graph)
 }
 
 /// Waiter result payload (§P74): the policy buffer is delivered as
@@ -44,6 +147,13 @@ struct Inner {
     /// game crosses. Read with Relaxed; precision is per-move, not
     /// per-leaf-eval (fewer atomic touches; same statistic to two sig figs).
     model_version: AtomicU64,
+
+    // ── WP-3 dormant graph seam (parallel queue; dense fields untouched) ──
+    graph_queue: Mutex<VecDeque<PendingGraphRequest>>,
+    graph_queue_cv: Condvar,
+    graph_waiters: DashMap<u64, Arc<GraphWaiter>, FxBuildHasher>,
+    in_flight_graphs: DashMap<u64, InFlightGraph, FxBuildHasher>,
+    completed_graph_games: AtomicUsize,
 }
 
 impl Inner {
@@ -56,7 +166,47 @@ impl Inner {
             closed: AtomicBool::new(false),
             completed_mock_games: AtomicUsize::new(0),
             model_version: AtomicU64::new(0),
+            graph_queue: Mutex::new(VecDeque::new()),
+            graph_queue_cv: Condvar::new(),
+            graph_waiters: DashMap::with_hasher(FxBuildHasher::default()),
+            in_flight_graphs: DashMap::with_hasher(FxBuildHasher::default()),
+            completed_graph_games: AtomicUsize::new(0),
         }
+    }
+
+    /// Graph counterpart of `pop_batch_blocking` — same saturation threshold /
+    /// timeout, on the parallel graph queue.
+    fn pop_graph_batch_blocking(
+        &self,
+        batch_size: usize,
+        max_wait_ms: u64,
+    ) -> Vec<PendingGraphRequest> {
+        let deadline = Instant::now() + Duration::from_millis(max_wait_ms);
+        let mut queue = self.graph_queue.lock().expect("graph queue lock poisoned");
+        let threshold = batch_size / 2;
+        while queue.len() < threshold && !self.closed.load(Ordering::SeqCst) {
+            let now = Instant::now();
+            if now >= deadline {
+                break;
+            }
+            let remaining = deadline.saturating_duration_since(now);
+            let (q, _) = self
+                .graph_queue_cv
+                .wait_timeout(queue, remaining)
+                .expect("graph queue condvar poisoned");
+            queue = q;
+        }
+        if queue.is_empty() {
+            return Vec::new();
+        }
+        let take = batch_size.min(queue.len());
+        let mut out = Vec::with_capacity(take);
+        for _ in 0..take {
+            if let Some(req) = queue.pop_front() {
+                out.push(req);
+            }
+        }
+        out
     }
 
     fn submit_and_wait(
@@ -171,6 +321,13 @@ pub struct InferenceBatcher {
     policy_len: usize,
     pool_sender: flume::Sender<Vec<f32>>,
     pool_receiver: flume::Receiver<Vec<f32>>,
+    // ── WP-3 graph seam (Grid for every dense batcher; the graph fields are
+    // inert unless constructed from a `representation="graph"` spec) ──
+    representation: Representation,
+    graph_win_length: u8,
+    graph_radius: u16,
+    graph_trunk_size: i32,
+    graph_contract_version: u32,
 }
 
 impl InferenceBatcher {
@@ -237,10 +394,68 @@ impl InferenceBatcher {
     pub(crate) fn close_rust(&self) {
         self.inner.closed.store(true, Ordering::SeqCst);
         self.inner.queue_cv.notify_all();
+        self.inner.graph_queue_cv.notify_all();
 
         for r in &self.inner.waiters {
             r.value().cv.notify_all();
         }
+        for r in &self.inner.graph_waiters {
+            r.value().cv.notify_all();
+        }
+    }
+
+    /// Graph counterpart of `submit_batch_and_wait_rust` (seam design §3.3) —
+    /// the worker-facing blocking submit. Enqueues each pre-built `AxisGraph`
+    /// on the parallel graph queue, blocks on its graph waiter, and returns the
+    /// assembled `(LegalSetPolicy, value)` per leaf. NOT wired to `worker_loop`
+    /// yet (WP-3 step 6); exercised by `spawn_mock_graph_games` + tests. The
+    /// builder_impl handshake is asserted per graph (contract §7 die-loud).
+    pub(crate) fn submit_batch_and_wait_graph_rust(
+        &self,
+        graphs: Vec<AxisGraph>,
+    ) -> Result<Vec<(LegalSetPolicy, f32)>, ()> {
+        if self.inner.closed.load(Ordering::SeqCst) {
+            return Err(());
+        }
+        let n = graphs.len();
+        let mut waiters = Vec::with_capacity(n);
+        {
+            let mut queue = self.inner.graph_queue.lock().expect("graph queue lock poisoned");
+            for graph in graphs {
+                // builder_impl + contract_version handshake (§7): the ONLY builder
+                // is native hexo-graph; a non-native tag never reaches the queue.
+                if graph.builder_impl != BUILDER_IMPL_NATIVE || self.graph_contract_version != 1 {
+                    return Err(());
+                }
+                let id = self.inner.next_id.fetch_add(1, Ordering::SeqCst);
+                let waiter = Arc::new(GraphWaiter::default());
+                self.inner.graph_waiters.insert(id, waiter.clone());
+                queue.push_back(PendingGraphRequest { id, graph });
+                waiters.push(waiter);
+            }
+            self.inner.graph_queue_cv.notify_all();
+        }
+
+        let mut results = Vec::with_capacity(n);
+        for waiter in waiters {
+            let mut guard = waiter.result.lock().expect("graph waiter lock poisoned");
+            loop {
+                if let Some(res) = guard.take() {
+                    match res {
+                        Ok(payload) => {
+                            results.push(payload);
+                            break;
+                        }
+                        Err(_) => return Err(()),
+                    }
+                }
+                if self.inner.closed.load(Ordering::SeqCst) {
+                    return Err(());
+                }
+                guard = waiter.cv.wait(guard).expect("graph waiter condvar poisoned");
+            }
+        }
+        Ok(results)
     }
 
     pub fn feature_len(&self) -> usize {
@@ -271,6 +486,19 @@ impl InferenceBatcher {
     /// Snapshot the current model version. Phase B' Class-1 probe.
     pub fn current_model_version(&self) -> u64 {
         self.inner.model_version.load(Ordering::Relaxed)
+    }
+
+    /// Guard: a graph seam method requires a `representation="graph"` batcher.
+    /// A grid batcher (every dense construction) raises `RepresentationMismatch`
+    /// (seam design §5-below / D-EVALGATE loud-fail precedent).
+    fn require_graph(&self) -> PyResult<()> {
+        if !matches!(self.representation, Representation::Graph) {
+            return Err(PyValueError::new_err(
+                "RepresentationMismatch: graph seam method called on a grid InferenceBatcher \
+                 (construct with a representation=\"graph\" encoding spec)",
+            ));
+        }
+        Ok(())
     }
 }
 
@@ -305,6 +533,27 @@ impl InferenceBatcher {
             }
         };
 
+        // ── WP-3 graph seam: representation-aware construction (seam design
+        // §5-below). A `representation="graph"` spec constructs a graph-capable
+        // batcher (the parallel graph queue is used; the dense feature-buffer
+        // pool is NOT prefilled — a graph has no fixed `feature_len`). Every
+        // other construction path (explicit lens, grid spec, no spec) stays
+        // Grid → the dense hot path is byte-identical. A graph spec's geometry
+        // is read here so `BuildParams` carries no scattered literals.
+        let representation = spec_static.map_or(Representation::Grid, |s| s.representation);
+        let (graph_win_length, graph_radius, graph_trunk_size, graph_contract_version) =
+            if let (Representation::Graph, Some(spec)) = (representation, spec_static) {
+                (
+                    spec.win_length.unwrap_or(6) as u8,
+                    spec.graph_radius.unwrap_or(6) as u16,
+                    spec.trunk_size as i32,
+                    spec.contract_version.unwrap_or(1),
+                )
+            } else {
+                (0, 0, 0, 1)
+            };
+        let is_graph = matches!(representation, Representation::Graph);
+
         // §P55: pool_size = None preserves cycle 1 fixed 512 pre-send + 1024 channel.
         // When caller opts in (e.g. v6w25 16-worker mid-game K_avg≈6 → 768 working set
         // exceeds 512), channel grows to max(pool_size * 2, 1024) so try_send pre-fill
@@ -312,8 +561,14 @@ impl InferenceBatcher {
         let prefill = pool_size.unwrap_or(512);
         let channel_cap = pool_size.map_or(1024, |n| (n * 2).max(1024));
         let (pool_sender, pool_receiver) = flume::bounded(channel_cap);
-        for _ in 0..prefill {
-            let _ = pool_sender.send(vec![0.0f32; feature_len]);
+        // Graph batcher: no dense feature-buffer pool (the ragged union Vec is
+        // moved into numpy, never recycled — seam design §4.2). Prefilling a
+        // `feature_len`-sized pool would be meaningless (a graph has no
+        // feature_len), so skip it. Dense path unchanged.
+        if !is_graph {
+            for _ in 0..prefill {
+                let _ = pool_sender.send(vec![0.0f32; feature_len]);
+            }
         }
 
         Ok(Self {
@@ -322,6 +577,11 @@ impl InferenceBatcher {
             policy_len,
             pool_sender,
             pool_receiver,
+            representation,
+            graph_win_length,
+            graph_radius,
+            graph_trunk_size,
+            graph_contract_version,
         })
     }
 
@@ -503,6 +763,415 @@ impl InferenceBatcher {
     pub fn policy_len_py(&self) -> usize {
         self.policy_len
     }
+
+    /// Wire `representation` ("grid" | "graph").
+    #[getter]
+    pub fn representation_py(&self) -> &'static str {
+        self.representation.as_str()
+    }
+
+    // ── WP-3 dormant graph seam pymethods ────────────────────────────────
+    // All guard `require_graph()` — a grid batcher raises RepresentationMismatch.
+
+    /// Whether at least one graph request is queued.
+    pub fn has_pending_graph_requests(&self) -> bool {
+        let q = self.inner.graph_queue.lock().expect("graph queue lock poisoned");
+        !q.is_empty()
+    }
+
+    /// Number of completed mock graph games (test assertions).
+    pub fn completed_graph_games(&self) -> usize {
+        self.inner.completed_graph_games.load(Ordering::SeqCst)
+    }
+
+    /// Seam obligations only: build a graph from the request params (running the
+    /// coord / current_player / moves_remaining range guards) and discard it.
+    /// Raises `ValueError` on any violation. Test/CI surface for the WP-1
+    /// red-team seam obligations (no queue interaction).
+    pub fn check_graph_request(
+        &self,
+        stones: Vec<(i64, i64, i64)>,
+        current_player: i64,
+        moves_remaining: i64,
+    ) -> PyResult<()> {
+        self.require_graph()?;
+        let _ = build_graph_from_request(
+            &stones,
+            current_player,
+            moves_remaining,
+            self.graph_win_length,
+            self.graph_radius,
+            self.graph_trunk_size,
+        )?;
+        Ok(())
+    }
+
+    /// Spawn N mock graph games on native threads (test utility; mirrors
+    /// `spawn_mock_games`). Each builds a FIXED mixed spread board (two far
+    /// clusters → in-window + off-window legal nodes) and blocks on
+    /// `submit_batch_and_wait_graph_rust`, so the caller can drive
+    /// `next_graph_batch` → `submit_graph_inference_results` and observe
+    /// completion via `completed_graph_games`.
+    pub fn spawn_mock_graph_games(&self, n_games: usize) -> PyResult<()> {
+        self.require_graph()?;
+        for _ in 0..n_games {
+            let b = self.clone();
+            std::thread::spawn(move || {
+                let mut stones: Vec<(i64, i64, i64)> = Vec::new();
+                for q in 0..5i64 {
+                    stones.push((q, 0, 1));
+                }
+                for q in 30..35i64 {
+                    stones.push((q, 0, -1));
+                }
+                if let Ok(graph) = build_graph_from_request(
+                    &stones,
+                    1,
+                    2,
+                    b.graph_win_length,
+                    b.graph_radius,
+                    b.graph_trunk_size,
+                ) {
+                    if b.submit_batch_and_wait_graph_rust(vec![graph]).is_ok() {
+                        b.inner.completed_graph_games.fetch_add(1, Ordering::SeqCst);
+                    }
+                }
+            });
+        }
+        Ok(())
+    }
+
+    /// Pop up to `batch_size` graph requests and fuse them PyG block-diagonal
+    /// (NO padding — contract §2.1/§2.2). Returns `(request_ids, GraphWire)`.
+    /// `edge_index`/`legal_node_gather`/offsets are emitted ALREADY globally
+    /// offset (i64) so Python does no index arithmetic. Retains per-id assemble
+    /// metadata (`policy_dst_slot` + legal coords) for
+    /// `submit_graph_inference_results`.
+    #[pyo3(signature = (batch_size, max_wait_ms = 10))]
+    pub fn next_graph_batch(
+        &self,
+        py: Python<'_>,
+        batch_size: usize,
+        max_wait_ms: u64,
+    ) -> PyResult<(Vec<u64>, GraphWire)> {
+        self.require_graph()?;
+        if batch_size == 0 {
+            return Err(PyValueError::new_err("batch_size must be > 0"));
+        }
+
+        let pulled = py.detach(|| self.inner.pop_graph_batch_blocking(batch_size, max_wait_ms));
+
+        let mut ids: Vec<u64> = Vec::with_capacity(pulled.len());
+        let mut node_feat: Vec<f32> = Vec::new();
+        let mut node_coords: Vec<i32> = Vec::new();
+        let mut edge_attr: Vec<f32> = Vec::new();
+        let mut edge_src: Vec<i64> = Vec::new();
+        let mut edge_dst: Vec<i64> = Vec::new();
+        let mut legal_node_gather: Vec<i64> = Vec::new();
+        let mut policy_dst_slot: Vec<i32> = Vec::new();
+        let mut node_offsets: Vec<i64> = vec![0];
+        let mut edge_offsets: Vec<i64> = vec![0];
+        let mut legal_offsets: Vec<i64> = vec![0];
+        let mut n_nodes_checksum: Vec<u32> = Vec::with_capacity(pulled.len());
+        let mut n_stones: Vec<u16> = Vec::with_capacity(pulled.len());
+        let mut window_center: Vec<i32> = Vec::with_capacity(pulled.len() * 2);
+        let mut current_player: Vec<i8> = Vec::with_capacity(pulled.len());
+
+        let mut node_off: i64 = 0;
+        let mut edge_off: i64 = 0;
+        let mut legal_off: i64 = 0;
+
+        for req in pulled {
+            let id = req.id;
+            let g = req.graph;
+            // builder_impl handshake (defense-in-depth; the build path already
+            // asserted it) — a non-native tag must never reach the wire.
+            if g.builder_impl != BUILDER_IMPL_NATIVE {
+                return Err(PyValueError::new_err(
+                    "next_graph_batch: non-native builder_impl on a queued graph",
+                ));
+            }
+            ids.push(id);
+            let n_g = g.num_nodes() as i64;
+            let e_g = g.num_edges() as i64;
+            let lg_g = g.legal_node_gather.len() as i64;
+
+            // legal coords (before node_coords is moved into the wire).
+            let legal_coords: Vec<(i32, i32)> = g
+                .legal_node_gather
+                .iter()
+                .map(|&row| {
+                    (
+                        g.node_coords[row as usize * 2],
+                        g.node_coords[row as usize * 2 + 1],
+                    )
+                })
+                .collect();
+
+            node_feat.extend_from_slice(&g.node_feat.0);
+            edge_attr.extend_from_slice(&g.edge_attr.0);
+            for &s in &g.edge_index.src {
+                edge_src.push(node_off + i64::from(s));
+            }
+            for &d in &g.edge_index.dst {
+                edge_dst.push(node_off + i64::from(d));
+            }
+            for &row in &g.legal_node_gather {
+                legal_node_gather.push(node_off + i64::from(row));
+            }
+            policy_dst_slot.extend_from_slice(&g.policy_scatter_index.0);
+            n_nodes_checksum.push(g.n_nodes_checksum);
+            n_stones.push(g.n_stones);
+            window_center.push(g.window_center.0);
+            window_center.push(g.window_center.1);
+            current_player.push(g.current_player);
+            node_coords.extend_from_slice(&g.node_coords);
+
+            self.inner.in_flight_graphs.insert(
+                id,
+                InFlightGraph {
+                    policy_dst_slot: g.policy_scatter_index.0.clone(),
+                    legal_coords,
+                },
+            );
+
+            node_off += n_g;
+            edge_off += e_g;
+            legal_off += lg_g;
+            node_offsets.push(node_off);
+            edge_offsets.push(edge_off);
+            legal_offsets.push(legal_off);
+        }
+
+        // edge_index = [src_global (E) | dst_global (E)] → Python reshapes (2,E).
+        let mut edge_index = edge_src;
+        edge_index.extend(edge_dst);
+
+        let wire = GraphWire {
+            contract_version: self.graph_contract_version,
+            builder_impl: BUILDER_IMPL_NATIVE,
+            n_graphs: ids.len(),
+            node_feat,
+            node_coords,
+            edge_index,
+            edge_attr,
+            node_offsets,
+            edge_offsets,
+            legal_offsets,
+            legal_node_gather,
+            policy_dst_slot,
+            n_nodes_checksum,
+            n_stones,
+            window_center,
+            current_player,
+        };
+        Ok((ids, wire))
+    }
+
+    /// Ragged OUTPUT: wake each graph waiter with its assembled
+    /// `(LegalSetPolicy, value)` (seam design §3.3/§3.4). `legal_probs_flat` is
+    /// the concatenated per-legal-node probs (segment-softmaxed per graph);
+    /// `legal_offsets` segments it per id. The per-leaf `LegalSetPolicy` is
+    /// built Rust-side from the retained `policy_dst_slot` + coords — never a
+    /// Python dense scatter.
+    pub fn submit_graph_inference_results(
+        &self,
+        request_ids: Vec<u64>,
+        legal_probs_flat: Bound<'_, PyArray1<f32>>,
+        legal_offsets: Bound<'_, PyArray1<i64>>,
+        values: Bound<'_, PyArray1<f32>>,
+    ) -> PyResult<()> {
+        self.require_graph()?;
+        let n = request_ids.len();
+        if values.len() != n {
+            return Err(PyValueError::new_err(format!(
+                "length mismatch ids/values: {}/{}",
+                n,
+                values.len()
+            )));
+        }
+        let lo_view = legal_offsets.readonly();
+        let lo = lo_view.as_slice()?;
+        if lo.len() != n + 1 {
+            return Err(PyValueError::new_err(format!(
+                "legal_offsets length {} != n+1 ({})",
+                lo.len(),
+                n + 1
+            )));
+        }
+        let probs_view = legal_probs_flat.readonly();
+        let probs = probs_view.as_slice()?;
+        let vals_view = values.readonly();
+        let vals = vals_view.as_slice()?;
+        if lo[0] != 0 || (lo[n] as usize) != probs.len() {
+            return Err(PyValueError::new_err(format!(
+                "legal_offsets endpoints [{},{}] inconsistent with legal_probs_flat len {}",
+                lo[0],
+                lo[n],
+                probs.len()
+            )));
+        }
+
+        for i in 0..n {
+            let id = request_ids[i];
+            let start = lo[i];
+            let end = lo[i + 1];
+            if start < 0 || end < start || (end as usize) > probs.len() {
+                return Err(PyValueError::new_err(format!(
+                    "legal_offsets segment [{start},{end}] out of range for id {id}"
+                )));
+            }
+            let leaf_probs = &probs[start as usize..end as usize];
+
+            let Some((_, meta)) = self.inner.in_flight_graphs.remove(&id) else {
+                // Unknown id (already consumed / never emitted). Skip — the dense
+                // path has the same tolerant remove semantics.
+                continue;
+            };
+            if meta.policy_dst_slot.len() != leaf_probs.len() {
+                // Segmentation desync — die loud on this waiter (contract §7).
+                if let Some((_, waiter)) = self.inner.graph_waiters.remove(&id) {
+                    let mut g = waiter.result.lock().expect("graph waiter lock poisoned");
+                    *g = Some(Err(format!(
+                        "legal-probs segment len {} != builder n_legal {} for id {id}",
+                        leaf_probs.len(),
+                        meta.policy_dst_slot.len()
+                    )));
+                    waiter.cv.notify_all();
+                }
+                return Err(PyValueError::new_err(format!(
+                    "submit_graph_inference_results: segment len {} != n_legal {} for id {id}",
+                    leaf_probs.len(),
+                    meta.policy_dst_slot.len()
+                )));
+            }
+            let ls = assemble_ls_from_gnn_probs(
+                self.policy_len,
+                leaf_probs,
+                &meta.policy_dst_slot,
+                &meta.legal_coords,
+            );
+            if let Some((_, waiter)) = self.inner.graph_waiters.remove(&id) {
+                let mut g = waiter.result.lock().expect("graph waiter lock poisoned");
+                *g = Some(Ok((ls, vals[i])));
+                waiter.cv.notify_all();
+            }
+        }
+        Ok(())
+    }
+
+    /// Signal failure for a batch of graph requests (loud worker death path,
+    /// seam design §7). Wakes each waiter with `Err` and drops in-flight state.
+    pub fn submit_graph_inference_failure(
+        &self,
+        request_ids: Vec<u64>,
+        error_msg: String,
+    ) -> PyResult<()> {
+        self.require_graph()?;
+        for id in request_ids {
+            self.inner.in_flight_graphs.remove(&id);
+            if let Some((_, waiter)) = self.inner.graph_waiters.remove(&id) {
+                let mut g = waiter.result.lock().expect("graph waiter lock poisoned");
+                *g = Some(Err(error_msg.clone()));
+                waiter.cv.notify_all();
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Block-diagonal ragged graph wire (contract §2.1) — the fuse-out of
+/// `next_graph_batch`, the SINGLE payload the Python `collate_graph_batch`
+/// resolver reads. Owned flat Vecs; each getter copies into a fresh numpy
+/// array (the resolver reads each field once). `edge_index` is `[2*E]`
+/// (`[src_global | dst_global]`, Python reshapes to `(2, E)`); all index arrays
+/// are i64 and ALREADY globally offset.
+#[pyclass(name = "GraphWire")]
+pub struct GraphWire {
+    contract_version: u32,
+    builder_impl: u8,
+    n_graphs: usize,
+    node_feat: Vec<f32>,
+    node_coords: Vec<i32>,
+    edge_index: Vec<i64>,
+    edge_attr: Vec<f32>,
+    node_offsets: Vec<i64>,
+    edge_offsets: Vec<i64>,
+    legal_offsets: Vec<i64>,
+    legal_node_gather: Vec<i64>,
+    policy_dst_slot: Vec<i32>,
+    n_nodes_checksum: Vec<u32>,
+    n_stones: Vec<u16>,
+    window_center: Vec<i32>,
+    current_player: Vec<i8>,
+}
+
+#[pymethods]
+impl GraphWire {
+    #[getter]
+    fn contract_version(&self) -> u32 {
+        self.contract_version
+    }
+    #[getter]
+    fn builder_impl(&self) -> u8 {
+        self.builder_impl
+    }
+    #[getter]
+    fn n_graphs(&self) -> usize {
+        self.n_graphs
+    }
+    #[getter]
+    fn node_feat<'py>(&self, py: Python<'py>) -> Bound<'py, PyArray1<f32>> {
+        PyArray1::from_slice(py, &self.node_feat)
+    }
+    #[getter]
+    fn node_coords<'py>(&self, py: Python<'py>) -> Bound<'py, PyArray1<i32>> {
+        PyArray1::from_slice(py, &self.node_coords)
+    }
+    #[getter]
+    fn edge_index<'py>(&self, py: Python<'py>) -> Bound<'py, PyArray1<i64>> {
+        PyArray1::from_slice(py, &self.edge_index)
+    }
+    #[getter]
+    fn edge_attr<'py>(&self, py: Python<'py>) -> Bound<'py, PyArray1<f32>> {
+        PyArray1::from_slice(py, &self.edge_attr)
+    }
+    #[getter]
+    fn node_offsets<'py>(&self, py: Python<'py>) -> Bound<'py, PyArray1<i64>> {
+        PyArray1::from_slice(py, &self.node_offsets)
+    }
+    #[getter]
+    fn edge_offsets<'py>(&self, py: Python<'py>) -> Bound<'py, PyArray1<i64>> {
+        PyArray1::from_slice(py, &self.edge_offsets)
+    }
+    #[getter]
+    fn legal_offsets<'py>(&self, py: Python<'py>) -> Bound<'py, PyArray1<i64>> {
+        PyArray1::from_slice(py, &self.legal_offsets)
+    }
+    #[getter]
+    fn legal_node_gather<'py>(&self, py: Python<'py>) -> Bound<'py, PyArray1<i64>> {
+        PyArray1::from_slice(py, &self.legal_node_gather)
+    }
+    #[getter]
+    fn policy_dst_slot<'py>(&self, py: Python<'py>) -> Bound<'py, PyArray1<i32>> {
+        PyArray1::from_slice(py, &self.policy_dst_slot)
+    }
+    #[getter]
+    fn n_nodes_checksum<'py>(&self, py: Python<'py>) -> Bound<'py, PyArray1<u32>> {
+        PyArray1::from_slice(py, &self.n_nodes_checksum)
+    }
+    #[getter]
+    fn n_stones<'py>(&self, py: Python<'py>) -> Bound<'py, PyArray1<u16>> {
+        PyArray1::from_slice(py, &self.n_stones)
+    }
+    #[getter]
+    fn window_center<'py>(&self, py: Python<'py>) -> Bound<'py, PyArray1<i32>> {
+        PyArray1::from_slice(py, &self.window_center)
+    }
+    #[getter]
+    fn current_player<'py>(&self, py: Python<'py>) -> Bound<'py, PyArray1<i8>> {
+        PyArray1::from_slice(py, &self.current_player)
+    }
 }
 
 #[cfg(test)]
@@ -537,5 +1206,122 @@ mod tests {
         let bad = vec![vec![0.0_f32; FEATURE_LEN + 1]];
         let res = batcher.submit_batch_and_wait_rust(bad);
         assert!(res.is_err(), "expected Err(()) on feature length mismatch");
+    }
+
+    // ── WP-3 graph seam: seam obligations + construction (no Python needed) ──
+
+    fn graph_batcher() -> InferenceBatcher {
+        let spec = crate::encoding::lookup_or_panic("gnn_axis_v1");
+        let py_spec = crate::pyo3::encoding::PyRegistrySpec::from_static(spec);
+        InferenceBatcher::new(Some(py_spec), None, None, None)
+            .expect("graph batcher constructs from gnn_axis_v1 spec")
+    }
+
+    #[test]
+    fn grid_batcher_is_grid_representation() {
+        let b = new_batcher();
+        assert!(matches!(b.representation, Representation::Grid));
+        // dense hot path intact: feature buffer pool is prefilled.
+        assert!(b.get_feature_buffer().capacity() >= FEATURE_LEN);
+    }
+
+    #[test]
+    fn graph_batcher_construction_from_spec() {
+        let b = graph_batcher();
+        assert!(matches!(b.representation, Representation::Graph));
+        assert_eq!(b.policy_len, 362, "graph action space unchanged");
+        assert_eq!(b.graph_win_length, 6);
+        assert_eq!(b.graph_radius, 6);
+        assert_eq!(b.graph_trunk_size, 19);
+        assert_eq!(b.graph_contract_version, 1);
+        // no dense feature buffers prefilled for a graph batcher.
+        assert!(b.pool_receiver.try_recv().is_err(), "graph batcher must not prefill the dense pool");
+    }
+
+    #[test]
+    fn build_graph_from_request_valid_stamps_native() {
+        let stones = vec![(0i64, 0i64, 1i64), (1, 0, -1), (0, 1, 1)];
+        let g = build_graph_from_request(&stones, 1, 2, 6, 6, 19).expect("valid request builds");
+        assert_eq!(g.builder_impl, BUILDER_IMPL_NATIVE);
+        assert_eq!(g.n_stones, 3);
+    }
+
+    #[test]
+    fn build_graph_from_request_rejects_bad_current_player() {
+        let stones = vec![(0i64, 0i64, 1i64)];
+        assert!(build_graph_from_request(&stones, 2, 2, 6, 6, 19).is_err());
+        assert!(build_graph_from_request(&stones, 0, 2, 6, 6, 19).is_err());
+    }
+
+    #[test]
+    fn build_graph_from_request_rejects_bad_moves_remaining() {
+        let stones = vec![(0i64, 0i64, 1i64)];
+        assert!(build_graph_from_request(&stones, 1, -1, 6, 6, 19).is_err());
+        assert!(build_graph_from_request(&stones, 1, 256, 6, 6, 19).is_err());
+    }
+
+    #[test]
+    fn build_graph_from_request_rejects_coord_overflow() {
+        // WP1 Attack-2: a coord near i32::MAX would wrap silently in release.
+        let stones = vec![(i64::from(i32::MAX), 0i64, 1i64)];
+        assert!(build_graph_from_request(&stones, 1, 2, 6, 6, 19).is_err());
+    }
+
+    #[test]
+    fn build_graph_from_request_rejects_bad_player() {
+        let stones = vec![(0i64, 0i64, 5i64)];
+        assert!(build_graph_from_request(&stones, 1, 2, 6, 6, 19).is_err());
+    }
+
+    #[test]
+    fn graph_queue_round_trip_assembles_ls() {
+        // Rust-side full round-trip WITHOUT Python: a background thread submits a
+        // graph and blocks; the main thread pops it, assembles a uniform LS from
+        // the retained slot map, wakes the waiter, and the thread returns the LS.
+        use std::sync::atomic::AtomicBool;
+        let b = graph_batcher();
+        let stones = vec![(0i64, 0i64, 1i64), (30, 0, -1), (31, 0, -1)];
+        let graph = build_graph_from_request(&stones, 1, 2, 6, 6, 19).unwrap();
+        let n_legal = graph.legal_node_gather.len();
+        assert!(n_legal > 0);
+
+        let bt = b.clone();
+        let done = std::sync::Arc::new(AtomicBool::new(false));
+        let done2 = done.clone();
+        let handle = std::thread::spawn(move || {
+            let res = bt.submit_batch_and_wait_graph_rust(vec![graph]);
+            done2.store(true, Ordering::SeqCst);
+            res
+        });
+
+        // main thread: pop + assemble + wake via the internal maps.
+        let pulled = loop {
+            let p = b.inner.pop_graph_batch_blocking(1, 200);
+            if !p.is_empty() {
+                break p;
+            }
+            assert!(!done.load(Ordering::SeqCst), "thread finished before pop");
+        };
+        assert_eq!(pulled.len(), 1);
+        let id = pulled[0].id;
+        let g = &pulled[0].graph;
+        let coords: Vec<(i32, i32)> = g
+            .legal_node_gather
+            .iter()
+            .map(|&row| (g.node_coords[row as usize * 2], g.node_coords[row as usize * 2 + 1]))
+            .collect();
+        let probs = vec![1.0f32 / n_legal as f32; n_legal];
+        let ls = assemble_ls_from_gnn_probs(b.policy_len, &probs, &g.policy_scatter_index.0, &coords);
+        // wake the waiter directly (mirrors submit_graph_inference_results).
+        let (_, waiter) = b.inner.graph_waiters.remove(&id).expect("waiter registered");
+        *waiter.result.lock().unwrap() = Some(Ok((ls, 0.5)));
+        waiter.cv.notify_all();
+
+        let out = handle.join().unwrap().expect("graph round-trip ok");
+        assert_eq!(out.len(), 1);
+        let (ls_out, v_out) = &out[0];
+        assert!((v_out - 0.5).abs() < 1e-6);
+        let total: f32 = ls_out.dense.iter().sum::<f32>() + ls_out.overflow.values().sum::<f32>();
+        assert!((total - 1.0).abs() < 1e-4, "assembled LS is a distribution, sum={total}");
     }
 }

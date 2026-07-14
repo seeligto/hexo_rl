@@ -420,6 +420,73 @@ pub fn aggregate_policy_ls(
     LegalSetPolicy { dense, overflow }
 }
 
+/// GNN counterpart of `aggregate_policy_ls` (seam design §3.4, the one new
+/// records fn for WP-3 option (b)). The GNN policy head emits ONE probability
+/// per legal node directly (whole-board graph — NO K-cluster scatter-max), so
+/// this is a pure re-key of the ragged per-legal-node probs into the EXISTING
+/// `LegalSetPolicy` no-drop consumer:
+///   - in-window legal node (`policy_dst_slot[i] != OFF_WINDOW_SLOT`) → `dense[slot]`;
+///   - off-window legal node (`policy_dst_slot[i] == OFF_WINDOW_SLOT` = -1) → `overflow[coord]`.
+///
+/// This reproduces the +414 no-drop decode regime (the dense-`[B,362]` scatter
+/// would DROP the 43.55% off-window legal cells WP-1 measured — the pre-R1
+/// handicap; seam design §1). `expand_and_backup_ls` then consumes the result
+/// byte-identically to the CNN legal-set path.
+///
+/// `legal_probs` are pre-normalized by the per-graph segmented softmax (§4.3),
+/// so there is NO renorm here — unlike `aggregate_policy_ls`, which renorms a
+/// K-cluster scatter-max. The pass slot stays 0.0 (no pass in HTTT). The i32
+/// `policy_dst_slot`/`OFF_WINDOW_SLOT` (-1 sentinel) is single-sourced from the
+/// builder crate so the sentinel can never drift from what `build_axis_graph`
+/// emits (contract §2.1/§2.2 amendment).
+#[inline]
+pub fn assemble_ls_from_gnn_probs(
+    n_actions: usize,
+    legal_probs: &[f32],
+    policy_dst_slot: &[i32],
+    legal_coords: &[(i32, i32)],
+) -> LegalSetPolicy {
+    assert!(
+        legal_probs.len() == policy_dst_slot.len() && legal_probs.len() == legal_coords.len(),
+        "assemble_ls_from_gnn_probs: ragged length mismatch — probs {} slots {} coords {}",
+        legal_probs.len(),
+        policy_dst_slot.len(),
+        legal_coords.len()
+    );
+
+    let mut dense = vec![0.0f32; n_actions];
+    let mut overflow: FxHashMap<(i32, i32), f32> = FxHashMap::default();
+
+    for i in 0..legal_probs.len() {
+        let slot = policy_dst_slot[i];
+        if slot == hexo_graph::OFF_WINDOW_SLOT {
+            overflow.insert(legal_coords[i], legal_probs[i]);
+        } else {
+            // In-window slot: bounded by the builder's always-on
+            // `verify_contract` (`ScatterSlotOutOfBounds`), but guard here too
+            // since this fn is a public seam consumer of an untrusted slice.
+            let idx = slot as usize;
+            assert!(
+                slot >= 0 && idx < n_actions,
+                "assemble_ls_from_gnn_probs: slot {slot} out of range 0..{n_actions}"
+            );
+            dense[idx] = legal_probs[i];
+        }
+    }
+
+    // Segmented-softmax invariant: probs already sum to 1 over the legal set.
+    // Loud in debug on a segmentation desync (design §3.4 guard); never renorm.
+    debug_assert!(
+        {
+            let sum: f32 = dense.iter().sum::<f32>() + overflow.values().sum::<f32>();
+            legal_probs.is_empty() || (sum - 1.0).abs() < 1e-3
+        },
+        "assemble_ls_from_gnn_probs: probs do not sum to 1 (segmented-softmax desync)"
+    );
+
+    LegalSetPolicy { dense, overflow }
+}
+
 /// Legal-set counterpart of `aggregate_policy_to_local`: projects the ragged
 /// global `ls` into the dense-362 frame of the cluster centred on `center`. For
 /// each legal move in this cluster's window it reads `ls` BY COORD — in-global-
@@ -900,5 +967,115 @@ mod dws3_tests {
         // the ragged target must remain a distribution after the soft blend (dense + overflow)
         let total: f32 = ls.dense.iter().sum::<f32>() + ls.overflow.values().sum::<f32>();
         assert!((total - 1.0).abs() < 1e-5, "LS soft injection must stay a distribution, sum={total}");
+    }
+}
+
+#[cfg(test)]
+mod gnn_assemble_tests {
+    //! WP-3 step 4 — `assemble_ls_from_gnn_probs` on REAL axis-graph fixtures.
+    //! Uses the native `hexo_graph::build_axis_graph` producer (single-source)
+    //! so the in-window/off-window split under test is exactly what the seam
+    //! will carry. The motivating case (seam design §1.4 falsifier: 20% of
+    //! deploy-argmax moves off-window) is exercised directly — an off-window
+    //! argmax MUST survive into `overflow`, never be dropped.
+    use super::*;
+    use hexo_graph::{build_axis_graph, BuildParams, StoneList, OFF_WINDOW_SLOT};
+
+    /// Two far-apart stone clusters → bbox-midpoint window centre (17,0), trunk
+    /// 19 covers q∈[8,26]; legal cells near cluster-2 (q≈29-35) fall OFF-window
+    /// (`policy_dst_slot == -1`). Returns (graph, legal_coords) where
+    /// `legal_coords[i] = node_coords[legal_node_gather[i]]`.
+    fn spread_graph() -> (hexo_graph::AxisGraph, Vec<(i32, i32)>) {
+        let mut stones: Vec<(i32, i32, i8)> = Vec::new();
+        for q in 0..5i32 {
+            stones.push((q, 0, 1)); // P1
+        }
+        for q in 30..35i32 {
+            stones.push((q, 0, -1)); // P2
+        }
+        let params = BuildParams { win_length: 6, radius: 6, current_player: 1, moves_remaining: 2, trunk_size: 19 };
+        let g = build_axis_graph(&StoneList { stones }, &params);
+        let legal_coords: Vec<(i32, i32)> = g
+            .legal_node_gather
+            .iter()
+            .map(|&row| (g.node_coords[row as usize * 2], g.node_coords[row as usize * 2 + 1]))
+            .collect();
+        (g, legal_coords)
+    }
+
+    #[test]
+    fn assemble_splits_in_window_and_off_window() {
+        let (g, coords) = spread_graph();
+        let slots = &g.policy_scatter_index.0;
+        let n_legal = slots.len();
+        let n_off = slots.iter().filter(|&&s| s == OFF_WINDOW_SLOT).count();
+        let n_in = n_legal - n_off;
+        assert!(n_off > 0 && n_in > 0, "fixture must be a MIXED board (in {n_in}, off {n_off})");
+
+        // uniform distribution over the legal set (pre-normalized, as §4.3 emits)
+        let probs = vec![1.0f32 / n_legal as f32; n_legal];
+        let ls = assemble_ls_from_gnn_probs(362, &probs, slots, &coords);
+
+        // every off-window node landed in overflow (NOT dropped); every
+        // in-window node landed at its dense slot; total mass conserved.
+        assert_eq!(ls.overflow.len(), n_off, "all off-window nodes retained in overflow");
+        for (i, &slot) in slots.iter().enumerate() {
+            if slot == OFF_WINDOW_SLOT {
+                let v = ls.overflow.get(&coords[i]).copied().unwrap_or(0.0);
+                assert!((v - probs[i]).abs() < 1e-6, "off-window prob preserved by coord");
+            } else {
+                assert!((ls.dense[slot as usize] - probs[i]).abs() < 1e-6, "in-window prob at dense slot");
+            }
+        }
+        let total: f32 = ls.dense.iter().sum::<f32>() + ls.overflow.values().sum::<f32>();
+        assert!((total - 1.0).abs() < 1e-4, "no mass dropped, sum={total}");
+    }
+
+    #[test]
+    fn assemble_off_window_argmax_survives() {
+        // The seam-design §1.4 motivating case: the model's CHOSEN move (argmax)
+        // is OFF-window. A dense-[B,362] drop would erase it (pre-R1 handicap);
+        // option (b) must carry it into overflow and keep it the global argmax.
+        let (g, coords) = spread_graph();
+        let slots = &g.policy_scatter_index.0;
+        let n_legal = slots.len();
+        let off_idx = slots
+            .iter()
+            .position(|&s| s == OFF_WINDOW_SLOT)
+            .expect("fixture has an off-window legal node");
+
+        // 0.9 mass on the off-window node, 0.1 spread over the rest → argmax off.
+        let mut probs = vec![0.1f32 / (n_legal - 1) as f32; n_legal];
+        probs[off_idx] = 0.9;
+        let ls = assemble_ls_from_gnn_probs(362, &probs, slots, &coords);
+
+        let off_coord = coords[off_idx];
+        let carried = ls.overflow.get(&off_coord).copied().expect("off-window argmax in overflow");
+        assert!((carried - 0.9).abs() < 1e-6, "off-window argmax mass preserved, got {carried}");
+        let dense_max = ls.dense.iter().copied().fold(0.0f32, f32::max);
+        let overflow_max = ls.overflow.values().copied().fold(0.0f32, f32::max);
+        assert!(overflow_max >= dense_max, "the off-window cell is the GLOBAL argmax (overflow {overflow_max} >= dense {dense_max})");
+        assert!((overflow_max - 0.9).abs() < 1e-6, "global argmax is the off-window chosen move");
+    }
+
+    #[test]
+    fn assemble_all_in_window_leaves_overflow_empty() {
+        // A compact single-cluster board: every legal cell is in-window, so
+        // overflow stays empty and dense carries the whole distribution.
+        let stones = vec![(0, 0, 1i8), (1, 0, -1i8), (0, 1, 1i8)];
+        let params = BuildParams { win_length: 6, radius: 6, current_player: 1, moves_remaining: 2, trunk_size: 19 };
+        let g = build_axis_graph(&StoneList { stones }, &params);
+        let slots = &g.policy_scatter_index.0;
+        assert!(slots.iter().all(|&s| s != OFF_WINDOW_SLOT), "compact board is fully in-window");
+        let coords: Vec<(i32, i32)> = g
+            .legal_node_gather
+            .iter()
+            .map(|&row| (g.node_coords[row as usize * 2], g.node_coords[row as usize * 2 + 1]))
+            .collect();
+        let n = slots.len();
+        let probs = vec![1.0f32 / n as f32; n];
+        let ls = assemble_ls_from_gnn_probs(362, &probs, slots, &coords);
+        assert!(ls.overflow.is_empty(), "no off-window cells → empty overflow");
+        assert!((ls.dense.iter().sum::<f32>() - 1.0).abs() < 1e-4);
     }
 }

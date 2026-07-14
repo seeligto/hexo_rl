@@ -48,11 +48,21 @@ _V8_NAMES = ("v8", "v8_canvas_realness")
 
 
 def _ok_names() -> List[str]:
-    return [s.name for s in all_specs() if s.name not in _V8_NAMES]
+    # Exclude v8 (loud-fail bucket) and graph encodings (the graph self-play
+    # pool path is WP-3 step 6 / not wired; the CNN pool resolve does not apply).
+    return [
+        s.name
+        for s in all_specs()
+        if s.name not in _V8_NAMES and s.representation != "graph"
+    ]
 
 
 def _v8_names() -> List[str]:
     return [s.name for s in all_specs() if s.name in _V8_NAMES]
+
+
+def _graph_names() -> List[str]:
+    return [s.name for s in all_specs() if s.representation == "graph"]
 
 
 # --------------------------------------------------------------------------- #
@@ -125,7 +135,7 @@ def test_every_registered_encoding_classified() -> None:
     """Tripwire — new encodings added to registry.toml will surface here
     if they don't land in one of the test buckets, prompting a test
     update."""
-    classified = set(_ok_names()) | set(_v8_names())
+    classified = set(_ok_names()) | set(_v8_names()) | set(_graph_names())
     registered = {s.name for s in all_specs()}
     missing = registered - classified
     assert not missing, (

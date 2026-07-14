@@ -42,6 +42,15 @@ fxhash = "0.2"
 dashmap = "6.0"
 flume = "0.12.0"
 toml = "0.9"
+# GNN-integration WP-3 (C3): the axis-graph builder, linked Rust→Rust (rlib,
+# no PyO3 on the builder — the once-per-leaf `build_axis_graph` call runs
+# GIL-free on the worker). `default-features = true` pulls `native`; the core
+# builder is not feature-gated. maturin still builds only `engine/Cargo.toml`
+# — this rlib dep folds into the single `.so`, no second extension module.
+# The dep edge is one-directional (hexo-graph never learns about engine/pyo3),
+# so `cargo check -p hexo-graph --features wasm` stays independent (WP-D).
+# Seam design §2.2 (`docs/designs/gnn_inference_seam_design.md`).
+hexo-graph = { path = "hexo-graph", default-features = true }
 
 [dev-dependencies]
 criterion = { version = "0.8", features = ["html_reports"] }

@@ -28,7 +28,9 @@ import pytest
 from engine import ReplayBuffer
 from hexo_rl.encoding import all_specs, lookup
 
-_REGISTERED: list[str] = sorted(s.name for s in all_specs())
+# Grid-only: the dense HEXB replay buffer round-trip does not apply to a graph
+# encoding (n_planes=0, no state_stride). The graph HEXG buffer is C8/WP-5.
+_REGISTERED: list[str] = sorted(s.name for s in all_specs() if s.representation == "grid")
 _N_CHAIN_PLANES = 6  # mirrors engine/src/replay_buffer/sym_tables.rs::N_CHAIN_PLANES
 
 

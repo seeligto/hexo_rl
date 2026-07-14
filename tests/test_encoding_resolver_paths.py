@@ -126,7 +126,10 @@ def test_expand_auto_paths_partial_replacement():
 # These are intentional gaps (v7/v7e30 retired before resolver entries landed).
 # Add entries to _CORPUS_PATHS / _ANCHOR_PATHS in hexo_rl/encoding/resolvers.py
 # and remove from this allowlist when the artifacts ship.
-_RESOLVER_GAPS_ALLOWLIST: frozenset[str] = frozenset({"v7", "v7e30"})
+# gnn_axis_v1: the graph training-data / corpus path (HEXG buffer, corpus
+# re-export) is C8/WP-5 — out of the WP-3 seam scope, so no corpus/anchor path
+# is registered yet (intentional gap).
+_RESOLVER_GAPS_ALLOWLIST: frozenset[str] = frozenset({"v7", "v7e30", "gnn_axis_v1"})
 
 
 def test_corpus_paths_covers_all_registered_encodings() -> None:
