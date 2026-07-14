@@ -38,6 +38,15 @@
 use std::collections::{HashMap, HashSet};
 use std::hash::{BuildHasherDefault, Hasher};
 
+// Feature-combination guard (review NIT #8): pyo3 does not target
+// wasm32-unknown-unknown; without this the combination fails with a confusing
+// dependency-resolution error instead of the crate's own message.
+#[cfg(all(feature = "wasm", feature = "python"))]
+compile_error!(
+    "hexo-graph: `wasm` and `python` features are mutually exclusive \
+     (pyo3 does not target wasm32-unknown-unknown)"
+);
+
 // ── constants (LEGACY relative+threat schema, contract v1 §2.1) ──────────────
 
 /// Per-node feature width: relative-7 base + 4 threat = 11
@@ -55,10 +64,13 @@ pub const WIN_AXES: [(i32, i32); 3] = [(1, 0), (0, 1), (1, -1)];
 pub const BUILDER_IMPL_NATIVE: u8 = 1;
 /// Sentinel for a legal node whose cell falls OUTSIDE the trunk-sized policy
 /// window (`window_flat_idx` returns `usize::MAX`, `core.rs:409`). Off-window
-/// legal cells have NO dense action slot — see the ambiguity note in
-/// `reports/probes/gnn_integration/WP1_builder.md`. The Python resolver maps
-/// this to its own off-window handling; the builder refuses to invent a slot.
-pub const OFF_WINDOW_SLOT: u32 = u32::MAX;
+/// legal cells have NO dense action slot — see
+/// `reports/probes/gnn_integration/WP1_builder.md` §4.1. Type is `i32`/-1 per
+/// the WP-3 seam ruling (`docs/designs/gnn_inference_seam_design.md` §1,
+/// option (b)): the deploy policy path is ragged per-legal-node, so this field
+/// is training/probe METADATA, not deploy-critical — the contract's original
+/// u16 cannot carry the sentinel cleanly and was amended (contract §2.1/§2.2).
+pub const OFF_WINDOW_SLOT: i32 = -1;
 
 // ── fast, dep-free, wasm-clean coordinate hashing ────────────────────────────
 //
@@ -126,13 +138,15 @@ pub struct EdgeIndex {
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct EdgeAttr(pub Vec<f32>);
 
-/// Per-legal-node destination action slot (0..361) in the fixed 362-slot dense
-/// action space, computed via `window_flat_idx_at_geom` at the graph's
-/// bbox-midpoint `window_center`. `OFF_WINDOW_SLOT` for off-window legal cells.
-/// This is the contract's `policy_dst_slot` (`gnn_ragged_contract_v1.md`
-/// §2.1/§2.4) — the input the Python collate scatters a per-node logit through.
+/// Per-legal-node destination action slot (0..trunk²) in the dense action
+/// space, computed via `window_flat_idx_at_geom` at the graph's bbox-midpoint
+/// `window_center`; `OFF_WINDOW_SLOT` (-1) for off-window legal cells. Type is
+/// `i32` per the amended contract §2.1: the WP-3 option-(b) ruling
+/// (`gnn_inference_seam_design.md` §1) demoted this field to training/probe
+/// metadata (deploy policy rides the ragged per-legal-node path), and the
+/// original u16 could not carry the off-window sentinel cleanly.
 #[derive(Debug, Clone, Default, PartialEq)]
-pub struct PolicyScatterIndex(pub Vec<u32>);
+pub struct PolicyScatterIndex(pub Vec<i32>);
 
 /// One built axis-graph — the single-leaf slice of the ragged contract, plus
 /// the semantic-layer geometry the amended contract carries on the wire
@@ -238,14 +252,15 @@ fn window_center(stones: &[(i32, i32, i8)]) -> (i32, i32) {
 }
 
 /// `core.rs::window_flat_idx_at_geom` — window-relative flat index, or
-/// `usize::MAX` off-window. Returned as u32 slot (or `OFF_WINDOW_SLOT`).
+/// `usize::MAX` off-window. Returned as i32 slot (`OFF_WINDOW_SLOT` = -1 for
+/// off-window, per the amended contract §2.1).
 #[inline]
-fn window_flat_idx(q: i32, r: i32, cq: i32, cr: i32, trunk_sz: i32) -> u32 {
+fn window_flat_idx(q: i32, r: i32, cq: i32, cr: i32, trunk_sz: i32) -> i32 {
     let half = (trunk_sz - 1) / 2;
     let wq = q - cq + half;
     let wr = r - cr + half;
     if wq >= 0 && wq < trunk_sz && wr >= 0 && wr < trunk_sz {
-        (wq as u32) * (trunk_sz as u32) + (wr as u32)
+        wq * trunk_sz + wr
     } else {
         OFF_WINDOW_SLOT
     }
@@ -365,7 +380,9 @@ fn legal_moves_from_stones(
     }
     let mut seen: FnvSet<i64> =
         FnvSet::with_capacity_and_hasher(stones.len() * offsets.len(), BuildHasherDefault::default());
-    let mut legal: Vec<(i32, i32)> = Vec::new();
+    // Same upper bound as `seen` (review NIT #5): every candidate is a
+    // stone×offset cell, minus stones and duplicates.
+    let mut legal: Vec<(i32, i32)> = Vec::with_capacity(stones.len() * offsets.len());
     for &(sq, sr, _) in stones {
         for &(dq, dr) in &offsets {
             let cq = sq + dq;
@@ -388,7 +405,17 @@ fn legal_moves_from_stones(
 /// §S186): one payload per evaluated leaf, no parallelism inside (the caller
 /// parallelizes over leaves).
 #[must_use]
+#[allow(clippy::missing_panics_doc)] // panics ARE the contract (verify_contract, die loud)
 pub fn build_axis_graph(stones_in: &StoneList, params: &BuildParams) -> AxisGraph {
+    // Parameter-domain asserts (review NIT #7): the threat window buffer is
+    // [i8; 64] = 2*wl-1 cells, so wl <= 32 is the REAL bound — assert it
+    // upfront rather than relying on the incidental index-bounds panic.
+    assert!(
+        (1..=32).contains(&params.win_length),
+        "BuildParams: win_length {} outside supported 1..=32 (threat cells buffer bound)",
+        params.win_length
+    );
+    assert!(params.trunk_size >= 1, "BuildParams: trunk_size {} < 1", params.trunk_size);
     let win_length = params.win_length as usize;
     let radius = i32::from(params.radius);
     let window = (params.win_length - 1) as usize; // axis-walk depth
@@ -424,6 +451,11 @@ pub fn build_axis_graph(stones_in: &StoneList, params: &BuildParams) -> AxisGrap
     let n_legal = legal.len();
     let n_real = n_stones + n_legal;
     let n = n_real + 1;
+    // Dedup key budget (review NIT #6, red-team Attack-1): the packed edge key
+    // `(src<<34)|(dst<<2)|axis` gives src 30 bits and dst 32 — injective only
+    // while node ids < 2^30. Red-team proved >=1e9 nodes unreachable (OOM long
+    // before); this assert makes the ceiling explicit instead of incidental.
+    assert!(n < (1 << 30), "node count {n} exceeds the 30-bit dedup key budget");
     let dummy_idx = n_real as u32;
     let fdim = NODE_FEAT_DIM;
 
@@ -590,7 +622,7 @@ pub fn build_axis_graph(stones_in: &StoneList, params: &BuildParams) -> AxisGrap
 
     // --- policy scatter (dense action slot per legal node) + gather rows ---
     let wc = window_center(&stones);
-    let mut policy_scatter_index: Vec<u32> = Vec::with_capacity(n_legal);
+    let mut policy_scatter_index: Vec<i32> = Vec::with_capacity(n_legal);
     let mut legal_node_gather: Vec<u32> = Vec::with_capacity(n_legal);
     for (j, &(q, r)) in legal.iter().enumerate() {
         legal_node_gather.push((n_stones + j) as u32);
@@ -612,7 +644,7 @@ pub fn build_axis_graph(stones_in: &StoneList, params: &BuildParams) -> AxisGrap
         current_player: to_move,
         builder_impl: BUILDER_IMPL_NATIVE,
     };
-    debug_assert_contract(&g, n_stones, n_legal, params.trunk_size);
+    verify_contract(&g, n_stones, n_legal, params);
     g
 }
 
@@ -664,40 +696,154 @@ fn dedup_axis_edges(src: &mut Vec<u32>, dst: &mut Vec<u32>, attr: &mut Vec<f32>)
     attr.truncate(w * EDGE_FEAT_DIM);
 }
 
-/// Producer-side contract invariants (`gnn_ragged_contract_v1.md` §2.5). Cheap
-/// checks so an oracle divergence / internal desync dies LOUD in debug + test
-/// builds rather than surfacing as a silent parity mismatch.
-#[inline]
-fn debug_assert_contract(g: &AxisGraph, n_stones: usize, n_legal: usize, trunk_sz: i32) {
-    if cfg!(debug_assertions) {
-        let n = g.num_nodes();
-        assert_eq!(g.n_nodes_checksum as usize, n, "n_nodes_checksum != N");
-        assert_eq!(n, n_stones + n_legal + 1, "N != stones+legal+dummy");
-        assert_eq!(g.node_coords.len(), 2 * n, "node_coords len != 2N");
-        assert_eq!(g.legal_mask.len(), n);
-        assert_eq!(g.stone_mask.len(), n);
-        assert_eq!(g.edge_attr.0.len(), EDGE_FEAT_DIM * g.num_edges(), "edge_attr != 5E");
-        assert_eq!(g.builder_impl, BUILDER_IMPL_NATIVE);
-        // edge ids in-bounds
-        for (&s, &d) in g.edge_index.src.iter().zip(&g.edge_index.dst) {
-            assert!((s as usize) < n && (d as usize) < n, "edge id out of bounds");
-        }
-        // gather in the legal subrange [n_stones, n_stones+n_legal); slot canonical
-        let half = (trunk_sz - 1) / 2;
-        for (i, &row) in g.legal_node_gather.iter().enumerate() {
+/// ALWAYS-ON producer-side contract verification (`gnn_ragged_contract_v1.md`
+/// §2.5) — promoted from `debug_assert` per WP-1 review #1 (dispatcher ruling):
+/// runs once per built graph in EVERY profile, release included, so the Rust
+/// producer has real defense-in-depth in production, not only in tests. A
+/// payload that fails a check PANICS with the NAMED contract error and is
+/// never emitted (die loud; the self-play worker dies with it — seam design
+/// ruling 6). Measured cost: see WP1_builder.md fix-pass addendum (bounded
+/// well under the ~3% always-on budget).
+///
+/// Leaf-checkable subset of the 18 named checks: `NodeCountChecksum`,
+/// `NodeFeatDimMismatch`, `EdgeAttrDimMismatch`, `EdgeIndexOutOfBounds`,
+/// `GatherNotLegalNode`, `ScatterSlotOutOfBounds`,
+/// `ScatterSlotCanonicalMismatch`, `ScatterSlotAliasing`, `EmptyLegalSet`,
+/// `EdgeAttrGeometryMismatch` (the contract's headline semantic check, ADV-8).
+/// Batch/wire-context checks (offsets, cross-graph, version, dtype,
+/// aug-round-trip) belong to the WP-3 collate resolver.
+///
+/// `float_cmp` allowed: the compared floats are EXACT constants the builder
+/// itself wrote (one-hot 0.0/1.0, integral signed_dist, ±1.0 src_player) —
+/// approximate comparison would WEAKEN the check.
+#[allow(clippy::float_cmp)]
+fn verify_contract(g: &AxisGraph, n_stones: usize, n_legal: usize, params: &BuildParams) {
+    let trunk_sz = params.trunk_size;
+    let n = g.num_nodes();
+    let n_edges = g.num_edges();
+    assert!(
+        g.n_nodes_checksum as usize == n && n == n_stones + n_legal + 1,
+        "NodeCountChecksum: declared {} vs N {} (stones {} + legal {} + 1)",
+        g.n_nodes_checksum, n, n_stones, n_legal
+    );
+    assert!(
+        g.node_feat.0.len() == n * NODE_FEAT_DIM && g.node_coords.len() == 2 * n,
+        "NodeFeatDimMismatch: node_feat len {} (want {}), node_coords len {} (want {})",
+        g.node_feat.0.len(), n * NODE_FEAT_DIM, g.node_coords.len(), 2 * n
+    );
+    assert!(
+        g.legal_mask.len() == n && g.stone_mask.len() == n,
+        "NodeFeatDimMismatch: mask lens {}/{} != N {}",
+        g.legal_mask.len(), g.stone_mask.len(), n
+    );
+    assert!(
+        g.edge_attr.0.len() == EDGE_FEAT_DIM * n_edges,
+        "EdgeAttrDimMismatch: edge_attr len {} != 5*E {}",
+        g.edge_attr.0.len(), EDGE_FEAT_DIM * n_edges
+    );
+    assert!(g.builder_impl == BUILDER_IMPL_NATIVE, "NonNativeSampleBuilder: impl tag != 1");
+    // EmptyLegalSet — a non-terminal position must produce >= 1 legal node.
+    // Terminal-input escape hatch (EXPLICIT): the EMPTY BOARD (n_stones == 0)
+    // is the ONLY input with a legitimately empty legal set — the oracle
+    // derives legal cells from stones, so a stoneless board has none (the
+    // strix bot short-circuits this case before the net, strix_v1_bot.py:182).
+    // Any stone-bearing board on the infinite lattice ALWAYS has empty
+    // neighbors, so n_legal == 0 with n_stones > 0 is a builder bug.
+    assert!(
+        n_legal > 0 || n_stones == 0,
+        "EmptyLegalSet: {n_stones} stones but zero legal nodes"
+    );
+
+    let dummy_idx = (n - 1) as u32;
+    let cur_f = f32::from(g.current_player);
+    let window = i32::from(params.win_length) - 1;
+    // Per-edge: bounds + EdgeAttrGeometryMismatch (recompute expected attrs
+    // from the WIRE arrays only — node_coords endpoints, stone/own columns,
+    // current_player — mirroring the resolver's check, contract §2.5 F2).
+    for e in 0..n_edges {
+        let s = g.edge_index.src[e];
+        let d = g.edge_index.dst[e];
+        assert!(
+            (s as usize) < n && (d as usize) < n,
+            "EdgeIndexOutOfBounds: edge {e} = ({s},{d}), N {n}"
+        );
+        let a = &g.edge_attr.0[e * EDGE_FEAT_DIM..e * EDGE_FEAT_DIM + EDGE_FEAT_DIM];
+        if s == dummy_idx || d == dummy_idx {
+            // dummy edges: ALL-ZERO attrs (strix_v1_graph.py dummy-edge rule)
             assert!(
-                (row as usize) >= n_stones && (row as usize) < n_stones + n_legal,
-                "gather outside legal subrange"
+                a.iter().all(|&x| x == 0.0),
+                "EdgeAttrGeometryMismatch: dummy edge {e} has non-zero attrs {a:?}"
             );
-            let q = g.node_coords[row as usize * 2];
-            let r = g.node_coords[row as usize * 2 + 1];
-            let slot = g.policy_scatter_index.0[i];
-            if slot != OFF_WINDOW_SLOT {
-                let wq = q - g.window_center.0 + half;
-                let wr = r - g.window_center.1 + half;
-                assert!(wq >= 0 && wq < trunk_sz && wr >= 0 && wr < trunk_sz, "slot claims in-window but coord off-window");
-                assert_eq!(slot, (wq as u32) * (trunk_sz as u32) + wr as u32, "non-canonical slot");
-            }
+            continue;
+        }
+        let axis = axis_idx_of(a) as usize;
+        let onehot_ok = (0..3).all(|k| a[k] == if k == axis { 1.0 } else { 0.0 });
+        let dist = a[3];
+        let di = dist as i32;
+        let (aq, ar) = WIN_AXES[axis];
+        let dq = g.node_coords[d as usize * 2] - g.node_coords[s as usize * 2];
+        let dr = g.node_coords[d as usize * 2 + 1] - g.node_coords[s as usize * 2 + 1];
+        // src_player from the wire: stone row's own/opp column x current_player.
+        let src_player = if g.stone_mask[s as usize] {
+            if g.node_feat.0[s as usize * NODE_FEAT_DIM] == 1.0 { cur_f } else { -cur_f }
+        } else {
+            0.0
+        };
+        assert!(
+            onehot_ok
+                && f64::from(dist) == f64::from(di)
+                && di != 0
+                && di.abs() <= window
+                && dq == di * aq
+                && dr == di * ar
+                && a[4] == src_player,
+            "EdgeAttrGeometryMismatch: edge {e} ({s}->{d}) attrs {a:?} vs geometry \
+             delta ({dq},{dr}), expected src_player {src_player}"
+        );
+    }
+
+    // gather in the legal subrange; slots canonical, in-bounds, alias-free.
+    assert!(
+        g.legal_node_gather.len() == n_legal && g.policy_scatter_index.0.len() == n_legal,
+        "GatherNotLegalNode: gather/slot lens {}/{} != n_legal {}",
+        g.legal_node_gather.len(), g.policy_scatter_index.0.len(), n_legal
+    );
+    let half = (trunk_sz - 1) / 2;
+    let n_slots = (trunk_sz * trunk_sz) as usize;
+    let mut slot_seen = vec![false; n_slots];
+    for (i, &row) in g.legal_node_gather.iter().enumerate() {
+        assert!(
+            (row as usize) >= n_stones && (row as usize) < n_stones + n_legal,
+            "GatherNotLegalNode: gather[{i}] = {row} outside [{}, {})",
+            n_stones, n_stones + n_legal
+        );
+        let q = g.node_coords[row as usize * 2];
+        let r = g.node_coords[row as usize * 2 + 1];
+        let slot = g.policy_scatter_index.0[i];
+        if slot == OFF_WINDOW_SLOT {
+            // sentinel must be HONEST: the coord really is off-window
+            let wq = q - g.window_center.0 + half;
+            let wr = r - g.window_center.1 + half;
+            assert!(
+                wq < 0 || wq >= trunk_sz || wr < 0 || wr >= trunk_sz,
+                "ScatterSlotCanonicalMismatch: slot[{i}] sentinel but coord ({q},{r}) in-window"
+            );
+        } else {
+            assert!(
+                slot >= 0 && (slot as usize) < n_slots,
+                "ScatterSlotOutOfBounds: slot[{i}] = {slot}, trunk² = {n_slots}"
+            );
+            let wq = q - g.window_center.0 + half;
+            let wr = r - g.window_center.1 + half;
+            assert!(
+                wq >= 0 && wq < trunk_sz && wr >= 0 && wr < trunk_sz && slot == wq * trunk_sz + wr,
+                "ScatterSlotCanonicalMismatch: slot[{i}] = {slot} vs canonical for ({q},{r})"
+            );
+            assert!(
+                !slot_seen[slot as usize],
+                "ScatterSlotAliasing: slot {slot} claimed by two legal nodes"
+            );
+            slot_seen[slot as usize] = true;
         }
     }
 }
@@ -772,6 +918,49 @@ mod tests {
         assert_eq!(g_dup.node_coords, g_dedup.node_coords);
         assert_eq!(g_dup.edge_index.src, g_dedup.edge_index.src);
         assert_eq!(g_dup.node_feat, g_dedup.node_feat);
+    }
+
+    #[test]
+    #[should_panic(expected = "ScatterSlotAliasing")]
+    fn verify_contract_dies_loud_on_slot_aliasing() {
+        // ADV-2b: two policy rows claiming one slot must be a NAMED panic,
+        // in every profile (verify_contract is always-on). Within one graph
+        // the canonical-slot check makes aliasing-with-honest-geometry
+        // impossible (window_flat_idx is injective on the window), so the
+        // adversarial payload is a DUPLICATED GATHER ROW: two policy rows
+        // gather the same legal node (each passes the subrange + canonical
+        // checks individually) and claim the same slot — aliasing fires.
+        let stones = StoneList { stones: vec![(0, 0, 1), (1, 0, -1)] };
+        let params = BuildParams::default();
+        let mut g = build_axis_graph(&stones, &params);
+        let idx: Vec<usize> = g
+            .policy_scatter_index
+            .0
+            .iter()
+            .enumerate()
+            .filter(|&(_, &s)| s != OFF_WINDOW_SLOT)
+            .map(|(i, _)| i)
+            .take(2)
+            .collect();
+        let (i0, i1) = (idx[0], idx[1]);
+        g.legal_node_gather[i1] = g.legal_node_gather[i0];
+        g.policy_scatter_index.0[i1] = g.policy_scatter_index.0[i0];
+        let (ns, nl) = (g.n_stones as usize, g.legal_node_gather.len());
+        verify_contract(&g, ns, nl, &params);
+    }
+
+    #[test]
+    #[should_panic(expected = "EdgeAttrGeometryMismatch")]
+    fn verify_contract_dies_loud_on_edge_attr_permutation() {
+        // ADV-8 (the contract's headline semantic payload): an edge_attr row
+        // inconsistent with its endpoints' geometry must be a NAMED panic.
+        let stones = StoneList { stones: vec![(0, 0, 1), (1, 0, -1)] };
+        let params = BuildParams::default();
+        let mut g = build_axis_graph(&stones, &params);
+        // flip the signed_dist of the first real (non-dummy) edge
+        g.edge_attr.0[3] = -g.edge_attr.0[3];
+        let (ns, nl) = (g.n_stones as usize, g.legal_node_gather.len());
+        verify_contract(&g, ns, nl, &params);
     }
 
     #[test]

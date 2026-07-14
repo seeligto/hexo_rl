@@ -110,7 +110,7 @@ All arrays are **flat 1-D** (or declared-shape numpy) crossing PyO3. `B` = batch
 | `edge_offsets` | `[B + 1]` | `i64` | edge ptr; `[0]=0`, `[B]=E`, non-decreasing |
 | `legal_offsets` | `[B + 1]` | `i64` | legal-node ptr; segments `policy_scatter_index` per graph |
 | `legal_node_gather` | `[Lg]` | `i64` | **global** node-row index of each legal node (into `node_feat`/embeddings) |
-| `policy_dst_slot` | `[Lg]` | `u16` | destination action slot (0..361) for each legal node |
+| `policy_dst_slot` | `[Lg]` | **`i32`** | destination action slot (0..361) for each in-window legal node; **−1 = off-window sentinel** (WP-1 measured 43.55% of legal cells off-window). AMENDED from u16 per the WP-3 option-(b) ruling (`gnn_inference_seam_design.md` §1): deploy policy is ragged per-legal-node, so this field is training/probe METADATA — u16 cannot carry the sentinel cleanly and the H2D saving no longer buys a hot-path anything |
 | `n_nodes_checksum` | `[B]` | `u32` | per-graph declared node count (stones+legal+1 dummy); off-by-one tripwire (ADV-1) |
 | `node_coords` | `[2 * N]` | `i32` | raw `(q, r)` per node (the builder's `coords`, `strix_v1_graph.py:133-145`; dummy = (0,0)). **Enables EXACT geometric verification** — edge_attr recompute (F2), canonical action-slot check (F1/F3). ~1 MB/batch at 125k nodes |
 | `n_stones` | `[B]` | `u16` | per-graph stone count → splits each graph's node rows into `[stones \| legal \| dummy]` (builder layout `strix_v1_graph.py:131,136-145`). REQUIRED for the legal-subrange check (F3): without it the resolver structurally cannot tell a stone node from a legal node |
@@ -149,8 +149,11 @@ worst class).
   **Downgrade lever (named, not taken for v1):** if a future PCIe-bound regime appears, `edge_index`
   MAY ship `u32`-on-wire with a SINGLE documented cast at the collate resolver (2.3) — never per-op,
   never per-graph.
-- `policy_dst_slot` stays **`u16`** — it is a per-graph action slot (0..361), never batched-global;
-  u16 is correct and halves its H2D.
+- `policy_dst_slot` is **`i32`** (AMENDED 2026-07-14; was u16) — it is a per-graph action slot
+  (0..361), never batched-global, PLUS the −1 off-window sentinel the u16 cannot carry cleanly.
+  Ruling source: WP-3 seam design §1 option (b) (`gnn_inference_seam_design.md`) demoted this
+  field from deploy-critical to training/probe metadata (deploy policy rides the ragged
+  per-legal-node path), so the original "halves its H2D" rationale no longer binds a hot path.
 - `node_feat` (F=11) and `edge_attr` (5) dims are **fixed and small** — no index-width question;
   they are `f32` value arrays, not indices.
 
@@ -222,14 +225,14 @@ amended wire now carries (`node_coords`, `n_stones`, `window_center`, `current_p
 | `GraphContractVersionMismatch` | `contract_version != 1` | wrong/stale producer |
 | `NodeFeatDimMismatch` | `len(node_feat) % 11 != 0` or declared F≠11, or `len(node_coords) != 2N` | truncated/padded node features/coords |
 | `EdgeAttrDimMismatch` | `len(edge_attr) % 5 != 0` or `len//5 != E` | truncated edge attrs |
-| `DtypeMismatch` | any array dtype ≠ declared (node_feat/edge_attr f32, edge_index/offsets/gather i64, dst_slot/n_stones u16, coords/centers i32, current_player i8) | a u16 edge_index that would wrap |
+| `DtypeMismatch` | any array dtype ≠ declared (node_feat/edge_attr f32, edge_index/offsets/gather i64, dst_slot i32 (amended, §2.2), n_stones u16, coords/centers i32, current_player i8) | a u16 edge_index that would wrap |
 | `BatchCountMismatch` | `len(node_offsets)!=len(edge_offsets)!=len(legal_offsets)!=B+1`, or `len(values)!=B`, or `len(n_nodes_checksum)!=B`, or `len(n_stones)!=B`, or `len(window_center)!=2B`, or `len(current_player)!=B` | dropped/added graph; missing semantic-layer array |
 | `OffsetsNonMonotonic` | any `*_offsets` not non-decreasing, or `[0]!=0`, or `[B]!=total` (N/E/Lg) | off-by-one / mis-segmentation (ADV-1) |
 | `NodeCountChecksum` | for any g: `node_offsets[g+1]-node_offsets[g] != n_nodes_checksum[g]`, or `n_stones[g] + 1 > n_nodes_checksum[g]` | INTERNAL off-by-one that keeps endpoints+monotonic (ADV-1) |
 | `EdgeIndexOutOfBounds` | any `edge_index` entry `<0` or `>=N` | corrupt/uninitialised edge id |
 | `EdgeCrossesGraphBoundary` | for edge e in graph g's `[edge_offsets[g],edge_offsets[g+1])`, either endpoint outside `[node_offsets[g],node_offsets[g+1])` | edge_index crossing a graph boundary (ADV-3) |
 | `ScatterGatherCrossesGraph` | for legal node i in graph g's legal range, `legal_node_gather[i]` outside graph g's node range | scatter gather aliasing two graphs (ADV-2) |
-| `ScatterSlotOutOfBounds` | any `policy_dst_slot >= 362` | policy logit into a non-existent move |
+| `ScatterSlotOutOfBounds` | any `policy_dst_slot >= 362`, or negative and ≠ −1 (the off-window sentinel, §2.1 i32 amendment) | policy logit into a non-existent move |
 | `ScatterSlotAliasing` | within one graph, two legal nodes map to the same `policy_dst_slot` | two legal nodes collapsing into one action (ADV-2) |
 | `EmptyLegalSet` | any graph with `legal_offsets[g+1]==legal_offsets[g]` | a position with no legal move → no producible policy row |
 

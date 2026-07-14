@@ -106,11 +106,14 @@ feature-gated OUT of the wasm build (the harness bin's `required-features` is un
 `--features wasm`, so `cargo check` never builds it; benches aren't built by `cargo check`).
 Clippy (pedantic) is **0 warnings** across lib + bin + bench.
 
-**Contract assertions producer-side.** `debug_assert_contract` fires in debug/test builds on the
-§2.5 invariants: `n_nodes_checksum == N`, `N == stones+legal+dummy`, `node_coords` len `== 2N`,
-`edge_attr` len `== 5E`, all edge ids in-bounds, every `legal_node_gather` row in the legal subrange
-`[n_stones, n_stones+n_legal)`, and every `policy_dst_slot` either the documented off-window
-sentinel or the canonical `window_flat_idx` of its gathered coord. Oracle divergence dies loud.
+**Contract assertions producer-side.** `verify_contract` (ALWAYS-ON, every profile — promoted
+from debug-assert per review #1, see §6) fires on the §2.5 invariants: `n_nodes_checksum == N`,
+`N == stones+legal+dummy`, `node_coords` len `== 2N`, `edge_attr` len `== 5E`, all edge ids
+in-bounds, every `legal_node_gather` row in the legal subrange `[n_stones, n_stones+n_legal)`,
+every `policy_dst_slot` either the honest off-window sentinel or the canonical `window_flat_idx`
+of its gathered coord, no slot aliasing, per-edge attr↔geometry consistency
+(`EdgeAttrGeometryMismatch`, ADV-8), and `EmptyLegalSet` (empty-board escape hatch only). A
+failing payload panics with the NAMED contract error and is never emitted.
 
 ---
 
@@ -123,7 +126,8 @@ contract's `policy_dst_slot` (`window_flat_idx` at the bbox `window_center`, `gn
 §2.4) is a WP-B addition with **no oracle in `build_axis_graph_raw`**. Measured: **43.55% of legal
 cells (57567/132174) across the 320-set are OFF-WINDOW** — outside the trunk-19 window, where
 `core.rs::window_flat_idx_at_geom` returns `usize::MAX`. The oracle is silent on their slot.
-**Resolved (not silently):** the builder emits `OFF_WINDOW_SLOT = u32::MAX` (harness JSON: `-1`) and
+**Resolved (not silently):** the builder emits `OFF_WINDOW_SLOT` = `-1` (i32 since the §6 fix
+pass; originally u32::MAX with a harness `-1` remap) and
 defers off-window handling to the Python resolver — consistent with engine `records.rs:62` which
 SKIPS off-window legal cells at record time. **Decision WP-3/WP-B must ratify:** whether an
 off-window legal node is dropped, masked, or gets a synthetic slot in the dense `[B,362]` scatter.
@@ -183,3 +187,45 @@ single-schema by design.
 **Out of scope, untouched:** `engine/src/**`, `hexo_rl/**`, `Makefile`, workspace `Cargo.toml`. PyO3
 wiring into the engine seam + the dense `[B,362]` re-projection are WP-3; the block-diagonal collate
 resolver + off-window ruling (§4.1) are WP-B/WP-3.
+
+---
+
+## 6. Fix-pass addendum (2026-07-14, post WP1_review.md REVIEW-FIXES-REQUIRED)
+
+Applied per dispatcher ruling; red-team (`WP1_redteam.md`) came back CLEAN over the reachable
+domain, so no red-team-driven code change beyond the harness cast validation it flagged.
+
+| review item | action |
+|---|---|
+| #2 MUST-FIX | Empty board (4 variants) + 1-stone boards (4 variants) now IN the oracle-compared parity set (`_build_inputs()` section (a)) — not just Rust-side unit tests |
+| #1 (ruling: promote) | `debug_assert_contract` → **`verify_contract`, ALWAYS-ON in every profile** (release included). A failing payload PANICS with the NAMED contract error and is never emitted. Cost measured below |
+| #3 (ruling: i32) | `policy_dst_slot`/`OFF_WINDOW_SLOT` = **`i32` / −1** (was u32/MAX; contract said u16). Contract §2.1/§2.2/§2.5 AMENDED citing the WP-3 option-(b) ruling (`gnn_inference_seam_design.md` §1: field demoted to training/probe metadata; u16 can't carry the sentinel). Harness serializes the i32 natively (no −1 remap) |
+| #4 | `verify_contract` extended with the leaf-checkable missing checks: **`ScatterSlotAliasing`** (bitset over trunk²), **`EdgeAttrGeometryMismatch`** (per-edge recompute from WIRE arrays only — node_coords endpoints, axis one-hot, integral signed_dist ≤ window, src_player from stone/own columns × current_player; dummy edges all-zero), **`EmptyLegalSet`** (legal ≥ 1; EXPLICIT terminal escape hatch: the empty board — n_stones == 0 — is the ONLY input with a legitimately empty legal set, matching the strix bot's pre-net short-circuit). Two new should-panic unit tests prove ADV-2b and ADV-8 die with the named error |
+| #12 | Second geometry in the parity suite: 100 base positions at **win_length=5 / radius=4** (threat-window sizing, walk depth, legal ring) — oracle-compared, byte-exact |
+| #5 | `legal` Vec capacity-reserved (same bound as its sibling `seen` set) |
+| #7 | `win_length ∈ 1..=32` asserted at builder entry (the `[i8;64]` threat-buffer bound), `trunk_size ≥ 1` |
+| #8 | `compile_error!` guard for `wasm`+`python` (verified: fires with the crate's own message) |
+| #9 + red-team Attack-4 | Harness parsing STRICT: present-but-wrong-typed field dies loud (defaults only on ABSENT); every narrowing cast range-validated first (`moves_remaining` must fit u8, `current_player` i8 — a −1 can no longer wrap to 255) |
+| #10 | Harness output now `{"harness_schema_version": 1, "graphs": [...]}` — version-tagged test scaffolding |
+| #11 | Dead always-zero `max_int_diff` deleted; parity print now says "ints byte-asserted" (hard equality, not a computed diff) |
+| #6 | 30-bit src dedup-key ceiling made EXPLICIT: `assert!(n < (1 << 30))` once per build + comment (red-team proved ≥1e9 nodes unreachable — no further change) |
+| #13 | SKIPPED (not in the dispatcher fix list; marginal combinatorial coverage) |
+| #1-alt (b) | Moot — option (a) taken (always-on), so the "document release-mode gap" alternative doesn't apply |
+
+**Parity rerun (all fixes in):** n=**1696** positions (8 degenerate + 1588 default-geometry +
+100 at wl=5/r=4), 17,742,046 edges, ints byte-asserted (hard equality), max_float_diff = 0.00e+00.
+
+**Always-on verify_contract cost:** see the bench table below — measured on the same frozen
+position set, same instrument, single post-fix run vs the §2 pre-fix baseline.
+
+| bench | pre-fix (debug-assert, compiled out) | post-fix (always-on) | delta (criterion vs-prev) |
+|---|---|---|---|
+| `full_set/all_positions` median | 297.2 ms (929 µs/pos) | 306.0 ms (**956 µs/pos**), MAD ~15 µs/pos | **+2.14%** CI [+1.74, +2.54], p<0.05 |
+| `per_position` median | 925.5 µs | 955.1 µs, CI [942, 968] | +1.56% CI [−1.5, +4.6], p=0.31 (n.s.) |
+
+Both runs cooled (same protocol as §2). Verdict vs the ~3% always-on budget: **+2.1%
+(full-set, the tighter instrument) < 3% → ALWAYS-ON STANDS** per the dispatcher ruling; the
+cost is the O(E) edge-geometry recompute + the O(n_legal) slot bitset, ~20 µs/pos. Still
+comfortably within the ≤1.5 ms contract budget (0.956 < 1.5). wasm check GREEN, clippy 0
+warnings (the `float_cmp` allow on `verify_contract` is intentional — the compared floats are
+exact constants the builder itself wrote; approximate comparison would weaken the check).

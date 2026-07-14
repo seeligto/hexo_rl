@@ -8,13 +8,16 @@ production path. This test drives the Rust builder over >=1000 real positions
 and asserts:
 
   * INTEGER outputs byte-exact (node order, edge_index, masks, node_coords,
-    n_stones, policy scatter indices, window_center, checksums): max diff == 0.
+    n_stones, policy scatter indices, window_center, checksums) via hard
+    equality asserts — any mismatch fails the test immediately.
   * FLOAT features (node_feat, edge_attr) equal to <= 1e-6 (both cast float32,
     mirroring the oracle's Python-float -> torch.float32 deploy path).
 
 Bridge: a standalone `[[bin]]` harness in the crate (feature `harness`) reads a
 positions JSON and writes the graph payloads as JSON arrays; this test invokes
 it via subprocess. NO PyO3 / no `engine` crate touched (that is WP-3's seam).
+The harness output is `{"harness_schema_version": 1, "graphs": [...]}` — test
+scaffolding, not the WP-3 wire contract.
 
 BUILD THE HARNESS FIRST (Makefile-independent):
 
@@ -24,10 +27,15 @@ If the binary is absent the test SKIPS with this command in the message.
 
 Position coverage: the frozen WP-A self-play set (320 real positions,
 `reports/probes/gnn_integration/wpa_positions.json`) augmented to >=1000 by (a)
-a current-player / moves-remaining sweep and (b) prefix-truncations of the real
-stone lists (the replay JSONLs under logs/replays/ hold only empty draw games,
-so per-ply sweeping them yields nothing — see WP1_builder.md). Every geometry
-is a real self-play board or a real-board prefix.
+degenerate boards checked against the REAL oracle — the empty board (game
+start, ply 0) and 1-stone boards (review MUST-FIX #2); (b) a current-player /
+moves-remaining sweep; (c) prefix-truncations of the real stone lists (the
+replay JSONLs under logs/replays/ hold only empty draw games, so per-ply
+sweeping them yields nothing — see WP1_builder.md); (d) a SECOND GEOMETRY
+sweep (review #12): ~100 base positions rebuilt at win_length=5 / radius=4 so
+the non-default parameterization of the threat windows, walk depth, and legal
+ring is oracle-tested, not just compiled. Every geometry is a real self-play
+board, a real-board prefix, or a canonical degenerate board.
 """
 from __future__ import annotations
 
@@ -49,7 +57,13 @@ BUILD_CMD = "cargo build --release -j4 -p hexo-graph --features harness"
 TRUNK_SZ = 19
 WIN_LENGTH = 6
 RADIUS = 6
+# Second geometry (review #12): a non-default (win_length, radius) pair the
+# oracle fully supports, swept over a ~100-position subset.
+ALT_WIN_LENGTH = 5
+ALT_RADIUS = 4
+ALT_SUBSET = 100
 FLOAT_TOL = 1e-6
+HARNESS_SCHEMA_VERSION = 1
 
 
 def _canonical_slot(q: int, r: int, cq: int, cr: int, trunk_sz: int = TRUNK_SZ) -> int:
@@ -63,26 +77,60 @@ def _canonical_slot(q: int, r: int, cq: int, cr: int, trunk_sz: int = TRUNK_SZ) 
 
 
 def _build_inputs() -> list[dict]:
-    """Real self-play positions augmented to >=1000 (see module docstring)."""
+    """Real self-play positions augmented to >=1000 (see module docstring).
+
+    Each input dict carries explicit win_length/radius so the oracle call and
+    the harness build the SAME parameterization per position.
+    """
     base = json.loads(POSITIONS.read_text())["positions"]
     inputs: list[dict] = []
+
+    def add(stones, cp, mr, wl=WIN_LENGTH, rad=RADIUS):
+        inputs.append(
+            {
+                "stones": stones,
+                "current_player": cp,
+                "moves_remaining": mr,
+                "win_length": wl,
+                "radius": rad,
+            }
+        )
+
+    # (a) degenerate boards vs the REAL oracle (review MUST-FIX #2):
+    # empty board (the actual pre-move-1 state of every game) x player x moves,
+    # and 1-stone boards for both stone owners x both sides to move.
+    for cp in (1, -1):
+        for mr in (1, 2):
+            add([], cp, mr)
+    for stone_p in (1, -1):
+        for cp in (1, -1):
+            add([[0, 0, stone_p]], cp, 2)
+
     for p in base:
         cp = int(p["current_player"])
         mr = int(p["moves_remaining"])
         stones = [[int(a), int(b), int(c)] for a, b, c in p["stones"]]
-        # (a) as-recorded
-        inputs.append({"stones": stones, "current_player": cp, "moves_remaining": mr})
-        # (a) player/moves sweep — exercises player_feat / own_is_p1 / moves_feat
-        inputs.append({"stones": stones, "current_player": -cp, "moves_remaining": 3 - mr})
-        # (b) prefix truncations — distinct real-board geometries
+        # (b) as-recorded + player/moves sweep — exercises player_feat /
+        # own_is_p1 / moves_feat
+        add(stones, cp, mr)
+        add(stones, -cp, 3 - mr)
+        # (c) prefix truncations — distinct real-board geometries
         n = len(stones)
         if n >= 4:
             for frac in (0.25, 0.5, 0.75):
                 k = max(1, int(round(n * frac)))
                 if 1 <= k < n:
-                    inputs.append(
-                        {"stones": stones[:k], "current_player": cp, "moves_remaining": mr}
-                    )
+                    add(stones[:k], cp, mr)
+
+    # (d) second geometry (review #12): first ALT_SUBSET base positions at
+    # win_length=5 / radius=4 — exercises the threat-window sizing (2*wl-1
+    # cells, wl-2 axis threshold), the axis-walk depth (window=wl-1), and the
+    # legal-ring radius against the oracle.
+    for p in base[:ALT_SUBSET]:
+        stones = [[int(a), int(b), int(c)] for a, b, c in p["stones"]]
+        add(stones, int(p["current_player"]), int(p["moves_remaining"]),
+            wl=ALT_WIN_LENGTH, rad=ALT_RADIUS)
+
     return inputs
 
 
@@ -100,7 +148,9 @@ def _run_harness(inputs: list[dict]) -> list[dict]:
         out = Path(td) / "out.json"
         inp.write_text(json.dumps(payload))
         subprocess.run([str(HARNESS), str(inp), str(out)], check=True)
-        return json.loads(out.read_text())
+        doc = json.loads(out.read_text())
+    assert doc["harness_schema_version"] == HARNESS_SCHEMA_VERSION
+    return doc["graphs"]
 
 
 @pytest.mark.skipif(not POSITIONS.exists(), reason=f"missing {POSITIONS}")
@@ -110,11 +160,12 @@ def test_hexo_graph_rust_matches_python_oracle():
 
     inputs = _build_inputs()
     assert len(inputs) >= 1000, f"only {len(inputs)} positions (<1000)"
+    n_alt_geom = sum(1 for s in inputs if s["win_length"] != WIN_LENGTH)
+    assert n_alt_geom >= ALT_SUBSET, "second-geometry sweep missing"
 
     rust = _run_harness(inputs)
     assert len(rust) == len(inputs)
 
-    max_int_diff = 0
     max_float_diff = 0.0
     n_edges_total = 0
 
@@ -123,13 +174,14 @@ def test_hexo_graph_rust_matches_python_oracle():
         cp = spec["current_player"]
         mr = spec["moves_remaining"]
         g = build_axis_graph_raw(
-            sm, cp, mr, win_length=WIN_LENGTH, radius=RADIUS, relative_stones=True,
-            threat_features=True, prune_empty_edges=False,
+            sm, cp, mr,
+            win_length=spec["win_length"], radius=spec["radius"],
+            relative_stones=True, threat_features=True, prune_empty_edges=False,
         )
         n_stones = len(sm)
         n_edges_total += len(g["edge_src"])
 
-        # --- INTEGER byte-exact ---
+        # --- INTEGER byte-exact (hard equality; mismatch fails immediately) ---
         assert R["num_nodes"] == g["num_nodes"]
         assert R["n_nodes_checksum"] == g["num_nodes"]
         assert R["n_stones"] == n_stones
@@ -141,7 +193,9 @@ def test_hexo_graph_rust_matches_python_oracle():
         assert R["current_player"] == (1 if cp == 1 else -1)
         assert R["builder_impl"] == 1
 
-        # gather rows + policy scatter (contract-added; oracle geometry references)
+        # gather rows + policy scatter (contract-added; oracle geometry
+        # references — slots are i32 with -1 = off-window sentinel, per the
+        # amended contract §2.1 / WP-3 option-(b) ruling)
         assert R["legal_node_gather"] == [n_stones + j for j in range(len(g["legal_coords"]))]
         cq, cr = _window_center([(s[0], s[1]) for s in spec["stones"]])
         assert list(R["window_center"]) == [cq, cr]
@@ -163,6 +217,7 @@ def test_hexo_graph_rust_matches_python_oracle():
 
     assert max_float_diff <= FLOAT_TOL, f"float diff {max_float_diff} > {FLOAT_TOL}"
     print(
-        f"\nPARITY OK: n={len(inputs)} positions, {n_edges_total} edges, "
-        f"max_int_diff={max_int_diff}, max_float_diff={max_float_diff:.2e}"
+        f"\nPARITY OK: n={len(inputs)} positions ({n_alt_geom} at "
+        f"wl={ALT_WIN_LENGTH}/r={ALT_RADIUS}), {n_edges_total} edges, "
+        f"ints byte-asserted, max_float_diff={max_float_diff:.2e}"
     )
