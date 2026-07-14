@@ -418,15 +418,19 @@ impl InferenceBatcher {
             return Err(());
         }
         let n = graphs.len();
+        // N5: run the builder_impl + contract_version handshake (§7) as a
+        // PRE-PASS before touching the queue / waiter maps, so a bad tag can
+        // never leave half the batch enqueued with orphaned waiters. The ONLY
+        // builder is native hexo-graph; a non-native tag never reaches the queue.
+        if self.graph_contract_version != 1
+            || graphs.iter().any(|g| g.builder_impl != BUILDER_IMPL_NATIVE)
+        {
+            return Err(());
+        }
         let mut waiters = Vec::with_capacity(n);
         {
             let mut queue = self.inner.graph_queue.lock().expect("graph queue lock poisoned");
             for graph in graphs {
-                // builder_impl + contract_version handshake (§7): the ONLY builder
-                // is native hexo-graph; a non-native tag never reaches the queue.
-                if graph.builder_impl != BUILDER_IMPL_NATIVE || self.graph_contract_version != 1 {
-                    return Err(());
-                }
                 let id = self.inner.next_id.fetch_add(1, Ordering::SeqCst);
                 let waiter = Arc::new(GraphWaiter::default());
                 self.inner.graph_waiters.insert(id, waiter.clone());
@@ -488,6 +492,61 @@ impl InferenceBatcher {
         self.inner.model_version.load(Ordering::Relaxed)
     }
 
+    /// Whether this batcher was constructed from a `representation="graph"`
+    /// spec. The worker loop reads this ONCE per leaf-batch to dispatch to
+    /// `infer_and_expand_graph`; `false` for every grid batcher (the dense hot
+    /// path after the dispatch branch is byte-identical).
+    pub(crate) fn is_graph(&self) -> bool {
+        matches!(self.representation, Representation::Graph)
+    }
+
+    /// The graph builder's slot-window trunk (= `spec.trunk_size`). Single
+    /// source for the expand-time frame trunk (`expand_and_backup_ls_at`) so it
+    /// can never drift from the `policy_dst_slot` trunk the builder baked.
+    pub(crate) fn graph_trunk_size(&self) -> i32 {
+        self.graph_trunk_size
+    }
+
+    /// Build one leaf's axis graph from its stones, running the WP-1 red-team
+    /// seam guards (`build_graph_from_request`). Returns `None` on any guard
+    /// violation (unreachable for a valid self-play board — coords are bounded,
+    /// player/moves in range — so the worker degrades like the dense
+    /// inference-failure path: skip the batch). Uses the batcher's own graph
+    /// `BuildParams` fields (no scattered literals — seam design §3.2).
+    pub(crate) fn build_leaf_graph(
+        &self,
+        stones: &[(i64, i64, i64)],
+        current_player: i64,
+        moves_remaining: i64,
+    ) -> Option<AxisGraph> {
+        build_graph_from_request(
+            stones,
+            current_player,
+            moves_remaining,
+            self.graph_win_length,
+            self.graph_radius,
+            self.graph_trunk_size,
+        )
+        .ok()
+    }
+
+    /// N5 helper: wake + drop every still-pending graph waiter in `ids` with
+    /// `err_msg` so a mid-loop error return in `submit_graph_inference_results`
+    /// never orphans a blocked worker (a waiter whose result is already set is
+    /// left untouched — tolerant, idempotent with `submit_graph_inference_failure`).
+    fn fail_remaining_graph_ids(&self, ids: &[u64], err_msg: &str) {
+        for &fid in ids {
+            self.inner.in_flight_graphs.remove(&fid);
+            if let Some((_, waiter)) = self.inner.graph_waiters.remove(&fid) {
+                let mut g = waiter.result.lock().expect("graph waiter lock poisoned");
+                if g.is_none() {
+                    *g = Some(Err(err_msg.to_string()));
+                }
+                waiter.cv.notify_all();
+            }
+        }
+    }
+
     /// Guard: a graph seam method requires a `representation="graph"` batcher.
     /// A grid batcher (every dense construction) raises `RepresentationMismatch`
     /// (seam design §5-below / D-EVALGATE loud-fail precedent).
@@ -543,11 +602,14 @@ impl InferenceBatcher {
         let representation = spec_static.map_or(Representation::Grid, |s| s.representation);
         let (graph_win_length, graph_radius, graph_trunk_size, graph_contract_version) =
             if let (Representation::Graph, Some(spec)) = (representation, spec_static) {
+                // N1: `validate()` guarantees these `Some` for a graph spec, so a
+                // literal `6`/`1` fallback is dead code that would mask a
+                // registry desync — die loud instead (design §5 no-literals rule).
                 (
-                    spec.win_length.unwrap_or(6) as u8,
-                    spec.graph_radius.unwrap_or(6) as u16,
+                    spec.win_length.expect("validate guarantees win_length for a graph spec") as u8,
+                    spec.graph_radius.expect("validate guarantees graph_radius for a graph spec") as u16,
                     spec.trunk_size as i32,
-                    spec.contract_version.unwrap_or(1),
+                    spec.contract_version.expect("validate guarantees contract_version for a graph spec"),
                 )
             } else {
                 (0, 0, 0, 1)
@@ -1017,9 +1079,11 @@ impl InferenceBatcher {
             let start = lo[i];
             let end = lo[i + 1];
             if start < 0 || end < start || (end as usize) > probs.len() {
-                return Err(PyValueError::new_err(format!(
-                    "legal_offsets segment [{start},{end}] out of range for id {id}"
-                )));
+                // N5: fail the whole remaining batch so no waiter is orphaned on
+                // a mid-loop error return (the segment slice itself is invalid).
+                let msg = format!("legal_offsets segment [{start},{end}] out of range for id {id}");
+                self.fail_remaining_graph_ids(&request_ids[i..], &msg);
+                return Err(PyValueError::new_err(msg));
             }
             let leaf_probs = &probs[start as usize..end as usize];
 
@@ -1029,28 +1093,40 @@ impl InferenceBatcher {
                 continue;
             };
             if meta.policy_dst_slot.len() != leaf_probs.len() {
-                // Segmentation desync — die loud on this waiter (contract §7).
-                if let Some((_, waiter)) = self.inner.graph_waiters.remove(&id) {
-                    let mut g = waiter.result.lock().expect("graph waiter lock poisoned");
-                    *g = Some(Err(format!(
-                        "legal-probs segment len {} != builder n_legal {} for id {id}",
-                        leaf_probs.len(),
-                        meta.policy_dst_slot.len()
-                    )));
-                    waiter.cv.notify_all();
-                }
-                return Err(PyValueError::new_err(format!(
+                // Segmentation desync — die loud (contract §7). N5: wake THIS
+                // waiter + all remaining ids so none is orphaned.
+                let msg = format!(
                     "submit_graph_inference_results: segment len {} != n_legal {} for id {id}",
                     leaf_probs.len(),
                     meta.policy_dst_slot.len()
-                )));
+                );
+                if let Some((_, waiter)) = self.inner.graph_waiters.remove(&id) {
+                    let mut g = waiter.result.lock().expect("graph waiter lock poisoned");
+                    *g = Some(Err(msg.clone()));
+                    waiter.cv.notify_all();
+                }
+                self.fail_remaining_graph_ids(&request_ids[i + 1..], &msg);
+                return Err(PyValueError::new_err(msg));
             }
-            let ls = assemble_ls_from_gnn_probs(
+            let ls = match assemble_ls_from_gnn_probs(
                 self.policy_len,
                 leaf_probs,
                 &meta.policy_dst_slot,
                 &meta.legal_coords,
-            );
+            ) {
+                Ok(ls) => ls,
+                Err(e) => {
+                    // N4: graceful die-loud (release profile = panic=abort) — wake
+                    // this waiter + N5 the remaining batch.
+                    if let Some((_, waiter)) = self.inner.graph_waiters.remove(&id) {
+                        let mut g = waiter.result.lock().expect("graph waiter lock poisoned");
+                        *g = Some(Err(e.clone()));
+                        waiter.cv.notify_all();
+                    }
+                    self.fail_remaining_graph_ids(&request_ids[i + 1..], &e);
+                    return Err(PyValueError::new_err(e));
+                }
+            };
             if let Some((_, waiter)) = self.inner.graph_waiters.remove(&id) {
                 let mut g = waiter.result.lock().expect("graph waiter lock poisoned");
                 *g = Some(Ok((ls, vals[i])));
@@ -1077,6 +1153,55 @@ impl InferenceBatcher {
             }
         }
         Ok(())
+    }
+
+    /// Blocking graph-inference driver for the OQ-7 step-0 smoke (seam design
+    /// §7 step 7) + eval subprocess round-trip: builds one axis graph per
+    /// `(stones, current_player, moves_remaining)` position (running the WP-1
+    /// seam guards), submits the whole batch through the graph queue, releases
+    /// the GIL, and blocks until the InferenceServer graph loop assembles each
+    /// leaf's `LegalSetPolicy` (the SAME `submit_batch_and_wait_graph_rust` +
+    /// `assemble_ls_from_gnn_probs` path the worker's `infer_and_expand_graph`
+    /// rides). Returns per-position `(dense[policy_len], overflow[(q,r)->prob],
+    /// value)` so Python can inspect the priors the engine actually received —
+    /// the round-trip the design's step-7 parity gate demands. NOT a self-play
+    /// hot-path method (workers never cross PyO3 per leaf); it exposes the
+    /// assembled ragged policy to Python for the smoke.
+    #[allow(clippy::type_complexity)]
+    pub fn submit_graphs_and_wait(
+        &self,
+        py: Python<'_>,
+        positions: Vec<(Vec<(i64, i64, i64)>, i64, i64)>,
+    ) -> PyResult<Vec<(Vec<f32>, Vec<((i32, i32), f32)>, f32)>> {
+        self.require_graph()?;
+        let mut graphs = Vec::with_capacity(positions.len());
+        for (stones, current_player, moves_remaining) in &positions {
+            let g = build_graph_from_request(
+                stones,
+                *current_player,
+                *moves_remaining,
+                self.graph_win_length,
+                self.graph_radius,
+                self.graph_trunk_size,
+            )?;
+            graphs.push(g);
+        }
+        let results = py
+            .detach(|| self.submit_batch_and_wait_graph_rust(graphs))
+            .map_err(|()| {
+                PyValueError::new_err(
+                    "submit_graphs_and_wait: batcher closed or graph inference failed",
+                )
+            })?;
+        let out = results
+            .into_iter()
+            .map(|(ls, v)| {
+                let overflow: Vec<((i32, i32), f32)> =
+                    ls.overflow.iter().map(|(&k, &p)| (k, p)).collect();
+                (ls.dense, overflow, v)
+            })
+            .collect();
+        Ok(out)
     }
 }
 
@@ -1311,7 +1436,8 @@ mod tests {
             .map(|&row| (g.node_coords[row as usize * 2], g.node_coords[row as usize * 2 + 1]))
             .collect();
         let probs = vec![1.0f32 / n_legal as f32; n_legal];
-        let ls = assemble_ls_from_gnn_probs(b.policy_len, &probs, &g.policy_scatter_index.0, &coords);
+        let ls = assemble_ls_from_gnn_probs(b.policy_len, &probs, &g.policy_scatter_index.0, &coords)
+            .expect("assemble ok");
         // wake the waiter directly (mirrors submit_graph_inference_results).
         let (_, waiter) = b.inner.graph_waiters.remove(&id).expect("waiter registered");
         *waiter.result.lock().unwrap() = Some(Ok((ls, 0.5)));
@@ -1323,5 +1449,65 @@ mod tests {
         assert!((v_out - 0.5).abs() < 1e-6);
         let total: f32 = ls_out.dense.iter().sum::<f32>() + ls_out.overflow.values().sum::<f32>();
         assert!((total - 1.0).abs() < 1e-4, "assembled LS is a distribution, sum={total}");
+    }
+
+    #[test]
+    fn worker_graph_glue_builds_from_board_cells_and_expands() {
+        // Mirrors `infer_and_expand_graph` (worker_loop/inner.rs) END-TO-END on a
+        // real Board + MCTSTree WITHOUT the InferenceServer: extract stones the
+        // worker way (`cells_iter` + `Cell as i64`), build the leaf graph, assemble
+        // an LS, and run `expand_and_backup_ls_at` with the BUILDER's window_center
+        // (S2). Closes the runtime gap on the worker glue that the Python smoke
+        // (explicit-stones `submit_graphs_and_wait`) does not cover.
+        use crate::board::Board;
+        use crate::mcts::MCTSTree;
+
+        let spec = crate::encoding::lookup_or_panic("gnn_axis_v1");
+        let mut board = Board::with_registry_spec(spec);
+        // A few LEGAL moves (adjacency-constrained) → a small in-window board.
+        for &(q, r) in &[(0, 0), (1, 0), (0, 1), (1, 1), (2, 0)] {
+            board.apply_move(q, r).expect("legal move");
+        }
+
+        // Worker-path stone extraction: cells_iter + `Cell as i64` (±1).
+        let mut stones: Vec<(i64, i64, i64)> = Vec::new();
+        for (&(q, r), &cell) in board.cells_iter() {
+            stones.push((i64::from(q), i64::from(r), cell as i64));
+        }
+        assert_eq!(stones.len(), 5, "5 stones extracted from the board cells");
+        let current_player = board.current_player as i64;
+        let moves_remaining = i64::from(board.moves_remaining);
+
+        let g = build_graph_from_request(&stones, current_player, moves_remaining, 6, 6, 19)
+            .expect("worker builds the leaf graph from board cells");
+        // Builder window_center must equal Board::window_center (the S2 coincidence).
+        assert_eq!(
+            g.window_center,
+            board.window_center(),
+            "builder window_center == Board::window_center (S2 frame identity)"
+        );
+
+        let n_legal = g.legal_node_gather.len();
+        assert!(n_legal > 0);
+        let coords: Vec<(i32, i32)> = g
+            .legal_node_gather
+            .iter()
+            .map(|&row| (g.node_coords[row as usize * 2], g.node_coords[row as usize * 2 + 1]))
+            .collect();
+        let probs = vec![1.0f32 / n_legal as f32; n_legal];
+        let ls = assemble_ls_from_gnn_probs(362, &probs, &g.policy_scatter_index.0, &coords)
+            .expect("assemble ok");
+
+        // Real tree: new_game + select_leaves(1) populates pending, then expand at
+        // the builder frame (the worker's `expand_and_backup_ls_at` call).
+        let mut tree = MCTSTree::new(1.5);
+        tree.new_game(board.clone());
+        let leaves = tree.select_leaves(1);
+        assert_eq!(leaves.len(), 1, "root leaf selected");
+        tree.expand_and_backup_ls_at(&[ls], &[0.5], &[g.window_center], 19);
+
+        // The root expanded with children priored from the assembled LS.
+        assert!(tree.pool[0].is_expanded(), "root expanded via expand_and_backup_ls_at");
+        assert!(tree.pool[0].n_children > 0, "root has priored children");
     }
 }

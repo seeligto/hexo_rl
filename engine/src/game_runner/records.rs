@@ -439,20 +439,28 @@ pub fn aggregate_policy_ls(
 /// `policy_dst_slot`/`OFF_WINDOW_SLOT` (-1 sentinel) is single-sourced from the
 /// builder crate so the sentinel can never drift from what `build_axis_graph`
 /// emits (contract §2.1/§2.2 amendment).
+/// Returns `Err(reason)` (never panics/aborts) on a ragged length desync or an
+/// out-of-range slot — the workspace release profile is `panic="abort"`, so the
+/// WP-3 review N4 note asks the seam consumer to die loud through
+/// `submit_graph_inference_failure` (§7) rather than abort the process. Both
+/// error legs are unreachable in practice (the caller pre-checks the segment
+/// length; slots come from the builder's always-on `verify_contract`), but a
+/// public seam that reads an untrusted slice returns the failure gracefully.
 #[inline]
 pub fn assemble_ls_from_gnn_probs(
     n_actions: usize,
     legal_probs: &[f32],
     policy_dst_slot: &[i32],
     legal_coords: &[(i32, i32)],
-) -> LegalSetPolicy {
-    assert!(
-        legal_probs.len() == policy_dst_slot.len() && legal_probs.len() == legal_coords.len(),
-        "assemble_ls_from_gnn_probs: ragged length mismatch — probs {} slots {} coords {}",
-        legal_probs.len(),
-        policy_dst_slot.len(),
-        legal_coords.len()
-    );
+) -> Result<LegalSetPolicy, String> {
+    if legal_probs.len() != policy_dst_slot.len() || legal_probs.len() != legal_coords.len() {
+        return Err(format!(
+            "assemble_ls_from_gnn_probs: ragged length mismatch — probs {} slots {} coords {}",
+            legal_probs.len(),
+            policy_dst_slot.len(),
+            legal_coords.len()
+        ));
+    }
 
     let mut dense = vec![0.0f32; n_actions];
     let mut overflow: FxHashMap<(i32, i32), f32> = FxHashMap::default();
@@ -466,10 +474,11 @@ pub fn assemble_ls_from_gnn_probs(
             // `verify_contract` (`ScatterSlotOutOfBounds`), but guard here too
             // since this fn is a public seam consumer of an untrusted slice.
             let idx = slot as usize;
-            assert!(
-                slot >= 0 && idx < n_actions,
-                "assemble_ls_from_gnn_probs: slot {slot} out of range 0..{n_actions}"
-            );
+            if slot < 0 || idx >= n_actions {
+                return Err(format!(
+                    "assemble_ls_from_gnn_probs: slot {slot} out of range 0..{n_actions}"
+                ));
+            }
             dense[idx] = legal_probs[i];
         }
     }
@@ -484,7 +493,7 @@ pub fn assemble_ls_from_gnn_probs(
         "assemble_ls_from_gnn_probs: probs do not sum to 1 (segmented-softmax desync)"
     );
 
-    LegalSetPolicy { dense, overflow }
+    Ok(LegalSetPolicy { dense, overflow })
 }
 
 /// Legal-set counterpart of `aggregate_policy_to_local`: projects the ragged
@@ -1014,7 +1023,7 @@ mod gnn_assemble_tests {
 
         // uniform distribution over the legal set (pre-normalized, as §4.3 emits)
         let probs = vec![1.0f32 / n_legal as f32; n_legal];
-        let ls = assemble_ls_from_gnn_probs(362, &probs, slots, &coords);
+        let ls = assemble_ls_from_gnn_probs(362, &probs, slots, &coords).expect("assemble ok");
 
         // every off-window node landed in overflow (NOT dropped); every
         // in-window node landed at its dense slot; total mass conserved.
@@ -1047,7 +1056,7 @@ mod gnn_assemble_tests {
         // 0.9 mass on the off-window node, 0.1 spread over the rest → argmax off.
         let mut probs = vec![0.1f32 / (n_legal - 1) as f32; n_legal];
         probs[off_idx] = 0.9;
-        let ls = assemble_ls_from_gnn_probs(362, &probs, slots, &coords);
+        let ls = assemble_ls_from_gnn_probs(362, &probs, slots, &coords).expect("assemble ok");
 
         let off_coord = coords[off_idx];
         let carried = ls.overflow.get(&off_coord).copied().expect("off-window argmax in overflow");
@@ -1074,8 +1083,60 @@ mod gnn_assemble_tests {
             .collect();
         let n = slots.len();
         let probs = vec![1.0f32 / n as f32; n];
-        let ls = assemble_ls_from_gnn_probs(362, &probs, slots, &coords);
+        let ls = assemble_ls_from_gnn_probs(362, &probs, slots, &coords).expect("assemble ok");
         assert!(ls.overflow.is_empty(), "no off-window cells → empty overflow");
         assert!((ls.dense.iter().sum::<f32>() - 1.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn assemble_read_back_at_builder_center_matches_and_wrong_center_misreads() {
+        // WP-3 step 6 / review S2: the assembled `dense` slots are baked against
+        // the BUILDER's `window_center`. `expand_and_backup_ls_at` threads that
+        // exact centre into `LegalSetPolicy::get`. This pins the F1 coord/slot
+        // class: (a) reading back at the builder centre recovers every prob;
+        // (b) a WRONG centre shifts the in-window slot map → misreads.
+        let (g, coords) = spread_graph();
+        let slots = &g.policy_scatter_index.0;
+        let n = slots.len();
+        // Distinct probs per node so a misread is detectable (not all-equal).
+        let raw: Vec<f32> = (0..n).map(|i| (i + 1) as f32).collect();
+        let s: f32 = raw.iter().sum();
+        let probs: Vec<f32> = raw.iter().map(|p| p / s).collect();
+        let ls = assemble_ls_from_gnn_probs(362, &probs, slots, &coords).expect("assemble ok");
+
+        let (bcq, bcr) = g.window_center;
+        let (trunk, half, floor) = (19i32, 9i32, -1.0f32);
+
+        // (a) matched-centre round-trip: recover every legal node's prob.
+        for i in 0..n {
+            let (q, r) = coords[i];
+            let got = ls.get(q, r, bcq, bcr, trunk, half, floor);
+            assert!(
+                (got - probs[i]).abs() < 1e-6,
+                "read-back at builder centre must recover the assembled prob (coord {q},{r})"
+            );
+        }
+
+        // (b) a wrong centre shifts in-window slots → at least one in-window
+        //     coord misreads (off-window cells are coord-keyed, centre-agnostic).
+        let mut any_in_window = false;
+        let mut any_misread = false;
+        for i in 0..n {
+            if slots[i] == OFF_WINDOW_SLOT {
+                continue;
+            }
+            any_in_window = true;
+            let (q, r) = coords[i];
+            let got = ls.get(q, r, bcq + 3, bcr + 3, trunk, half, floor);
+            if (got - probs[i]).abs() > 1e-6 {
+                any_misread = true;
+                break;
+            }
+        }
+        assert!(any_in_window, "spread fixture must have in-window legal nodes");
+        assert!(
+            any_misread,
+            "a wrong window centre MUST misread in-window slots — the F1 frame class S2 guards"
+        );
     }
 }

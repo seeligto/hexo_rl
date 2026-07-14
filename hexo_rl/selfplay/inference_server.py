@@ -65,44 +65,70 @@ class InferenceServer(threading.Thread):
         # model actually accepts). For v6/v6w25/v7*/v8 trunk_size == board_size,
         # so this is currently a no-op semantic shift; future α multi-window
         # K-cluster encodings will diverge (trunk_size != board_size). §176 P18.
-        board_size = self.encoding_spec.trunk_size
-        # Policy len from the registry — `policy_logit_count` already
-        # accounts for the per-encoding pass-slot bit (v8: 625, v6/v7full: 362,
-        # v6w25: 626).
+        # WP-3 step 6: representation discriminant. A `graph` encoding routes to
+        # the ragged axis-graph seam (`_run_graph_loop`); the CNN H2D-staging /
+        # TorchScript-trace / (C,H,W)-shape setup below is grid-only and would be
+        # meaningless (n_planes=0, no state_stride) for a graph spec.
+        self._is_graph = str(getattr(self.encoding_spec, "representation", "grid")) == "graph"
         self._policy_len = self.encoding_spec.policy_logit_count
-        # Rust workers emit exactly `spec.kept_plane_indices` planes (v6 → 8,
-        # v6tp → 10 incl. turn-phase 16/17). The wire width is the active
-        # encoding's plane count — NOT the v6-hardcoded WIRE_CHANNELS=8.
-        # Sub-selection (sweep `input_channels` variants) happens inside
-        # model.forward() via index_select, but the wire/H2D width is what
-        # Rust actually sends = spec.n_planes.
-        wire_channels = self.encoding_spec.n_planes
-        self._feature_len = wire_channels * board_size * board_size
-        self._shape = (wire_channels, board_size, board_size)
 
-        self._batcher = batcher or InferenceBatcher(
-            feature_len=self._feature_len,
-            policy_len=self._policy_len,
-        )
-        self._stop_event = threading.Event()
-        self._weights_lock = threading.Lock()
-        self._forward_count = 0
-        self._total_requests = 0
-
-        self._setup_inference_path(sp, board_size)
-
-        # Pinned host staging buffer for async H2D (Bucket 1 #5, E2 row 1).
-        # Size: batch_size * feature_len * 4B (e.g. 64 * 8 * 19 * 19 * 4 ≈ 0.5 MB
-        # at WIRE_CHANNELS=8). Enables DMA engine copy on CUDA
-        # (non_blocking=True); no-op on CPU.
-        if self.device.type == "cuda":
-            self._h2d_staging = torch.empty(
-                (self._batch_size, wire_channels, board_size, board_size),
-                dtype=torch.float32,
-                pin_memory=True,
-            )
-        else:
+        if self._is_graph:
+            # Graph mode: the model is a `GnnNet` consuming block-diagonal graph
+            # tensors, not a CNN. No H2D staging, no trace, no (C,H,W) shape.
+            self._feature_len = 0
+            self._shape = None
+            self._board_size = self.encoding_spec.trunk_size
+            self._batcher = batcher or InferenceBatcher(encoding_spec=self.encoding_spec)
+            self._stop_event = threading.Event()
+            self._weights_lock = threading.Lock()
+            self._forward_count = 0
+            self._total_requests = 0
+            # Inert grid-path attributes so shared accessors don't KeyError.
+            self._trace_inference = False
+            self._traced_model = None
+            self._compile_inference = False
+            self._compile_mode = None
+            self._compile_dynamic = False
             self._h2d_staging = None
+        else:
+            # H2D staging tensors size to the trunk window (the spatial dim the
+            # model actually accepts). For v6/v6w25/v7*/v8 trunk_size == board_size,
+            # so this is currently a no-op semantic shift; future α multi-window
+            # K-cluster encodings will diverge (trunk_size != board_size). §176 P18.
+            board_size = self.encoding_spec.trunk_size
+            # Rust workers emit exactly `spec.kept_plane_indices` planes (v6 → 8,
+            # v6tp → 10 incl. turn-phase 16/17). The wire width is the active
+            # encoding's plane count — NOT the v6-hardcoded WIRE_CHANNELS=8.
+            # Sub-selection (sweep `input_channels` variants) happens inside
+            # model.forward() via index_select, but the wire/H2D width is what
+            # Rust actually sends = spec.n_planes.
+            wire_channels = self.encoding_spec.n_planes
+            self._feature_len = wire_channels * board_size * board_size
+            self._shape = (wire_channels, board_size, board_size)
+
+            self._batcher = batcher or InferenceBatcher(
+                feature_len=self._feature_len,
+                policy_len=self._policy_len,
+            )
+            self._stop_event = threading.Event()
+            self._weights_lock = threading.Lock()
+            self._forward_count = 0
+            self._total_requests = 0
+
+            self._setup_inference_path(sp, board_size)
+
+            # Pinned host staging buffer for async H2D (Bucket 1 #5, E2 row 1).
+            # Size: batch_size * feature_len * 4B (e.g. 64 * 8 * 19 * 19 * 4 ≈ 0.5 MB
+            # at WIRE_CHANNELS=8). Enables DMA engine copy on CUDA
+            # (non_blocking=True); no-op on CPU.
+            if self.device.type == "cuda":
+                self._h2d_staging = torch.empty(
+                    (self._batch_size, wire_channels, board_size, board_size),
+                    dtype=torch.float32,
+                    pin_memory=True,
+                )
+            else:
+                self._h2d_staging = None
 
         # Perf-investigation probes (docs/perf/instrumentation_notes.md).
         _diag = config.get("diagnostics") if isinstance(config.get("diagnostics"), dict) else {}
@@ -373,7 +399,112 @@ class InferenceServer(threading.Thread):
                     error=str(exc)[:200],
                 )
 
+    def _run_graph_loop(self) -> None:
+        """WP-3 step 6 — ragged axis-graph inference loop (seam design §4.3).
+
+        Pull a block-diagonal `GraphWire` from Rust, run the single
+        `collate_graph_batch` resolver, forward the `GnnNet` (fp16 autocast on
+        CUDA), segment-softmax per graph's legal nodes, and submit the flat
+        ragged probs back — the Rust side assembles each leaf's `LegalSetPolicy`
+        (`assemble_ls_from_gnn_probs`), NEVER a dense-362 scatter (option (b)).
+        Any resolver/forward exception dies loud via
+        `submit_graph_inference_failure` (no silent fallback — the graph queue
+        has no dense interpretation).
+        """
+        from hexo_rl.selfplay.graph_collate import (
+            collate_graph_batch,
+            reset_semantic_canary,
+            segment_softmax,
+            stone_mask_from_batch,
+        )
+
+        spec = self.encoding_spec
+        # First batch after (re)start runs the FULL semantic/geometric layer.
+        reset_semantic_canary()
+        canary_period = int(self._batch_size)  # cheap; a knob if it ever matters
+
+        try:
+            while not self._stop_event.is_set():
+                try:
+                    request_ids, wire = self._batcher.next_graph_batch(
+                        self._batch_size, self._max_wait_ms,
+                    )
+                    if not request_ids:
+                        continue
+                    self._total_requests += len(request_ids)
+                    try:
+                        batch = collate_graph_batch(
+                            wire,
+                            expected_version=1,
+                            trunk_size=spec.trunk_size,
+                            win_length=spec.win_length,
+                            node_feat_dim=spec.node_feat_dim,
+                            edge_feat_dim=spec.edge_feat_dim,
+                            device=str(self.device),
+                            semantic="canary",
+                            canary_period=canary_period,
+                        )
+                        stone_mask = stone_mask_from_batch(batch)
+                        if self._forward_count == 0:
+                            assert not self.model.training, (
+                                "InferenceServer(graph) model entered hot loop in "
+                                "train() mode; eval() should be set at __init__"
+                            )
+                        with self._weights_lock, torch.inference_mode():
+                            with torch.autocast(
+                                device_type=self.device.type,
+                                dtype=self._amp_dtype,
+                                enabled=self.device.type == "cuda",
+                            ):
+                                policy_logits, value, _bins = self.model.forward_batch(
+                                    batch.x,
+                                    batch.edge_index,
+                                    batch.edge_attr,
+                                    batch.legal_mask,
+                                    stone_mask,
+                                    batch.node_offsets,
+                                )
+                        # Segment-softmax in float32 (correct reduced-precision
+                        # drift, exactly like the dense path re-normalizes exp()).
+                        probs = segment_softmax(policy_logits.float(), batch.legal_offsets)
+                        probs_np = np.ascontiguousarray(
+                            probs.detach().cpu().numpy(), dtype=np.float32
+                        )
+                        legal_offsets_np = np.ascontiguousarray(
+                            batch.legal_offsets.detach().cpu().numpy(), dtype=np.int64
+                        )
+                        values_np = np.ascontiguousarray(
+                            value.detach().float().cpu().numpy().reshape(-1), dtype=np.float32
+                        )
+                        self._batcher.submit_graph_inference_results(
+                            request_ids, probs_np, legal_offsets_np, values_np,
+                        )
+                    except Exception as exc:  # noqa: BLE001
+                        error_msg = f"Graph inference failed: {exc}"
+                        import traceback as _tb
+                        _perf_log.error(
+                            "graph_inference_forward_failed",
+                            context="inference_server",
+                            error_type=type(exc).__name__,
+                            error=str(exc)[:300] or repr(exc)[:300],
+                            tb=_tb.format_exc()[:1500],
+                        )
+                        self._batcher.submit_graph_inference_failure(request_ids, error_msg)
+                        continue
+                    self._forward_count += 1
+                except Exception as exc:  # noqa: BLE001
+                    import traceback
+                    print(f"InferenceServer graph loop error: {exc}")
+                    traceback.print_exc()
+                    if self._stop_event.is_set():
+                        break
+        finally:
+            self._batcher.close()
+
     def run(self) -> None:
+        if self._is_graph:
+            self._run_graph_loop()
+            return
         _perf = self._perf_timing
         _sync = self._perf_sync_cuda and self.device.type == "cuda"
 

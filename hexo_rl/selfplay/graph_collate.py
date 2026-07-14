@@ -576,9 +576,67 @@ def _check_semantic(
                 )
 
 
+# ---------------------------------------------------------------------------
+# Hot-path output helpers (WP-3 step 6) — segmented softmax + stone mask.
+# Consumed by the InferenceServer graph loop (and the eval subprocess). Kept
+# here beside the resolver so self-play + eval share ONE implementation.
+# ---------------------------------------------------------------------------
+def segment_softmax(logits: Any, legal_offsets: Any) -> Any:
+    """Numerically-stable per-graph softmax over each graph's legal nodes.
+
+    `logits` is the flat `[Lg_total]` per-legal-node tensor `GnnNet.forward_batch`
+    returns; `legal_offsets` is the `[B+1]` CSR pointer segmenting it per graph
+    (seam design §4.3). Returns `[Lg_total]` probs summing to 1 within each
+    segment — the normalization `assemble_ls_from_gnn_probs` relies on (§3.4).
+    Vectorized (`scatter_reduce_`/`scatter_add_`), no Python per-graph loop.
+    """
+    import torch
+
+    counts = legal_offsets[1:] - legal_offsets[:-1]
+    b = int(legal_offsets.shape[0]) - 1
+    seg = torch.repeat_interleave(
+        torch.arange(b, device=logits.device, dtype=torch.long), counts
+    )
+    # per-segment max (stability); include_self=False so empty segments (guarded
+    # out by EmptyLegalSet) don't skew — every graph has >=1 legal node.
+    seg_max = torch.full((b,), float("-inf"), dtype=logits.dtype, device=logits.device)
+    seg_max.scatter_reduce_(0, seg, logits, reduce="amax", include_self=False)
+    ex = torch.exp(logits - seg_max[seg])
+    denom = torch.zeros(b, dtype=logits.dtype, device=logits.device)
+    denom.scatter_add_(0, seg, ex)
+    return ex / denom[seg]
+
+
+def stone_mask_from_batch(batch: "GraphBatch") -> Any:
+    """`(N_total,)` bool mask, True on the stone rows of every graph — the value
+    head's pooling subset (`GnnNet.forward_batch` `stone_mask` arg).
+
+    The builder lays each graph's rows out `[stones | legal | dummy]`
+    (`n_stones[g]` stones first), so a node is a stone iff its within-graph
+    position `< n_stones[g]`. Vectorized from `node_offsets` + `n_stones`.
+    """
+    import torch
+
+    node_offsets = batch.node_offsets
+    n_stones = batch.n_stones
+    n_total = int(batch.x.shape[0])
+    b = int(node_offsets.shape[0]) - 1
+    counts = node_offsets[1:] - node_offsets[:-1]
+    node_graph = torch.repeat_interleave(
+        torch.arange(b, device=node_offsets.device, dtype=torch.long), counts
+    )
+    pos_in_graph = (
+        torch.arange(n_total, device=node_offsets.device, dtype=torch.long)
+        - node_offsets[node_graph]
+    )
+    return pos_in_graph < n_stones[node_graph]
+
+
 __all__ = [
     "collate_graph_batch",
     "graph_wire_from_rust",
+    "segment_softmax",
+    "stone_mask_from_batch",
     "reset_semantic_canary",
     "GraphWirePayload",
     "GraphBatch",
