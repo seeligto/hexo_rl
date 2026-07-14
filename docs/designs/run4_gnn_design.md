@@ -377,8 +377,12 @@ WP-B Part 2.6) is required regardless of the manifest's state.
    stamped.
 2. **OQ-2 — 5080 rider throughput.** Rerun `gnn_infer_bench.py` on `wpa_positions.json` on the 5080
    in the handoff window; re-derive per-leaf ms; confirm STEP-0 ≥ 1.0k steps/hr floor (§4.1/§5).
-3. **OQ-3 — run3 WP0.4 unified manifest.** Verify it landed (not locatable in repo; §6.2). If not,
-   the corpus-mix fallback needs the HEXG re-export path explicitly built + parity-tested.
+3. **OQ-3 — run3 WP0.4 unified manifest. RESOLVED (WP-5 design, 2026-07-15):** WP0.4 LANDED at
+   commits `1d4a206` + `42e4e90` (sha-pinned `_CORPUS_SHA_PINS` canonical-corpus resolver in
+   `resolvers.py`) — the earlier "not locatable" flag searched only docs/, not git log. It provides
+   the single-resolver seam for the graph corpus branch but NOT a graph-consumable corpus: the
+   HEXG re-export ships in WP-5 (~2 pd, BUILD-not-defer per DS-kill-margin ruling,
+   `gnn_training_path_design.md` §7.2); only the mixing-batch wiring defers.
 4. **OQ-4 — corpus re-export parity (fallback path).** HEXG re-export vs replay-and-rebuild for the
    option-B corpus-mix; byte-parity of the re-exported graph vs `build_axis_graph_raw` on
    `wpa_positions.json` (WP-B Part 4.1 oracle).
