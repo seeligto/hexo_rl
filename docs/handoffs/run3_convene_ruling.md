@@ -2,6 +2,10 @@
 
 **Strategy layer. Supersedes chat-only branch mappings. Binding until amended in writing.**
 
+> **AMENDED 2026-07-13** by `run3_convene_ruling_amendment_1.md`: WP3 verdict recorded
+> (MIXED); the MIXED→"run3 GO CNN same-day" branch of the outcome mapping below is
+> SUSPENDED. Read the amendment before consuming the mapping. Everything else stands.
+
 This document is the in-repo canonical instance of the run3 convene ruling. It exists
 because a frozen gate references it and, per the PROCESS RULE below, a chat-only ruling
 is not citable by dispatchers. See `docs/handoffs/gnn_bc_probe_runbook.md` (WP3) and the
