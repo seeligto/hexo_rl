@@ -3012,3 +3012,15 @@ IQR-gated timing, incremental flush).
 
 Build-auth gate state: WPA recorded ✅ (informs, doesn't block) → WP-B/WP-C/WP-D dispatched
 in parallel (disjoint file+review scopes; no-git-in-agents rule per L31/clobber lesson).
+
+### §GNN-INT build-authorization gate — OPEN (2026-07-14, same-day)
+
+All four conditions met: WPA verdict recorded (CUDA-WINS+BUILD-HOT+TORCH-BEATS-ORT);
+WP-B CONTRACT-SOUND (amended post-red-team — GAPS-FOUND cycle closed same-day: structural-only
+validator defeated by aug-seam desync payload → +4 semantic checks, n_stones + builder_impl wire
+fields, 26× Python-builder trap hard-blocked); WP-C LEGACY-V1-CONFIRMED (rule resolved AVOID
+lean-D6 on WP-B's FEASIBLE-ON-LEGACY-V1); WP-D WASM32-COMPILES (engine/hexo-graph skeleton,
+make check.wasm). Run4 design doc DRAFT committed (INIT=prefit-40k, DS-1..4 kill signatures,
+probe-284k net, floor ≥1.0k steps/hr, 9 OQs). → Build wave dispatched: WP-1 (Rust builder,
+BUILD-HOT perf package) ∥ WP-2 (GINE net + dist65 head) first — file+review disjoint; WP-3/4/5
+sequenced behind their dependencies (WP-5 training gated on C1 per contract F7).
