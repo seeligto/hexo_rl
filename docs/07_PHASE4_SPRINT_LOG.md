@@ -2983,3 +2983,32 @@ A0 landed (evalgate wave + 20 per-variant `opponents.bootstrap_anchor.encoding:`
 - Projected runtime ~17d → **~13–14d**.
 
 **MANUAL follow-up owed:** deploy no longer runs SealBot-vs-deploy-head. If the promotion trajectory or SealBot WR looks off at a milestone, run an OFFLINE SealBot-vs-deploy-head check (depth 5, or a one-off depth-6 rough read) — re-enable in-loop via `sealbot_games>0` only if it becomes load-bearing. SealBot WR (normal eval, every 25k, now n=50) remains the promotion-independent true-north.
+
+## §GNN-INT — GNN-integration program (R4 ratified b+): WP-A CUDA bench VERDICT — 2026-07-14
+
+Program dispatcher running per ratified R4 (b+) frame; worktree `worktree-gnn-integration`.
+**Operator constraint (2026-07-14): run3-CNN launches soon → vast box OFF-LIMITS to this
+program** (supersedes the WP-A "GPU window"); WP-A measured on laptop 4060 (ratio-transfer
+rule + explicit 5080 re-run rider on the frozen position set).
+
+**WP-A (COND-3) VERDICT: CUDA-WINS + BUILD-HOT + TORCH-BEATS-ORT.** Full report
+`reports/probes/gnn_integration/WPA_cuda_bench.md`; instrument
+`scripts/research/gnn_infer_bench.py` (320 real self-play positions, parity-gated ONNX,
+IQR-gated timing, incremental flush).
+- CUDA-WINS: ORT-CUDA bs=64 8.5× best CPU cell (threshold 1.3×); GPU util 97–100% from
+  bs=32 → literature "small-graph GPU starvation ≤6%" prior REFUTED for block-diagonal
+  batching; CPU self-play inference dead (188 pos/s best vs 2982 GPU).
+- BUILD-HOT: Rust-builder proxy (strix axis_graph.rs) 0.539 ms/pos = 77–161% of GNN forward
+  (≥50% threshold) → WP-1 carries a perf sub-package. Python builder 14.0 ms/pos on the
+  self-play distribution (was 5.94 human-corpus) — self-play graphs 1.7× bigger than the
+  human-corpus prior (mean 490/2932 vs 290/1294 nodes/edges).
+- TORCH-BEATS-ORT (reshapes D-N inference plan): ORT slower than torch on BOTH devices
+  (CUDA 1.6–2×, CPU 2.6–2.8×); exported GINE Expand materializes E×H intermediates → prod
+  bs=256 OOMs 8 GiB while torch runs it in 213 ms. Self-play inference rides torch-CUDA;
+  ORT = browser/WASM path only. Feeds WP-B contract + WP-D op-set.
+- Cost story INVERTED: build ≈ 44–62% of per-leaf cost (was "4–8%"). Revised throughput
+  projection ~0.9k steps/hr prod-scale / ~1.25k probe-scale vs run2 4.4k (below scoping-doc
+  2–3k/h) — run4 doc must set the floor from these numbers.
+
+Build-auth gate state: WPA recorded ✅ (informs, doesn't block) → WP-B/WP-C/WP-D dispatched
+in parallel (disjoint file+review scopes; no-git-in-agents rule per L31/clobber lesson).

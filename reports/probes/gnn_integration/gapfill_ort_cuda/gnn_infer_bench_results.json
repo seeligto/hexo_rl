@@ -1,0 +1,182 @@
+{
+ "meta": {
+  "hardware": "laptop RTX 4060 Max-Q Ada Lovelace (sm_89) \u2014 NOT the authoritative 5080 verdict run; script is runnable unchanged on vast",
+  "gpu_name": "NVIDIA GeForce RTX 4060 Laptop GPU",
+  "cuda_available": true,
+  "torch_version": "2.11.0+cu130",
+  "onnxruntime_version": "1.27.0",
+  "ort_providers": [
+   "TensorrtExecutionProvider",
+   "CUDAExecutionProvider",
+   "CPUExecutionProvider"
+  ],
+  "timestamp": "2026-07-14T16:58:53.921735+00:00",
+  "args": {
+   "device": "cuda",
+   "scales": "both",
+   "batch_sizes": [
+    128,
+    256
+   ],
+   "n_runs": 10,
+   "warmup": 5,
+   "positions_dir": "/home/timmy/Work/Hexo/hexo_rl/logs/replays",
+   "n_positions": 320,
+   "seed": 42,
+   "out_dir": "reports/probes/gnn_integration/gapfill_ort_cuda",
+   "checkpoint": "checkpoints/probes/gnn_bc/gnn_bc_040000.pt",
+   "rust_repo": "/home/timmy/Work/Hexo/hexo-strix",
+   "skip_rust": true,
+   "skip_onnx": false,
+   "positions_json": "reports/probes/gnn_integration/wpa_positions.json",
+   "cells": "ort",
+   "ort_gpu_mem_gb": 6.5,
+   "gpu_util_duration": 1.5,
+   "rust_reps": 10,
+   "builder_reps": 10,
+   "scales_list": [
+    "probe",
+    "prod"
+   ],
+   "cells_list": [
+    "ort"
+   ]
+  },
+  "wall_clock_s": 73.98428869247437
+ },
+ "cells": [
+  {
+   "component": "gnn_ort",
+   "scale": "probe",
+   "device": "cuda",
+   "precision": "fp32",
+   "backend": "ort",
+   "ort_threads": null,
+   "batch_size": 128,
+   "n_params": null,
+   "median_ms": 111.64774450298864,
+   "iqr_ms": 30.68856700701872,
+   "iqr_over_median": 0.2748695653784321,
+   "min_ms": 82.34564099984709,
+   "max_ms": 140.13426900055492,
+   "unstable": true,
+   "unstable_first_attempt": true,
+   "gpu_util_mean": 100.0,
+   "gpu_util_n_samples": 2,
+   "throughput_pos_per_s": 1146.4629273954893
+  },
+  {
+   "component": "gnn_ort",
+   "scale": "probe",
+   "device": "cuda",
+   "precision": "fp32",
+   "backend": "ort",
+   "ort_threads": null,
+   "batch_size": 256,
+   "n_params": null,
+   "median_ms": 214.66224449977744,
+   "iqr_ms": 7.060609008476604,
+   "iqr_over_median": 0.03289171332820907,
+   "min_ms": 206.82910100003937,
+   "max_ms": 253.02908400044544,
+   "unstable": false,
+   "unstable_first_attempt": false,
+   "gpu_util_mean": 99.66666666666667,
+   "gpu_util_n_samples": 3,
+   "throughput_pos_per_s": 1192.5711510030605
+  },
+  {
+   "component": "gnn_ort",
+   "scale": "prod",
+   "device": "cuda",
+   "precision": "fp32",
+   "backend": "ort",
+   "ort_threads": null,
+   "batch_size": 128,
+   "n_params": 960834,
+   "median_ms": 216.3601559950621,
+   "iqr_ms": 31.480033008847386,
+   "iqr_over_median": 0.14549829132849137,
+   "min_ms": 198.37270200514467,
+   "max_ms": 255.69718099723104,
+   "unstable": false,
+   "unstable_first_attempt": false,
+   "gpu_util_mean": 100.0,
+   "gpu_util_n_samples": 3,
+   "throughput_pos_per_s": 591.6061550765443
+  }
+ ],
+ "notes": [
+  "ORT-CUDA cell FAILED-SKIPPED scale=prod bs=256: Fail: [ONNXRuntimeError] : 1 : FAIL : Non-zero status code returned while running Expand node. Name:'/representation/convs.0/Expand' Status Message: /onnxruntime_src/onnxruntime/core/framework/bfc_arena.cc:358 void* onnxruntime::BFCArena::AllocateRawInternal(size_t, bool, onnxruntime::Stream*) Available memory of 842030592 is smaller than requested bytes of 1525481472\n"
+ ],
+ "positions_provenance": {
+  "files_used_primary": [
+   "/home/timmy/Work/Hexo/hexo_rl/logs/replays/games_2026-07-10.jsonl",
+   "/home/timmy/Work/Hexo/hexo_rl/logs/replays/games_2026-07-12.jsonl",
+   "/home/timmy/Work/Hexo/hexo_rl/logs/replays/games_2026-07-14.jsonl"
+  ],
+  "files_used_fallback": [],
+  "n_candidates_pool": 1380,
+  "n_games_pool": 10,
+  "n_positions_requested": 320,
+  "n_positions_sampled": 320,
+  "seed": 42,
+  "ply_range_pool": [
+   2,
+   149
+  ],
+  "pool_ply_histogram_20bin": {
+   "0": 80,
+   "1": 70,
+   "2": 80,
+   "3": 70,
+   "4": 70,
+   "5": 80,
+   "6": 70,
+   "7": 80,
+   "8": 70,
+   "9": 70,
+   "10": 80,
+   "11": 70,
+   "12": 80,
+   "13": 70,
+   "14": 66,
+   "15": 64,
+   "16": 56,
+   "17": 64,
+   "18": 48,
+   "19": 42
+  },
+  "sampling_method": "stratified round-robin over 20 equal-width ply bins, seeded shuffle within bin"
+ },
+ "onnx_export": {
+  "probe": {
+   "status": "OK",
+   "path": "reports/probes/gnn_integration/gapfill_ort_cuda/onnx/gnn_bc_probe.onnx",
+   "error": null,
+   "parity": {
+    "n_graphs_checked": 24,
+    "max_abs_diff": 5.4836273193359375e-06,
+    "mean_abs_diff": 3.7848949432373047e-06,
+    "threshold": 0.0001,
+    "pass": true
+   }
+  },
+  "prod": {
+   "status": "OK",
+   "path": "reports/probes/gnn_integration/gapfill_ort_cuda/onnx/gnn_bc_prod.onnx",
+   "error": null,
+   "parity": {
+    "n_graphs_checked": 24,
+    "max_abs_diff": 6.556510925292969e-07,
+    "mean_abs_diff": 5.5716373026371e-07,
+    "threshold": 0.0001,
+    "pass": true
+   }
+  }
+ },
+ "rust_builder_proxy": {
+  "status": "SKIPPED",
+  "reason": "--skip-rust or --cells"
+ }
+}
