@@ -57,8 +57,10 @@ evidence on the axis-graph net's playing strength on shared HTTT ground:
   at **+121 Elo** [+88, +159], 69.1% — vs mantis-261k-raw at **−108**, a **+229 Elo raw gap**.
   This isolates policy-head quality from search: a large part of strix's strength lives in the
   **net**, not only in Gumbel search.
-- **Scale + cost:** **222,146 params** (0.22M — 19.1× smaller than our 4.25M production net),
+- **Scale + cost:** **283,970 params** (0.28M — 15.0× smaller than our 4.25M production net),
   **33.8 ms/turn** raw argmax. A small, cheap net.
+  **CORRECTION 2026-07-14 (WP0.3):** param count was mis-recorded as 222,146 (with derived
+  0.22M / 19.1×); actual 283,970 (0.28M / 15.0×).
 
 **Fidelity caveat (load-bearing — the re-open rests on the corrected number).** The raw-policy
 strix arm initially scored −512 Elo / rank-last. That was a 2-stone **turn-assembly artifact**:

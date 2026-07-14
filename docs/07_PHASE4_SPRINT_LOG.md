@@ -2854,11 +2854,16 @@ formally NOT comparable anyway (their SealBot gate is time-limited/machine-speed
 fixed-depth-5 probe). Iteration-efficiency gap = config-implied, unconfirmed either direction.
 Cheapest re-test: ask author to run their own `hexo-a0 eval-sealbot` and share output.
 
-**Recipe diff (all MEASURED):** 283,970 vs 4,254,283 params (19.1×; production count confirmed
+**Recipe diff (all MEASURED):** 283,970 vs 4,254,283 params (15.0×; production count confirmed
 by instantiation — the pre-briefed "2.9M" matches an older smaller-trunk config res10/f112, NOT
 aux heads); self-play sims 128 vs 400 (3×); 5-stage win-length+radius curriculum vs none; 2 vs 8
 loss heads; buffer 250K vs 500K–1M; train==deploy Gumbel vs our PUCT-train/Gumbel-deploy.
-*(corrected 2026-07-14: strix param count was mis-recorded as 222,146; actual 283,970 — WP0.3)*
+*(corrected 2026-07-14: strix param count was mis-recorded as 222,146; actual 283,970 (ratio
+corrected with param count, was 19.1×) — WP0.3)*
+*(2026-07-14 WP0.3): dist-tail-novelty framing RETIRED — strix itself ships a 65-bin C51
+distributional value head, so dist65 is not novel relative to strix; reframe: strix = third
+independent convergence on the 65-bin design (alongside card#1 and E1's REVIVE) = external
+validation.*
 
 **Portability verdicts (post REVIEW + RED-TEAM):**
 - Radius curriculum: PORTABLE→**TESTABLE-CHEAP** (red-team downgrade). Radius scheduling already

@@ -41,7 +41,7 @@ production variant).
 
 | Metric | hexo-strix (theirs) | HeXO (ours) | Ratio (ours÷theirs) | Flag | Source |
 |---|---|---|---|---|---|
-| Param count | **222,146** (0.222M) | **4,254,283** (4.25M) | 19.1× | **MEASURED** (both — direct model instantiation this session) | `hexo-a0/src/hexo_a0/model.py` + `4l-128p32v.toml` dims; `hexo_rl/model/network.py` + `configs/model.yaml` (board 19, in_ch 8, res_blocks 12, filters 128) |
+| Param count | **283,970** (0.284M) | **4,254,283** (4.25M) | 15.0× | **MEASURED** (both — direct model instantiation this session) — **CORRECTION 2026-07-14 (WP0.3):** theirs was mis-recorded as 222,146 (0.222M / 19.1×); actual 283,970 (0.284M / 15.0×) | `hexo-a0/src/hexo_a0/model.py` + `4l-128p32v.toml` dims; `hexo_rl/model/network.py` + `configs/model.yaml` (board 19, in_ch 8, res_blocks 12, filters 128) |
 | Architecture class | GNN, GINEConv, axis-window graph, 4 msg-passing layers, per-node policy MLP + stone-pooled value MLP | CNN, ResNet-12 + SE blocks, GroupNorm, spatial policy conv+FC + GAP/max value head + 6 aux heads | — (not FLOP-comparable, see caveats) | MEASURED (code) | `hexo-a0/src/hexo_a0/model.py`; `hexo_rl/model/network.py` |
 | Self-play search algo | **Gumbel-root + PUCT-interior, ALWAYS** (no alternative implemented) | PUCT + dynamic FPU + quiescence-override + Dirichlet noise **by default** (`gumbel_mcts: false`); Gumbel reserved for eval/deploy | **train≠deploy on our side; train==deploy on theirs** | MEASURED (config) | `hexo-a0/src/hexo_a0/model.py` docstring; `configs/selfplay.yaml` (`mcts.dirichlet_alpha/epsilon`, `selfplay.gumbel_mcts: false`) |
 | Deploy/eval search | Gumbel SH, m=16, n=128 (production stage) | Gumbel SH, m=16, n=150, g=0 (gumbel_scale=0), greedy, no temp | m equal; n 1.17× ours | MEASURED (config) both | `4l-128p32v.toml` `[mcts]`; `docs/07_PHASE4_SPRINT_LOG.md` §2420 (`deploy_strength_eval.py`) |
@@ -118,7 +118,8 @@ fewer/no curriculum-deferred cost) — but cannot be confirmed as a measured
   number exists anywhere in the cloned repo.
 - **Param-count cross-check.** The task brief's pre-briefed "~0.23M params"
   for hexo-strix matches this session's direct instantiation of
-  `4l-128p32v.toml` almost exactly (222,146 measured vs ~230,000 briefed),
+  `4l-128p32v.toml` almost exactly (283,970 measured vs ~230,000 briefed;
+  corrected 2026-07-14 — originally mis-recorded as 222,146),
   corroborating that config as the right reference point. The brief's
   "2.9M-param net" for HeXO does **not** match this session's direct
   instantiation of the current `configs/model.yaml` architecture (4,254,283
@@ -228,8 +229,9 @@ the mandate.
    (fewer res blocks and/or filters), not a missing-aux-heads difference.
    Doesn't change the report's own measured number (4,254,283 for the
    *current* `configs/model.yaml`, confirmed exact-digit via independent
-   instantiation) or invalidate the 19.1× ratio *as a statement about the
-   current recipe* — but the stated reconciliation guess should be
+   instantiation) or invalidate the param ratio (19.1× as originally
+   recorded; 15.0× after the 2026-07-14 count correction) *as a statement
+   about the current recipe* — but the stated reconciliation guess should be
    corrected or dropped, not left as the working hypothesis.
 
 **Unverifiable / gap:**
