@@ -164,5 +164,13 @@ def compute_external_slope(records: list[dict]) -> dict[str, Any]:
         return {"slope": None, "ci_low": None, "ci_high": None, "n": len(steps)}
 
     slope = theil_sen_slope(steps, wrs)
-    ci_low, ci_high = pair_bootstrap_slope_ci(steps, wrs)
+    # pair_bootstrap_slope_ci resamples per-checkpoint PAIR SCORES (a list per
+    # ckpt); bar records carry only the aggregate wr, so unless the JSONL rows
+    # include pair_scores a bootstrap CI is uncomputable — report None rather
+    # than fabricate one from scalars.
+    pair_scores = [r.get("pair_scores") for r in records if "step" in r and "wr" in r]
+    if all(isinstance(ps, (list, tuple)) and len(ps) > 0 for ps in pair_scores):
+        ci_low, ci_high = pair_bootstrap_slope_ci(steps, pair_scores)
+    else:
+        ci_low = ci_high = None
     return {"slope": slope, "ci_low": ci_low, "ci_high": ci_high, "n": len(steps)}
