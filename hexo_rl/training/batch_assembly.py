@@ -23,8 +23,9 @@ from typing import Any, Callable, Optional
 import numpy as np
 import structlog
 
+from hexo_rl.bootstrap.corpus_io import compute_npz_sha256, load_corpus
 from hexo_rl.encoding import lookup as _lookup_encoding, normalize_encoding_name as _normalize_encoding_name
-from hexo_rl.encoding.resolvers import cur_stone_slot, opp_stone_slot
+from hexo_rl.encoding.resolvers import cur_stone_slot, opp_stone_slot, resolve_corpus_sha_pin
 
 # Module-level hoist (registry lookup at import time, not per-batch).
 _V6 = _lookup_encoding("v6")
@@ -174,6 +175,33 @@ def load_pretrained_buffer(
         )
         return None
 
+    # Resolve the active encoding once — shared by the sha-pin gate below and
+    # the plane-count check further down.
+    _spec = _lookup_encoding(_normalize_encoding_name(config.get("encoding")))
+
+    # WP0.4: launch-pinned corpus sha — hard gate BEFORE any load work. A
+    # stale/re-exported NPZ at the same path (same shape, same plane count)
+    # would otherwise pass the plane-count check below silently; this catches
+    # a wrong corpus on EITHER host at step 0, before burning GPU-days.
+    # Encodings without a registered pin (most of them — see
+    # `_CORPUS_SHA_PINS`) are unaffected. See docs/registers/run3_corpus_manifest.md.
+    _pin = resolve_corpus_sha_pin(_spec)
+    if _pin is not None:
+        _actual_sha = compute_npz_sha256(pretrained_path)
+        if _actual_sha != _pin:
+            raise ValueError(
+                f"corpus sha mismatch: {pretrained_path} is {_actual_sha[:12]}…, "
+                f"expected {_pin[:12]}… for encoding {_spec.name!r}. Both hosts "
+                f"must read the byte-identical launch corpus; do NOT re-export. "
+                f"See docs/registers/run3_corpus_manifest.md."
+            )
+        # Belt-and-braces: catches a stale/desynced sidecar (npz replaced
+        # without updating the sidecar, or vice-versa) even when the on-disk
+        # file still matches the launch pin above. The pin proves "this is
+        # the RIGHT corpus"; the sidecar only proves internal (npz<->sidecar)
+        # consistency — both are needed.
+        load_corpus(pretrained_path, expected_encoding=_spec.name)
+
     log.info(
         "loading_corpus_npz",
         path=pretrained_path,
@@ -190,7 +218,6 @@ def load_pretrained_buffer(
     # Validate against the ACTIVE encoding's plane count, not the v6
     # BUFFER_CHANNELS constant (8). v6tp keeps turn-phase planes 16/17 →
     # 10 planes; resolves to 8 for the v6 family (byte-identical check).
-    _spec = _lookup_encoding(_normalize_encoding_name(config.get("encoding")))
     _expected_planes = _spec.n_planes
     if pre_states.shape[1] != _expected_planes:
         raise ValueError(

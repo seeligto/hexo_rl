@@ -90,7 +90,12 @@ mcts:
   dirichlet_enabled: false   # no-op on the Gumbel branch (kept for hygiene parity)
 
 mixing:
-  pretrained_buffer_path: "data/bootstrap_corpus_v6_live2_ls.npz"
+  # WP0.4: routed through the single resolver (resolve_corpus_path,
+  # hexo_rl/encoding/resolvers.py) instead of hardcoding the NPZ path —
+  # resolves to the same file (data/bootstrap_corpus_v6_live2_ls.npz) for
+  # encoding v6_live2_ls, now with a launch sha-pin enforced at load time
+  # (docs/registers/run3_corpus_manifest.md).
+  pretrained_buffer_path: "<auto>"
   initial_pretrained_weight: 0.8
   min_pretrained_weight: 0.1
   decay_steps: 200000

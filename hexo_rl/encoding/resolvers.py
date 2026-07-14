@@ -142,6 +142,33 @@ _CORPUS_PATHS: dict[str, str] = {
     "v8_canvas_realness": "data/bootstrap_corpus_v8_canvas_realness.npz",
 }
 
+_CORPUS_SHA_PINS: dict[str, str] = {
+    # WP0.4 (run3-CNN pre-launch corpus-manifest unification,
+    # docs/registers/run3_corpus_manifest.md). run3's launch corpus must be
+    # byte-identical on every host — this is the load-bearing pin enforced by
+    # `load_pretrained_buffer` (hexo_rl/training/batch_assembly.py). Absence
+    # of an encoding here means "no launch pin enforced" (most corpora are
+    # not launch-critical); do not add an entry unless a launch actually
+    # depends on byte-identical corpus bytes across hosts.
+    "v6_live2_ls": "3813edc2fb10a7c5ab976a0293e38cbba0fd6b84e5295630f339ca421b345c97",
+}
+
+
+def resolve_corpus_sha_pin(spec: Any) -> str | None:
+    """Launch-pinned sha256 for encoding *spec*'s canonical corpus, if any.
+
+    Args:
+        spec: Any object with a `.name` attribute (EncodingSpec or compatible).
+
+    Returns:
+        Lowercase hex sha256 string, or `None` when no pin is registered for
+        `spec.name` — callers must treat `None` as "not enforced", not an
+        error; only launch-critical corpora carry a pin (see
+        `_CORPUS_SHA_PINS`).
+    """
+    return _CORPUS_SHA_PINS.get(spec.name)
+
+
 _ANCHOR_PATHS: dict[str, str] = {
     "v6":                 "checkpoints/bootstrap_model_v6.pt",
     "v6tp":               "checkpoints/bootstrap_model_v6tp.pt",  # §P5-CT CF-2 self-anchor

@@ -166,6 +166,24 @@ def test_anchor_paths_covers_all_registered_encodings() -> None:
     )
 
 
+def test_resolve_corpus_sha_pin_v6_live2_ls():
+    """WP0.4 — run3 launch corpus is sha-pinned in the registry resolver."""
+    from hexo_rl.encoding import lookup
+    from hexo_rl.encoding.resolvers import resolve_corpus_sha_pin
+    spec = lookup("v6_live2_ls")
+    assert resolve_corpus_sha_pin(spec) == (
+        "3813edc2fb10a7c5ab976a0293e38cbba0fd6b84e5295630f339ca421b345c97"
+    )
+
+
+def test_resolve_corpus_sha_pin_unpinned_encoding_returns_none():
+    """Most encodings have no launch pin registered — None, not an error."""
+    from hexo_rl.encoding import lookup
+    from hexo_rl.encoding.resolvers import resolve_corpus_sha_pin
+    spec = lookup("v6")
+    assert resolve_corpus_sha_pin(spec) is None
+
+
 def test_resolver_disambiguates_v6_live2_ls_from_v6_live2():
     """§D-MULTICLUSTER-S0 / §9.10 — v6_live2_ls is shape-identical to v6_live2
     (in_ch=4, 362, 19×19); only the ckpt LABEL disambiguates. The more-specific
