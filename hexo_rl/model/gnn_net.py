@@ -186,6 +186,12 @@ class GnnNet(nn.Module):
             value:        (B, 1) decoded value per graph, in [-1, 1].
             bin_logits:   (B, n_value_bins) raw dist65 bin logits per graph.
         """
+        # Full payload validation belongs to the WP-B resolver (18-assertion set);
+        # the mask dtype alone is guarded here because torch's uint8-as-mask path
+        # is deprecated — when removed, a uint8 mask silently becomes an integer
+        # index (wrong-row gather, F1 class). Cheap defense-in-depth.
+        assert legal_mask.dtype == torch.bool, f"legal_mask must be bool, got {legal_mask.dtype}"
+        assert stone_mask.dtype == torch.bool, f"stone_mask must be bool, got {stone_mask.dtype}"
         n_total = x.shape[0]
         device = x.device
         if node_offsets is None:
@@ -215,7 +221,15 @@ class GnnNet(nn.Module):
         Returns (policy_logits_over_legal_nodes (num_legal,), value (scalar Tensor),
         bin_logits (n_value_bins,)) — mirrors `GnnBcNet.policy_logits_for_graph` /
         strix `HeXONet.forward`, extended with the dist65 decode.
+
+        Deliberately does NOT delegate to `forward_batch`: this path is bit-exact
+        with the probe's deploy forward (WP2 red-team: 20/20 positions, max Δ=0.0),
+        which is what carries the +414 BC evidence onto this module. Routing through
+        the batched segment-pooling changes accumulation order (~5e-7 drift) and
+        would forfeit that exactness. Keep in sync with forward_batch semantics.
         """
+        assert legal_mask.dtype == torch.bool, f"legal_mask must be bool, got {legal_mask.dtype}"
+        assert stone_mask.dtype == torch.bool, f"stone_mask must be bool, got {stone_mask.dtype}"
         emb = self.representation(x, edge_index, edge_attr)
         legal_emb = emb[legal_mask]
         policy_logits = self.policy_head.mlp(legal_emb).squeeze(-1)
@@ -238,7 +252,7 @@ def load_representation_policy_from_bc(
     bc_state_dict: dict,
     *,
     prefixes: Sequence[str] = BC_TRANSFER_PREFIXES,
-    verify_n: int = 3,
+    verify_n: Optional[int] = None,
     seed: int = 0,
 ) -> dict:
     """Load ONLY `representation.*` / `policy_head.*` tensors from a `GnnBcNet`
@@ -249,8 +263,9 @@ def load_representation_policy_from_bc(
 
     STRICT on the two transfer prefixes: every ``net`` key under ``prefixes`` must
     be present in ``bc_state_dict`` and vice versa, else raises. After load, a
-    landed-verify pass (E1 `checkpoint_loader.py:590-603` pattern) samples
-    ``verify_n`` tensors per prefix (or all, if fewer) and asserts
+    landed-verify pass (E1 `checkpoint_loader.py:590-603` pattern) checks ALL
+    transferred tensors by default (``verify_n=None``; 46 tensors is cheap —
+    WP2 review) — pass an int to sample instead — and asserts
     ``torch.allclose`` against the source — the F1 guard: a silent key-mismatch
     drop under `strict=False` is exactly the failure class that self-played the
     wrong representation for 272k+ steps undetected (`d-forensic-f1-lineage...`).
@@ -277,7 +292,7 @@ def load_representation_policy_from_bc(
     verified = 0
     for prefix in prefixes:
         keys = sorted(k for k in own_keys_for_prefixes if k.startswith(prefix))
-        sample = rng.sample(keys, min(verify_n, len(keys)))
+        sample = keys if verify_n is None else rng.sample(keys, min(verify_n, len(keys)))
         for k in sample:
             loaded = reloaded_sd[k]
             source = src[k].to(device=loaded.device, dtype=loaded.dtype)

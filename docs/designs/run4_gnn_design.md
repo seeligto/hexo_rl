@@ -116,6 +116,14 @@ evaluates these at the 25k and 50k eval boundaries.
 fresh+mixing (option B: fresh trunk, corpus-mix 0.8→0.1 decay 200k, `bot_batch_share` 0). DS-4 is a
 BCE-drift-style canary (mirrors the C4 threat-probe C4-warning): logged, does not abort.
 
+**DS-3 calibration (WP-2 red-team, 2026-07-14, measured on the prefit-40k init):** D6
+non-equivariance lives in the POLICY head — policy-logit gap under rotation max 2.196 / mean 0.221
+/ p90 0.485 (and BC-without-aug AMPLIFIED it 1.8–5× over random init) — while the VALUE head is
+near-equivariant (~0.005). Consequence, binding on instrumentation: the DS-3 canary MUST read a
+policy-side signal (move axis share, as specified) — any value-side axis instrument is insensitive
+by construction. Baseline gap numbers above are the reference for judging whether training with
+aug is SHRINKING the gap (healthy) or growing it (leak).
+
 Rationale per signal: DS-1 is true-north (SealBot WR, deploy regime) — a prefit being un-learned is
 the clean number a monitor reads. DS-2 catches the specific basin failure (BC over-imitation =
 frozen low entropy). DS-3 reuses the §119 axis-share canary (leak real, aug is the fix — transferred

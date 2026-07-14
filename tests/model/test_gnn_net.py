@@ -305,3 +305,46 @@ def test_reachability_completing_cell_sees_far_end_stone_gradient():
         "w.r.t. far-end stone features -- the axis-window edge did not span, or "
         "message passing / policy MLP severed the gradient path."
     )
+
+
+# ── zero-stone fallback, end-to-end (WP2 review SHOULD-FIX #6) ─────────────────
+
+
+def test_zero_stone_fallback_both_paths_end_to_end():
+    """Empty board (MCTS-root scenario before any stone lands in a fresh graph):
+    stone_mask is all-False, so value pooling must take the all-nodes fallback in
+    BOTH forward paths, without NaN/crash, and the two paths must agree."""
+    g = _build({}, 1, 1)  # empty board -> dummy/legal nodes only, zero stones
+    x, ei, ea, lm, sm = _tensors_from_graph(g)
+    assert not sm.any(), "fixture must actually exercise the zero-stone branch"
+
+    net = GnnNet()
+    net.eval()
+
+    pol_s, val_s, bins_s = net.forward_single(x, ei, ea, lm, sm)
+    with torch.no_grad():
+        pol_b, val_b, bins_b = net.forward_batch(
+            x, ei, ea, lm, sm,
+            node_offsets=torch.tensor([0, x.shape[0]], dtype=torch.long),
+        )
+
+    for t in (pol_s, val_s, bins_s, pol_b, val_b, bins_b):
+        assert torch.isfinite(t).all()
+    assert pol_s.shape[0] == int(lm.sum())
+    assert torch.allclose(pol_s, pol_b, atol=1e-6)
+    assert torch.allclose(val_s, val_b.squeeze(0).squeeze(-1), atol=1e-6)
+    assert torch.allclose(bins_s, bins_b.squeeze(0), atol=1e-6)
+
+
+def test_masks_must_be_bool():
+    """uint8 masks ride torch's deprecated uint8-as-mask path today; when torch
+    removes it they become integer indices (silent wrong-row gather). The module
+    refuses non-bool masks outright (red-team GAP-1)."""
+    g = _build({(0, 0): 1, (1, 0): 2}, 1, 2)
+    x, ei, ea, lm, sm = _tensors_from_graph(g)
+    net = GnnNet()
+    net.eval()
+    with pytest.raises(AssertionError, match="legal_mask must be bool"):
+        net.forward_single(x, ei, ea, lm.to(torch.uint8), sm)
+    with pytest.raises(AssertionError, match="stone_mask must be bool"):
+        net.forward_batch(x, ei, ea, lm, sm.to(torch.uint8))
