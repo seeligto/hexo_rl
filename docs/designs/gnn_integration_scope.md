@@ -167,6 +167,12 @@ calls `submit_batch_and_wait_rust`.
   re-projected to the 362 action space + a scalar value, exactly like the CNN. Only the INPUT
   contract changes.
 
+**Boundary correction (red-team, see §Red-team pass):** "only the INPUT contract changes" holds for
+the INFERENCE seam this section names, but the TRAINING DATA PATH breaks equally and is scoped
+separately as **C8** — do not read C3's 8-15 pd as covering it. Also: dropping the TorchScript
+trace (~33% dispatcher wall time, `_setup_inference_path` note) forces `compile(dynamic=True)` + a
+mandatory re-bench — this is a driver of C3's HIGH end, not incidental.
+
 **Nearest precedent (reduces but does not eliminate risk).** The §173 multi-window K-cluster path
 ALREADY handles a variable NUMBER of fixed-width views per leaf: `infer_and_expand` loops
 `get_cluster_views()` (K views/leaf, K∈[1,8]) and re-segments the flat results by
@@ -290,9 +296,29 @@ spec/` + `hexo_rl/encoding/` (schema v4 `representation` discriminant, invariant
   the sampler's radius geometry needs re-pinning (it does not — the moves are the artifact). **No
   book regeneration required.**
 
-**Files touched.** New `hexo_rl/bots/gnn_v1_bot.py` (MCTS + dist65 deploy adapter, lift `GnnBcBot`
-+ `StrixV1Bot`); no change to `eval_pipeline.py`, `mantis_pull_eval.py`, `evalfair/*` beyond C3/C4.
-**Estimate: 2-4 person-days.**
+**Red-team correction (VERIFIED, see §Red-team pass) — restated scope.** The raw-policy adapter
+part holds at 2-4 pd, but "add MCTS search" above smuggles C3 back in: there is NO
+searched-GNN-through-our-stack path today. The strix-g128 bar runs strix's OWN engine in ITS OWN
+venv via a subprocess delegation child (`mantis_pull_eval.py` docstring, Stage 3b:
+"Runs strix in ITS OWN venv (hexo_rs + torch_geometric); the delegation child is
+`strix_g128_child.py`" — verified). The deploy-regime promotion gate (deploy_strength,
+model_sims 64/128/150) cannot run on a raw-policy adapter, and the D-K/argmax evidence
+(memory `argmax-tourney-results`) shows raw vs searched rankings DIVERGE — a raw-only bar is not a
+substitute. Restated: **raw adapter 2-4 pd; searched external bar = C3 dependency** (or +3-6 pd for
+a standalone Python graph-MCTS, CPU-slow, counted as optional, not in the total).
+
+**Also missed in the first cut (red-team): mixed-representation in-loop anchor.**
+`configs/variants/run3_dist65.yaml:106` pins `bootstrap_anchor` to a CNN checkpoint
+(`bootstrap_model_v6_live2_8300.pt`, `encoding: v6_live2`). The in-loop anchor `ModelPlayer` goes
+through the same (now graph-shaped) `InferenceBatcher` — a GNN run's in-loop eval is
+mixed-representation and needs either a SECOND CNN inference path in the eval worker or the anchor
+moved to the subprocess/BotProtocol path. Scoped at **+1-3 pd** on top of the raw adapter.
+
+**Files touched.** New `hexo_rl/bots/gnn_v1_bot.py` (raw + dist65 deploy adapter, lift `GnnBcBot`
++ `StrixV1Bot`); anchor-path change in the eval worker / `run3_gnn.yaml` bootstrap_anchor stanza;
+no change to `mantis_pull_eval.py` / `evalfair/*` beyond C3/C4.
+**Estimate (revised): 3-7 person-days** (raw adapter 2-4 + mixed-rep anchor 1-3; searched bar
+rides on C3, or +3-6 pd standalone Python graph-MCTS excluded from the total).
 
 ---
 
@@ -352,44 +378,159 @@ the artifact for free. Caveat to state at R4: the R2 verdict gates this — if R
 fallback. Either way the amendment's TRANSFERS (E1 dist65 head, EVALFAIR, promotion-gate isolation)
 ride on top unchanged.
 
+**Red-team correction (VERIFIED, see §Red-team pass).** `c796887` is the WRONG precedent for the
+transfer itself — it copies a CNN value-head-only (fc1/fc2) between shape-identical CNNs. The BC
+transfer needed here is representation + policy weights onto the production `gnn_net.py` module
+names — a real (if small) loader rewrite, not a lift. Two concrete blockers:
+- `scripts/train.py --checkpoint <gnn_ckpt>` hits
+  `trainer_ckpt_load.py::_resolve_checkpoint_encoding` →
+  `resolvers.py::detect_encoding_from_state_dict`, which RAISES on any state dict with no
+  `trunk.input_conv(.conv)?.weight` ("cannot detect encoding" — verified, strict path). The
+  TRAINER'S loader needs its own graph branch, DISTINCT from the eval `checkpoint_loader` branch
+  C4 scopes (both hit the same F1 detection helper — see §Red-team pass finding 4 on
+  single-sourcing it).
+- F1-class silent-partial-load risk: a `strict=False` load with any key mismatch between
+  `GnnBcNet` and production `gnn_net` module names drops weights SILENTLY. The E1 post-load
+  `torch.allclose` landed-verify (checkpoint_loader:593-603 pattern) must cover
+  representation + policy tensors, not just the value head.
+
 **Files touched.** `configs/variants/run3_gnn.yaml` (new, mirror `run3_dist65.yaml` with the graph
 encoding + `bootstrap` warm-start pointing at the R2 artifact); a GNN warm-start loader in
-`hexo_rl/training/` (lift E1's `c796887`). **Estimate: 1-3 person-days.**
+`hexo_rl/training/` (new — E1's `c796887` is precedent for the SEAM location only, not the code);
+`hexo_rl/training/trainer_ckpt_load.py` graph branch; landed-verify on representation+policy.
+**Estimate (revised): 3-6 person-days.**
 
 ---
 
-## Lead-time table
+## C8 — Training data path (NEW — red-team finding 1; not scoped in the first cut)
 
-| Component | Files touched (primary) | Estimate (person-days) |
-|---|---|---|
-| C1 Graph builder in loop (Rust, recommended) | `engine/src/graph/*` (new), `board/state/encode.rs` sibling, PyO3, parity test vs `strix_v1_graph.py` | **5-10** |
-| C2 Net + dist65 pooled head | `hexo_rl/model/gnn_net.py` (new), `training/trainer.py` (forward branch), `binned_value.py` (reused) | **3-6** |
-| C3 MCTS/PyO3 graph-input contract | `engine/src/inference_bridge.rs`, `worker_loop/inner.rs`, `pyo3/*`, `selfplay/inference_server.py` | **8-15** |
-| C4 CONFRES seams (registry schema v4, resolver, gated loader) | `encoding/registry.toml`, `encoding/spec/*`, `hexo_rl/encoding/*`, `eval/checkpoint_loader.py` | **3-6** |
-| C5 Instrument compat (BotProtocol + ModelPlayer + books) | `hexo_rl/bots/gnn_v1_bot.py` (new); books verified no-change | **2-4** |
-| C6 Throughput (analysis — done in this doc) | — | **0** |
-| C7 Bootstrap (BC-prefit init, recommended) | `configs/variants/run3_gnn.yaml` (new), GNN warm-start loader | **1-3** |
-| **Total** | | **22-44 person-days** |
+C3's "only the INPUT contract changes" boundary silently excluded the TRAINING DATA PATH, which
+variable-size graphs break equally. Four dense-plane assumptions, each verified against source:
 
-Dependency note: C5 (ModelPlayer path) and the in-loop promotion gate are BLOCKED on C3; C4's
-gated loader is required before any GNN checkpoint can be eval'd safely; C1 is a hard prerequisite
-for C3's Rust submit path. C2 and C7 can proceed in parallel against the probe net.
+- **Position recording.** `engine/src/game_runner/worker_loop/inner.rs::record_position`
+  (~:1395-1400) writes dense per-cluster planes: `let mut feat = vec![0.0f32; kept_planes.len() *
+  n_cells]; board.encode_state_to_buffer_channels(...)` per cluster view, plus separately-encoded
+  chain planes. A GNN training row is a ragged graph, not a fixed `feat` vector — the recording
+  contract changes shape entirely (store the graph, or store the position and re-build the graph
+  at sample time; the latter re-imports the C1 build cost into the trainer's sample path).
+- **Replay buffer storage.** `engine/src/replay_buffer/mod.rs:103` `states: Vec<u16>` — f16 bits,
+  flat `[capacity × encoding.state_stride()]`; `storage.rs::resize_impl` rotates/resizes by
+  `state_stride` multiples (verified :54-87). No ragged path exists.
+- **Replay buffer sampling.** `sample.rs::sample_batch_impl` allocates
+  `vec![0u16; batch_size * state_stride]` and scatters by pure stride arithmetic
+  `&self.states[idx * state_stride..(idx + 1) * state_stride]` (verified ~:296-330). Every output
+  array (states, chain, policies, ownership, winning_line) is stride-shaped.
+- **Symmetry augmentation.** Sampling applies §130 symmetry via plane-permutation
+  (`rotate_state_inplace` / policy rotate, `sym_tables.rs`) — a table lookup over dense cells. On
+  a graph the same augmentation is node-coordinate + edge-attr transformation (rotate coords,
+  remap axis one-hots, recompute normalized q/r) = NEW machinery with no existing table to reuse.
+- **Corpus mixing.** The `pretrained_buffer` `.npz` corpus is dense-plane
+  (`bootstrap_corpus_*.npz`); a GNN cannot consume it. Either re-export the corpus as graphs
+  (the probe's `_compact_example` materialization is the precedent — ~36 GB for ~500k positions,
+  `train_bc.py` perf note) or replay-and-build at load (C1 cost again).
+
+**Options.** (a) Graph-native buffer (ragged CSR-style storage + offsets, new sample/persist/
+symmetry) — clean but the largest cut; (b) store positions (stones + metadata, tiny) and build
+graphs at sample time on the Rust builder — smaller storage surgery, buys the build cost per
+sample (mitigated: C1's Rust builder at ~0.5-1.5 ms × batch 256 ≈ 0.1-0.4 s/step, borderline);
+(c) hybrid — store compact numpy graphs like the probe. All three touch
+`push.rs`/`storage.rs`/`sample.rs`/`persist/` + the trainer's `train_step` unpack
+(`trainer.py:514`) + symmetry.
+
+**Files touched.** `engine/src/replay_buffer/{push.rs,storage.rs,sample.rs,persist/*}`,
+`worker_loop/inner.rs::record_position`, graph-symmetry module (new), `training/trainer.py`
+(batch unpack), corpus re-export path. **Estimate: 10-20 person-days.**
+
+---
+
+## Red-team pass (D-M R-LADDER)
+
+A distinct-context, source-verified red-team reviewed the first cut of this doc. Findings, each
+spot-checked against source before integration (all load-bearing citations verified; none needed
+correction):
+
+1. **C3 boundary miss → C8.** C3's 8-15 pd HOLDS for the inference seam it names, but its "only
+   the INPUT contract changes" claim silently excluded the training data path
+   (record_position → replay buffer → sample → symmetry → corpus mix), which variable-size graphs
+   break equally. VERIFIED: `inner.rs` record_position dense per-cluster `feat` buffer;
+   `mod.rs:103` `states: Vec<u16>` flat stride storage; `sample.rs` stride arithmetic
+   `idx * state_stride..(idx+1) * state_stride` with no ragged path; `storage.rs::resize_impl`
+   stride rotation. Scoped as new component **C8 (+10-20 pd)**, not folded into C3. Within C3:
+   the TorchScript-trace loss (~33% dispatcher wall time) → `compile(dynamic=True)` + re-bench is
+   a HIGH-end driver, now noted in §C3.
+2. **C5 underestimate.** Raw adapter holds; "add MCTS search" smuggled C3 back in — no
+   searched-GNN-through-our-stack path exists (VERIFIED: the strix-g128 bar delegates to strix's
+   own engine/venv via `strix_g128_child.py`, `mantis_pull_eval.py` docstring Stage 3b). Deploy-
+   regime promotion gate can't run on a raw-policy adapter, and raw vs searched rankings diverge
+   (D-K/argmax evidence). Plus the missed mixed-representation in-loop anchor
+   (`run3_dist65.yaml:106` bootstrap_anchor is a CNN). §C5 restated; **revised 3-7 pd** with the
+   searched bar as a C3 dependency (or +3-6 pd standalone, excluded from total).
+3. **C7 underestimate.** `c796887` is a CNN value-head-only copy — wrong precedent for a
+   representation+policy transfer onto new module names. Blocker VERIFIED:
+   `resolvers.py::detect_encoding_from_state_dict` strict path RAISES
+   ("has no trunk.input_conv(.conv)?.weight; cannot detect encoding") on any GNN state dict, and
+   `trainer_ckpt_load.py::_resolve_checkpoint_encoding` routes through it — the trainer's loader
+   needs its own graph branch, distinct from C4's eval-loader branch. F1-class silent-partial-load
+   risk under `strict=False` → landed-verify (`torch.allclose`) required on representation+policy
+   tensors. §C7 restated; **revised 3-6 pd**.
+4. **Cross-cutting: model-build dispatch + loader duplication.** `HexTacToeNet(` is constructed
+   at 5+ sites, none representation-aware — VERIFIED at `orchestrator.py:677`,
+   `lifecycle.py:66` + `:172`, `anchor.py:569`, `trainer_ckpt_load.py:598`. A GNN needs a
+   build-dispatch seam (one `build_net(spec, state)` authority — the CONFRES `build_player`
+   single-construction-authority pattern, commit `69442e5`, is the precedent) instead of 5+
+   parallel edits. And the trainer-side gated-loader work (finding 3) duplicates C4's eval-loader
+   work — both hit the same F1 `trunk.input_conv.weight` detection; single-source the graph
+   branch in `hexo_rl/encoding/resolvers.py` so C4 and C7 share it. This overlap is why the
+   corrected total is BELOW the naive column sum (see table note).
+5. **Corrected total: ~35-65 person-days** (was 22-44). Original per-component numbers kept where
+   they held (C1, C2, C3, C4, C6).
+
+---
+
+## Lead-time table (corrected — supersedes the first-cut 22-44)
+
+| Component | Files touched (primary) | First cut (pd) | Corrected (pd) |
+|---|---|---|---|
+| C1 Graph builder in loop (Rust, recommended) | `engine/src/graph/*` (new), PyO3, parity test vs `strix_v1_graph.py` | 5-10 | **5-10** (holds) |
+| C2 Net + dist65 pooled head | `hexo_rl/model/gnn_net.py` (new), `training/trainer.py` (forward branch), `binned_value.py` (reused) | 3-6 | **3-6** (holds) |
+| C3 MCTS/PyO3 graph-input contract (inference seam only) | `engine/src/inference_bridge.rs`, `worker_loop/inner.rs`, `pyo3/*`, `selfplay/inference_server.py` | 8-15 | **8-15** (holds; trace loss = high-end driver) |
+| C4 CONFRES seams (registry schema v4, resolver, gated loader) | `encoding/registry.toml`, `hexo_rl/encoding/*`, `eval/checkpoint_loader.py` | 3-6 | **3-6** (holds; share graph-detect branch with C7) |
+| C5 Instrument compat (raw adapter + mixed-rep anchor; searched bar = C3 dep) | `hexo_rl/bots/gnn_v1_bot.py` (new), anchor path; books verified no-change | 2-4 | **3-7** (revised; +3-6 optional standalone graph-MCTS excluded) |
+| C6 Throughput (analysis — done in this doc) | — | 0 | **0** |
+| C7 Bootstrap (BC-prefit init; trainer loader graph branch + landed-verify) | `run3_gnn.yaml` (new), GNN warm-start loader (new), `trainer_ckpt_load.py` | 1-3 | **3-6** (revised) |
+| C8 Training data path (NEW) | `replay_buffer/{push,storage,sample,persist}`, `record_position`, graph symmetry (new), corpus re-export | — | **10-20** |
+| Cross-cutting build-dispatch seam | one `build_net` authority replacing 5+ `HexTacToeNet(` sites | — | folded into C4/C7 (overlap) |
+| **Total** | | 22-44 | **~35-65 person-days** |
+
+Naive column sum is 35-70; the corrected total's high end is ~65 because the C4/C7 loader work is
+single-sourced (finding 4) and C5's high end overlaps C3's contract work — stated, not hidden.
+
+Dependency note: C5's searched bar and the in-loop promotion gate are BLOCKED on C3; C8 is BLOCKED
+on C1 (builder) and co-designed with C3 (same ragged-payload class); C4's gated loader is required
+before any GNN checkpoint can be eval'd safely; C1 is a hard prerequisite for C3's Rust submit
+path. C2 and C7 can proceed in parallel against the probe net.
 
 ---
 
 ## The two biggest risks (named)
 
-**RISK 1 — the graph-input inference contract (C3).** The `InferenceBatcher` / PyO3 / pinned-H2D /
-TorchScript-trace seam is architected end-to-end around a FIXED `feature_len` dense tensor
-(`inference_bridge.rs:295-306`, `inner.rs:735-757`, `inference_server.py:99/159/466`). Variable-size
-graphs break the fused `[batch, feature_len]` tensor, the fixed-size feature-buffer pool, the pinned
-staging buffer, and the shape-pinned trace — all on the hottest path, all bench-gated. The §173
-K-cluster segmentation and the `v6_live2_ls` Rust-internal ragged policy are the nearest precedents
-(variable count / ragged-behind-dense), but variable PAYLOAD WIDTH is genuinely new. This is the
-highest effort (8-15 pd) AND the highest blast radius: a subtle graph-collate or offset bug silently
-corrupts self-play with no loud failure — the exact D-FORENSIC F1 failure class (wrong
-representation self-played for 272k+ steps undetected). Mitigation: the byte-parity oracle
-(`build_axis_graph_raw` + `_collate_gnn` already tested) and a mandatory `make bench` gate.
+**RISK 1 — the ragged-payload contract, BOTH sides of the loop (C3 + C8).** The `InferenceBatcher`
+/ PyO3 / pinned-H2D / TorchScript-trace seam is architected end-to-end around a FIXED
+`feature_len` dense tensor (`inference_bridge.rs:295-306`, `inner.rs:735-757`,
+`inference_server.py:99/159/466`) — and the red-team pass showed the SAME fixed-stride assumption
+runs through the training data path (`record_position` dense planes, `states: Vec<u16>` flat
+stride storage, `sample_batch_impl` stride arithmetic, plane-permutation symmetry, dense-plane
+`.npz` corpus — §C8). Variable-size graphs break the fused `[batch, feature_len]` tensor, the
+feature-buffer pool, the pinned staging buffer, the shape-pinned trace, the buffer
+push/sample/persist stride math, and the §130 symmetry tables — all on the hottest paths, all
+bench-gated. The §173 K-cluster segmentation and the `v6_live2_ls` Rust-internal ragged policy are
+the nearest precedents (variable count / ragged-behind-dense), but variable PAYLOAD WIDTH is
+genuinely new. This class is now the majority of the whole estimate (C3 8-15 + C8 10-20 of ~35-65
+pd) AND the highest blast radius: a subtle graph-collate / offset / symmetry bug silently corrupts
+self-play with no loud failure — the exact D-FORENSIC F1 failure class (wrong representation
+self-played for 272k+ steps undetected). Mitigation: the byte-parity oracle
+(`build_axis_graph_raw` + `_collate_gnn` already tested), a graph-symmetry parity test, and a
+mandatory `make bench` gate.
 
 **RISK 2 — self-play throughput collapse from graph-build cost (C1/C6).** MEASURED: the graph build
 is 5.94 ms/position (Python), on the MCTS hot path per-leaf-per-sim, versus a <50 µs plane scatter
