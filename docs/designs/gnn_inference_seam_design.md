@@ -555,3 +555,13 @@ The option-(a) admissibility bar was <2% chosen-move fraction; measured 20% exce
 **Option (b) is MANDATORY, not preferred** — a dense-362 deploy seam drops the model's actual
 chosen move in 1 of 5 positions (the pre-R1 handicap class). Ruling upgraded from
 evidence-bound to measurement-confirmed.
+
+## Step-6 preconditions addendum (WP-3 review, commit 871ea41 reviewed REVIEW-PASS)
+
+- **S2 (forward-flag, F1 coord/slot class):** the assembled `dense[]` slots are baked against the
+  builder's per-leaf `window_center`; step 6 MUST thread that same center into
+  `expand_and_backup_ls` — `assemble_ls_from_gnn_probs`/`InFlightGraph` do not retain it.
+- N1: replace `unwrap_or(6)` dead-fallback literals with `.expect()` (design §5 no-literals rule).
+- N4: assemble slot-range `assert!` → graceful named die-loud (workspace release is panic=abort).
+- ADV-7 true rotated-graph/unrotated-target reproduction lands with WP-5 aug (S1; slot-leg proxy
+  covers the inference collate today).
