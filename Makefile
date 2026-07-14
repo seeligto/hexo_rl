@@ -135,6 +135,11 @@ test.py: ## Run Python tests (excludes slow/integration markers)
 test.slow: ## Run slow/integration Python tests (~2-5 min)
 	$(PY) -m pytest -v -m "integration" tests/test_train_lifecycle.py
 
+.PHONY: check.wasm
+check.wasm: ## GNN-integration WP-D gate: hexo-graph compiles clean on wasm32-unknown-unknown
+	rustup target add wasm32-unknown-unknown
+	cargo check -p hexo-graph --no-default-features --features wasm --target wasm32-unknown-unknown
+
 
 # ── Benchmarks ────────────────────────────────────────────────────────────────
 

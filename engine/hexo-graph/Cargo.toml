@@ -1,0 +1,53 @@
+[package]
+name = "hexo-graph"
+version = "0.1.0"
+edition = "2021"
+description = "Axis-graph builder for the HeXO GNN encoding. One source compiled to two targets: native (self-play worker / training corpus builder) and wasm32-unknown-unknown (browser inference companion to onnxruntime-web). SKELETON — see docs/designs/gnn_integration_scope.md C1/C3/C4 and docs/designs/gnn_ragged_contract_v1.md for the real payload contract this will grow into. Not yet depended on by the `engine` crate."
+license = "Apache-2.0"
+publish = false
+
+[lib]
+name = "hexo_graph"
+# rlib: linked by `engine` once WP-B's contract lands (not yet — engine does
+# not depend on this crate today). cdylib: what the wasm32 browser build
+# needs to emit a loadable .wasm. Both crate-types check clean on both
+# targets today; keep both so neither target's toolchain surprises us later.
+crate-type = ["rlib", "cdylib"]
+
+[features]
+# Native (self-play worker / offline corpus builder) is the default: the
+# real axis-graph builder (C1) will very likely want rayon or std::thread
+# for per-leaf graph construction, the way the rest of `engine`'s hot path
+# does. Nothing native-only exists yet (skeleton) — the feature boundary is
+# declared NOW so a threaded dep can't sneak into the shared core path
+# later and silently poison the wasm build.
+default = ["native"]
+native = []
+# wasm32-unknown-unknown target: onnxruntime-web browser companion (per
+# WP-A TORCH-BEATS-ORT verdict, ORT/wasm is the browser-only path — self-play
+# rides torch-CUDA natively). Deliberately dep-free. No std::thread, no
+# rayon, no PyO3. Build with:
+#   cargo check -p hexo-graph --no-default-features --features wasm \
+#     --target wasm32-unknown-unknown
+wasm = []
+# PyO3 bindings for the Python builder parity harness
+# (hexo_rl/probes/gnn_bc/*, scripts/research/gnn_infer_bench.py's Python
+# builder comparator). NEVER combine with `wasm` — pyo3 links libpython and
+# does not target wasm32-unknown-unknown. Not in `default`: `engine`
+# doesn't depend on this crate yet, so nothing needs it on by default.
+python = ["dep:pyo3"]
+
+[dependencies]
+# Intentionally near-empty. Every dependency added to the SHARED core path
+# (i.e. not behind `native`-only or `python`-only gates) must be wasm32-clean
+# and justified here in a comment — that's the whole point of this crate
+# existing as its own compilation unit.
+#
+# pyo3: optional, gated behind `python` only. Version pinned to match
+# `engine/Cargo.toml`'s pyo3 so a future PyO3 glue layer (C1's "PyO3 glue in
+# engine/src/pyo3/") can share types without a version-skew fight. Not a
+# core-path dependency — never pulled into a native or wasm build.
+pyo3 = { version = "0.28", optional = true }
+
+[lints.clippy]
+pedantic = { level = "warn", priority = -1 }

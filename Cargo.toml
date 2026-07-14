@@ -1,11 +1,22 @@
 [workspace]
-members = ["engine"]
+members = ["engine", "engine/hexo-graph"]
 # Vendored eval-only opponent (vendor/bots/hammerhead) is an independent Rust
 # crate with its own toolchain pin — keep it out of this workspace so `maturin
 # develop` builds it standalone and our `[profile.release]` / resolver don't leak
 # into it. Eval-path only; never built by `make build` / bench.
 exclude = ["vendor/bots/hammerhead"]
 resolver = "2"
+
+# engine/hexo-graph (GNN-integration WP-D): ONE Rust source compiled to BOTH
+# native and wasm32-unknown-unknown — the axis-graph builder crate. It is a
+# workspace member (shares this file's resolver/profile) but the `engine`
+# crate does NOT depend on it, and `make build` invokes maturin directly on
+# `engine/Cargo.toml` (`cargo build -p engine`-equivalent), so adding this
+# member is zero build-risk to `make build` / `make bench` — it only builds
+# when explicitly targeted (`cargo check -p hexo-graph`). See
+# `engine/hexo-graph/Cargo.toml` for the native/wasm/python feature split
+# and `reports/probes/gnn_integration/WPD_wasm32_check.md` for the
+# wasm32-unknown-unknown compilability verdict.
 
 [profile.release]
 lto = "fat"           # Full cross-crate LTO. MCTS calls board logic calls
