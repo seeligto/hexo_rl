@@ -2989,4 +2989,21 @@ A0 landed (evalgate wave + 20 per-variant `opponents.bootstrap_anchor.encoding:`
 - Deploy stride kept at 4 (every 100k) — promotion granularity is a deliberate training lever (operator call).
 - Projected runtime ~17d → **~13–14d**.
 
+## §RUN3-PREREG — run3-CNN pre-registration committed (WP0.6) — 2026-07-15
+
+- **Preregistration committed:** `docs/registers/run3_cnn_preregistration.md` — stop rule
+  (150k early-stop iff fair-strength slope flat AND value-health flat vs run2's
+  strongest point; 300k hard stop), verdict definitions (IMPROVED/FLAT/REGRESSED/
+  4th-bucket-escalate), hard pins (encoding `v6_live2_ls`, dist65 head, deploy-matched
+  wr_d5), and the full baseline pin table (run2 lineage checkpoints, WP0.5 fresh books,
+  WP0.4 corpus pin, backfill-A/B comparator tables). Final Phase 0 gate before run3
+  launch; frozen-after-launch, dated-addenda-only thereafter.
+- **Known flake 1:** `tests/test_krakenbot_v1_mcts_bot.py::test_krakenbot_v1_mcts_determinism_temp0`
+  — order-dependent (fails in a full-suite run, passes isolated ×2). Adjudicated
+  non-blocking, pre-existing (found WP0.5).
+- **Known flake 2:** `scripts/e1/tests/test_validate_ckpt.py::test_scalar_row_schema_and_metrics`
+  — float-tolerance assert (`1.7e-5` vs `<1e-6` bound), reproduces byte-identically on
+  clean master. Adjudicated non-blocking, pre-existing (found WP0.5, confirmed via
+  `git stash -u` isolation).
+
 **MANUAL follow-up owed:** deploy no longer runs SealBot-vs-deploy-head. If the promotion trajectory or SealBot WR looks off at a milestone, run an OFFLINE SealBot-vs-deploy-head check (depth 5, or a one-off depth-6 rough read) — re-enable in-loop via `sealbot_games>0` only if it becomes load-bearing. SealBot WR (normal eval, every 25k, now n=50) remains the promotion-independent true-north.
