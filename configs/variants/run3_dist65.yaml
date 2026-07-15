@@ -120,6 +120,11 @@ mixing:
   initial_pretrained_weight: 0.8
   min_pretrained_weight: 0.1
   decay_steps: 200000
+  # STEP0-FAIL 2026-07-15 fix: base buffer_persist_path is SHARED across every
+  # variant launched from one checkout — a stale cross-lineage replay_buffer.bin
+  # silently auto-restored 250k unknown-provenance positions into this fresh-init
+  # run. Per-lineage path makes that impossible (fresh path => corpus prefill).
+  buffer_persist_path: "checkpoints/replay_buffer_run3_dist65.bin"
 
 eval_interval: 25000         # ruling: promotion gate cadence 25k
 eval_pipeline:
@@ -161,6 +166,10 @@ eval_pipeline:
   gating:
     promotion_winrate: 0.55
     require_ci_above_half: true   # CI-lower > 0.5 (the ruling's "CI>0.5")
+    # STEP0-FAIL 2026-07-15 fix: base best_model_path is shared across variants;
+    # a stale v6_live2-stamped best_model.pt from an unrelated lineage tripped
+    # resolve_anchor's encoding guard at launch. Per-lineage path.
+    best_model_path: checkpoints/best_model_run3_dist65.pt
     bootstrap_floor:
       enabled: false
 

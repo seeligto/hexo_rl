@@ -3007,3 +3007,23 @@ A0 landed (evalgate wave + 20 per-variant `opponents.bootstrap_anchor.encoding:`
   `git stash -u` isolation).
 
 **MANUAL follow-up owed:** deploy no longer runs SealBot-vs-deploy-head. If the promotion trajectory or SealBot WR looks off at a milestone, run an OFFLINE SealBot-vs-deploy-head check (depth 5, or a one-off depth-6 rough read) — re-enable in-loop via `sealbot_games>0` only if it becomes load-bearing. SealBot WR (normal eval, every 25k, now n=50) remains the promotion-independent true-north.
+
+## §RUN3-STEP0 — first launch attempt STEP0-FAIL + cross-lineage checkpoint-dir traps — 2026-07-15
+
+- Launch attempt 09:21Z (tmux `run3`, PID 1141379) died ~2 min in, pre-training-loop, box
+  left clean, zero GPU-days burned. A1-A4/B1-B5 preflight all held (config resolution,
+  encoding gate, sha-pinned corpus load 610,954 positions all green).
+- **Bug 1 (crash cause):** `resolve_anchor` fallback chain picked up STALE
+  `checkpoints/best_model.pt` (mtime Jul-11, encoding `v6_live2` ≠ `v6_live2_ls`) from an
+  unrelated prior lineage on the shared box checkout → loud encoding-mismatch `ValueError`.
+  Guard behaved correctly; the trap is the SHARED un-namespaced `gating.best_model_path`.
+- **Bug 2 (silent, worse):** stale `checkpoints/replay_buffer.bin` (2.3 GB, mtime Jul-13,
+  250k positions) AUTO-RESTORED via `buffer_restored`/`corpus_prefill_skipped` before the
+  crash — `mixing.buffer_persist_path` is shared across every variant launched from one
+  checkout. Would have silently fed 250k unknown-lineage self-play positions into a run whose
+  preregistered purpose is a clean fresh-init one-variable read.
+- **Fix (this commit):** run3 variant now namespaces both paths
+  (`replay_buffer_run3_dist65.bin`, `best_model_run3_dist65.pt`); stale artifacts archived to
+  `/workspace/stale_artifacts_20260715/` on the box (not deleted). Law for future recipes:
+  any variant sharing a checkout MUST namespace `buffer_persist_path` + `best_model_path`.
+- Retry = single attempt; second STEP0-FAIL ⇒ hard stop + operator escalation.
