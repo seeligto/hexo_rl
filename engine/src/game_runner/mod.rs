@@ -412,11 +412,27 @@ impl SelfPlayRunner {
                 derived.max(512)
             })
         });
-        Ok(Self {
+        // GNN-integration WP-3 step 6: a `representation="graph"` spec constructs
+        // a graph-capable batcher (parallel graph queue, no dense feature pool),
+        // so the worker's `infer_and_expand_graph` seam goes live. Every grid
+        // spec keeps the `None` encoding_spec → `Representation::Grid` batcher,
+        // byte-identical to pre-WP3 (explicit feature_len/policy_len still win;
+        // the graph geometry fields are only read for a Graph spec).
+        let batcher = if let Some(spec) = spec_static.filter(|s| s.representation.is_graph()) {
+            InferenceBatcher::new(
+                Some(crate::pyo3::encoding::PyRegistrySpec::from_static(spec)),
+                Some(feature_len),
+                Some(policy_len),
+                derived_pool_size,
+            )?
+        } else {
             // §172 A10 T8b: pass already-resolved widths through to the
             // batcher (its pyo3 sig now also takes Option<usize>; the runner
             // already collapsed encoding_spec → concrete widths above).
-            batcher: InferenceBatcher::new(None, Some(feature_len), Some(policy_len), derived_pool_size)?,
+            InferenceBatcher::new(None, Some(feature_len), Some(policy_len), derived_pool_size)?
+        };
+        Ok(Self {
+            batcher,
             pol_len: policy_len,
             n_workers,
             max_moves_per_game,

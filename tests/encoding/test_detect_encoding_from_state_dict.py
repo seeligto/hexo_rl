@@ -132,3 +132,42 @@ def test_pma_policy_mlp_key_used_when_policy_fc_absent():
     spec = detect_encoding_from_state_dict(state, "model.pt", strict=False)
     assert spec is not None
     assert spec.name == "v6w25"
+
+
+# ── GNN-integration WP-4 — graph-detect branch (contract nodes 11d-e) ───────
+
+
+def _fake_gnn_state() -> dict:
+    """Minimal GnnNet-shaped state dict — only the marker key matters for
+    detection, but a couple of neighbouring keys are included so a test
+    reading this fixture elsewhere (shape assertions) has something real."""
+    return {
+        "representation.input_proj.weight": torch.zeros(128, 11),
+        "representation.input_proj.bias": torch.zeros(128),
+        "policy_head.mlp.0.weight": torch.zeros(128, 512),
+        "value_head.fc2_bins.weight": torch.zeros(65, 32),
+    }
+
+
+def test_detect_graph_by_representation_marker_key():
+    spec = detect_encoding_from_state_dict(_fake_gnn_state(), "model.pt", strict=False)
+    assert spec is not None
+    assert spec.name == "gnn_axis_v1"
+    assert spec.representation == "graph"
+
+
+def test_detect_graph_wins_strict_too():
+    """The graph branch must fire BEFORE the grid `inp_w` probe in BOTH
+    strict modes — a GNN state dict has no trunk.input_conv(.conv)?.weight,
+    so strict=True must NOT hit the grid 'cannot detect encoding' raise."""
+    spec = detect_encoding_from_state_dict(_fake_gnn_state(), "model.pt", strict=True)
+    assert spec is not None
+    assert spec.name == "gnn_axis_v1"
+
+
+def test_detect_graph_state_dict_has_no_grid_marker():
+    """Sanity: the fixture really does lack the grid marker key (proves the
+    graph branch, not a grid fallback, resolved the spec above)."""
+    state = _fake_gnn_state()
+    assert "trunk.input_conv.weight" not in state
+    assert "trunk.input_conv.conv.weight" not in state

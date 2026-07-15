@@ -26,7 +26,9 @@ _OPP_SRC = 8
 _HISTORY_SRC = frozenset({1, 2, 3, 9, 10, 11})
 _TURN_PHASE_SRC = frozenset({16, 17})
 
-_ALL_ENCODINGS = sorted(_load_registry())
+# resolve_arch is a CNN dense-plane arch resolver — graph encodings carry no
+# planes (kept_plane_indices == []), so restrict the SoT-parity INV to grid.
+_ALL_ENCODINGS = sorted(n for n in _load_registry() if lookup(n).representation == "grid")
 
 
 @pytest.mark.parametrize("name", _ALL_ENCODINGS)

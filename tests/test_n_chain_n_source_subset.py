@@ -18,6 +18,11 @@ _ENCODING_NAMES = sorted(s.name for s in all_specs())
 def test_kept_indices_subset_of_source(name: str) -> None:
     """max(kept_plane_indices) < n_source_planes for all registered encodings."""
     spec = lookup(name)
+    # A graph encoding carries no dense planes (kept_plane_indices == []); the
+    # non-empty invariant is grid-only.
+    if spec.representation == "graph":
+        assert len(spec.kept_plane_indices) == 0 and spec.n_source_planes == 0
+        return
     assert len(spec.kept_plane_indices) > 0, (
         f"{name}: kept_plane_indices is empty"
     )

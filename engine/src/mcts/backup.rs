@@ -359,6 +359,38 @@ impl MCTSTree {
     /// `ls` by coord (off-window covered cells get real priors, no uniform sink).
     /// Shares `finish_expansion`.
     pub(crate) fn expand_and_backup_single_ls(&mut self, leaf_idx: u32, board: &Board, ls: &LegalSetPolicy, value: f32) {
+        // Board-frame variant: read the ragged priors back in the SAME window
+        // frame the CNN legal-set producer indexed `ls.dense` with
+        // (`board.window_center()` / `board.cluster_window_size()`).
+        let (cq, cr) = board.window_center();
+        let trunk_sz = board.cluster_window_size() as i32;
+        self.expand_and_backup_single_ls_framed(leaf_idx, board, ls, value, cq, cr, trunk_sz);
+    }
+
+    /// Frame-explicit `expand_and_backup_single_ls`. The caller supplies the
+    /// window centre `(cq, cr)` + `trunk_sz` that `ls.dense` was BAKED against,
+    /// instead of re-deriving them from `board`. Byte-identical to the
+    /// board-frame variant when passed `board.window_center()` /
+    /// `board.cluster_window_size()` (the CNN legal-set path).
+    ///
+    /// WP-3 step 6 / review S2 (F1 coord/slot class): the GNN assembles
+    /// `ls.dense` slots from the BUILDER's per-leaf `window_center` (via
+    /// `policy_dst_slot`), so the graph seam threads that same centre here — the
+    /// builder's bbox-midpoint `window_center(stones)` and
+    /// `Board::window_center()` are the identical formula over the same stones,
+    /// but this makes the read frame the SAME object the slots were baked with
+    /// rather than a coincident re-derivation.
+    #[allow(clippy::too_many_arguments)] // frame (cq, cr, trunk_sz) is passed by value on the expand path per §173 A5b hot-path discipline (a struct bundle would re-pack per leaf)
+    pub(crate) fn expand_and_backup_single_ls_framed(
+        &mut self,
+        leaf_idx: u32,
+        board: &Board,
+        ls: &LegalSetPolicy,
+        value: f32,
+        cq: i32,
+        cr: i32,
+        trunk_sz: i32,
+    ) {
         if self.pool[leaf_idx as usize].is_terminal {
             let tv = self.pool[leaf_idx as usize].terminal_value;
             self.backup(leaf_idx, tv);
@@ -383,8 +415,6 @@ impl MCTSTree {
             self.backup(leaf_idx, 0.0);
             return;
         }
-        let (cq, cr) = board.window_center();
-        let trunk_sz = board.cluster_window_size() as i32;
         let half = (trunk_sz - 1) / 2;
         let (chosen, _sort_used) = pick_topk_children_ls(legal_moves, cq, cr, ls, trunk_sz, half);
         self.finish_expansion(leaf_idx, board, chosen, value);
@@ -434,6 +464,50 @@ impl MCTSTree {
             });
 
             self.expand_and_backup_single_ls(*leaf_idx, board, ls, value);
+        }
+    }
+
+    /// Frame-explicit `expand_and_backup_ls` for the GNN seam (WP-3 step 6).
+    /// `centers[i]` is the BUILDER's per-leaf `window_center` that `policies[i]`
+    /// (assembled by `assemble_ls_from_gnn_probs`) baked its `dense` slots
+    /// against; `trunk_sz` is the builder's slot-window trunk (= `spec.trunk_size`).
+    /// Threading the builder centre (review S2) makes the prior read frame the
+    /// same object the slots were baked with. Pairing must line up with
+    /// `self.pending` order — `select_leaves` pushes `boards[i]`/`pending[i]` in
+    /// lockstep, and the caller builds `centers` from those same `boards`.
+    pub fn expand_and_backup_ls_at(
+        &mut self,
+        policies: &[LegalSetPolicy],
+        values: &[f32],
+        centers: &[(i32, i32)],
+        trunk_sz: i32,
+    ) {
+        let pending: Vec<(u32, crate::board::Board)> = std::mem::take(&mut self.pending);
+        let n = pending
+            .len()
+            .min(policies.len())
+            .min(values.len())
+            .min(centers.len());
+        for i in 0..n {
+            let (leaf_idx, board) = &pending[i];
+            let ls = &policies[i];
+            let value = values[i];
+            let (cq, cr) = centers[i];
+            // The builder's bbox-midpoint centre is the identical formula to
+            // `Board::window_center()` over the same stones; guard the invariant
+            // the cached-LS (TT-hit) re-read path also relies on.
+            debug_assert_eq!(
+                board.window_center(),
+                (cq, cr),
+                "GNN builder window_center != Board::window_center (F1 coord/slot drift)"
+            );
+
+            self.transposition_table.insert(board.zobrist_hash, super::node::TTEntry {
+                policy: CachedPolicy::Ls(std::sync::Arc::new(ls.clone())),
+                value,
+            });
+
+            self.expand_and_backup_single_ls_framed(*leaf_idx, board, ls, value, cq, cr, trunk_sz);
         }
     }
 

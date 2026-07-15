@@ -122,6 +122,13 @@ def test_round_trip(encoding_name: str) -> None:
         f"{encoding_name}: lookup() returned non-stable instance"
     )
 
+    # GNN-integration: the CNN round-trip (Board planes → HexTacToeNet) does
+    # not apply to a graph encoding — the axis-graph path uses GnnNet + the
+    # WP-3 graph_collate resolver (tests/selfplay/test_graph_collate.py). The
+    # registry-stable-instance check above still runs for every encoding.
+    if getattr(spec, "representation", "grid") == "graph":
+        pytest.skip(f"{encoding_name}: graph representation — CNN round-trip N/A")
+
     # 2. Board construction.
     board = Board.with_encoding_name(encoding_name)
     assert board.size == spec.board_size, (

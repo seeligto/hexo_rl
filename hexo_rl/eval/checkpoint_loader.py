@@ -84,7 +84,11 @@ from hexo_rl.encoding import (
     normalize_encoding_name as _normalize_encoding_name,
 )
 from hexo_rl.model.network import HexTacToeNet
-from hexo_rl.training.checkpoints import normalize_model_state_dict_keys
+from hexo_rl.training.checkpoints import (
+    assert_full_gnn_checkpoint_or_raise,
+    infer_gnn_hparams_from_state_dict,
+    normalize_model_state_dict_keys,
+)
 
 try:
     import structlog
@@ -326,7 +330,7 @@ def load_model_with_encoding(
     declared_encoding: Any | None = None,
     require_encoding_source: bool = False,
     decode_override: Any | None = None,
-) -> Tuple[HexTacToeNet, EncodingSpec, str]:
+) -> Tuple[torch.nn.Module, EncodingSpec, str]:
     """Load checkpoint, detect encoding, return (model, spec, label).
 
     The label matches ``spec.name`` (registry-by-name). Use the label to
@@ -466,11 +470,39 @@ def load_model_with_encoding(
     try:
         _registry_lookup(label)
     except EncodingRegistryError as exc:
-        raise ValueError(
-            f"checkpoint {ckpt_path}: unknown encoding label {label!r}"
-        ) from exc
+        # WP-4 review finding 2 — an UNKNOWN *checkpoint stamp* label (never
+        # a declared/override name, which are caller assertions and must
+        # stay loud) falls through to state-dict detection instead of dying
+        # generic. Concrete case: the banked BC-prefit artifacts
+        # (`checkpoints/probes/gnn_bc/gnn_bc_*.pt`) carry a top-level
+        # `encoding: "strix_axis_graph"` stamp (`train_bc.py`) that was
+        # never registered — the generic "unknown encoding label" raise
+        # short-circuited BEFORE `_build_gnn_model`'s actionable
+        # `assert_full_gnn_checkpoint_or_raise` diagnostic could fire.
+        # Detection is shape-marker-driven (`detect_encoding_label`,
+        # strict), so a garbage state dict still dies loud here.
+        if (
+            declared_name is None
+            and override_name is None
+            and label == ckpt_stamp_name
+        ):
+            _log.warning(
+                "unknown_ckpt_encoding_stamp_falling_through_to_detection",
+                checkpoint=str(ckpt_path),
+                stamp=label,
+                stamp_source=ckpt_stamp_source,
+            )
+            label = detect_encoding_label(ckpt_path, state)
+        else:
+            raise ValueError(
+                f"checkpoint {ckpt_path}: unknown encoding label {label!r}"
+            ) from exc
 
-    if label == "v8":
+    if label == "gnn_axis_v1":
+        # GNN-integration WP-4 (C4) — graph representation, no plane/pass-slot
+        # geometry; _build_model_from_spec dispatches to _build_gnn_model.
+        spec = _registry_lookup("gnn_axis_v1")
+    elif label == "v8":
         spec = _registry_lookup("v8")
     elif label == "v6w25":
         spec = _registry_lookup("v6w25")
@@ -498,11 +530,18 @@ def load_model_with_encoding(
     return model, spec, label
 
 
-def _build_model_from_spec(state: dict, spec: EncodingSpec) -> HexTacToeNet:
-    """Unified entry point — dispatches to the per-family builder by
-    ``spec.has_pass_slot``.
+def _build_model_from_spec(state: dict, spec: EncodingSpec) -> torch.nn.Module:
+    """Unified entry point — dispatches to the per-family builder.
 
     Branch:
+      - ``representation="graph"`` → ``_build_gnn_model`` (WP-4 / C4 —
+                                  MUST be checked before ``has_pass_slot``:
+                                  the graph encoding has ``has_pass_slot=
+                                  True`` too, so a naive has_pass_slot-only
+                                  dispatch would mis-route it into
+                                  ``_build_min_max_model``, which reads
+                                  ``trunk.input_conv.weight`` — absent on a
+                                  GnnNet state dict).
       - ``has_pass_slot=True``  → ``_build_min_max_model`` (v6 / v6w25 /
                                   v7full / v7 / v7e30 / v7mw family;
                                   min_max policy head with optional
@@ -517,12 +556,119 @@ def _build_model_from_spec(state: dict, spec: EncodingSpec) -> HexTacToeNet:
     bodies preserved architecturally distinct because feature-detection
     + ``strict`` load policy differ per family.
     """
+    if getattr(spec, "representation", "grid") == "graph":
+        return _build_gnn_model(state, spec)
     if spec.has_pass_slot:
         return _build_min_max_model(state, spec)
     return _build_kata_model(state, spec)
 
 
+def _build_gnn_model(state: dict, spec: EncodingSpec):
+    """C4 graph builder — selected when ``spec.representation == "graph"``
+    (WP-4, contract node 11e).
+
+    Ground-truths ``hidden``/``num_layers``/``policy_hidden``/
+    ``value_hidden`` from the checkpoint's OWN tensor shapes
+    (``infer_gnn_hparams_from_state_dict``, single-sourced with the C7
+    resume branch, `hexo_rl.training.trainer_ckpt_load`) rather than
+    trusting a hardcoded default — a probe-284k checkpoint and any future
+    differently-scaled GNN both load correctly.
+
+    Landed-verify (C7 red-team demand — representation+policy coverage,
+    not value-only): mirrors the E1 ``torch.allclose`` post-load guard
+    (``_build_min_max_model``, above) across ALL three submodules
+    (representation, policy_head, value_head), not just the dist65 bins.
+    ``strict=True`` on ``load_state_dict`` already makes a partial/dropped
+    load impossible for THIS state dict (unlike the CNN's
+    tower.*-duplicate-tolerant ``strict=False``) — the allclose pass below
+    is a belt-and-suspenders parity check (F1 defense-in-depth), not the
+    only defense.
+    """
+    from hexo_rl.model.gnn_net import GnnNet
+
+    assert_full_gnn_checkpoint_or_raise(state, checkpoint_label="gnn checkpoint")
+
+    node_feat_dim = getattr(spec, "node_feat_dim", None)
+    edge_feat_dim = getattr(spec, "edge_feat_dim", None)
+    if node_feat_dim is None or edge_feat_dim is None:
+        raise ValueError(
+            f"_build_gnn_model: encoding {spec.name!r} declares representation="
+            "'graph' but is missing node_feat_dim/edge_feat_dim (schema-v4 "
+            "graph fields, engine/src/encoding/registry.toml)."
+        )
+    inferred = infer_gnn_hparams_from_state_dict(state)
+    # node_feat_dim/edge_feat_dim: cross-check the checkpoint's own shape
+    # against the registry spec — a mismatch means the checkpoint does not
+    # actually speak the declared encoding (D-EVALFOUND C1 class guard,
+    # mirrors validate_arch_against_spec above).
+    ckpt_node_feat_dim = inferred.get("node_feat_dim", node_feat_dim)
+    ckpt_edge_feat_dim = inferred.get("edge_feat_dim", edge_feat_dim)
+    if ckpt_node_feat_dim != node_feat_dim or ckpt_edge_feat_dim != edge_feat_dim:
+        raise ValueError(
+            f"checkpoint node_feat_dim/edge_feat_dim={ckpt_node_feat_dim}/"
+            f"{ckpt_edge_feat_dim} != spec {spec.name!r} "
+            f"node_feat_dim/edge_feat_dim={node_feat_dim}/{edge_feat_dim}; "
+            "encoding/arch mismatch (registry-by-name guard)."
+        )
+    model = GnnNet(
+        in_dim=int(node_feat_dim),
+        hidden=int(inferred.get("gnn_hidden", 128)),
+        num_layers=int(inferred.get("gnn_num_layers", 4)),
+        edge_dim=int(edge_feat_dim),
+        policy_hidden=int(inferred.get("gnn_policy_hidden", 128)),
+        value_hidden=int(inferred.get("gnn_value_hidden", 32)),
+        n_value_bins=int(inferred.get("n_value_bins", 65)),
+    )
+    model.load_state_dict(state, strict=True)
+
+    # Landed-verify (C7 red-team demand): representation + policy + dist65
+    # value tensors, not value-only (E1 precedent, `_build_min_max_model`
+    # above). strict=True already guarantees full landing for this state
+    # dict (no legacy tower.*-alias tolerance exists on GnnNet); this is a
+    # belt-and-suspenders parity re-check, not the only defense.
+    # Scope (by design, WP-4 review finding 4): this verifies the LOAD
+    # landed what the file said — it does NOT validate the file's own
+    # contents; shape-preserving corruption (e.g. a transposed SQUARE
+    # tensor) inside the checkpoint passes both strict-load and allclose.
+    reloaded = model.state_dict()
+    for key, src in state.items():
+        dst = reloaded.get(key)
+        if dst is None:
+            continue
+        if not torch.allclose(dst, src.to(device=dst.device, dtype=dst.dtype)):
+            raise RuntimeError(
+                f"gnn checkpoint: landed-verify FAILED for {key!r} "
+                "(load_state_dict did not land this tensor)."
+            )
+    return model
+
+
+def _reject_graph_shaped_state_for_grid_spec(state: dict, spec: EncodingSpec, missing_key: str) -> None:
+    """WP-4 fix pass (review finding 5) — reverse-F1 diagnosability.
+
+    A GRID spec (declared/stamped/inferred) handed a GRAPH-shaped state dict
+    used to die with a raw ``KeyError: 'trunk.input_conv.weight'`` — loud,
+    but zero hint that the state dict is a GNN net mis-declared as grid.
+    Raise the named ``RepresentationMismatch`` family error instead when the
+    graph marker is present; a genuinely-malformed grid state dict keeps its
+    original ``KeyError`` behavior (the caller's indexing raises next).
+    """
+    from hexo_rl.encoding._probes import GNN_GRAPH_MARKER_KEY
+    from hexo_rl.model.build_net import RepresentationMismatch
+
+    if missing_key not in state and GNN_GRAPH_MARKER_KEY in state:
+        raise RepresentationMismatch(
+            f"encoding {spec.name!r} (representation='grid') declared for a "
+            f"GRAPH-shaped state dict — no {missing_key!r}, but the GNN "
+            f"marker {GNN_GRAPH_MARKER_KEY!r} is present. This checkpoint "
+            "is a GnnNet (graph representation, encoding 'gnn_axis_v1'); "
+            "fix the declared/stamped encoding instead of loading it as a "
+            "grid CNN."
+        )
+
+
 def _build_min_max_model(state: dict, spec: EncodingSpec) -> HexTacToeNet:
+    _reject_graph_shaped_state_for_grid_spec(state, spec, "trunk.input_conv.weight")
     inp_w = state["trunk.input_conv.weight"]
     filters = int(inp_w.shape[0])
     in_channels = int(inp_w.shape[1])
@@ -614,6 +760,7 @@ def _build_kata_model(state: dict, spec: EncodingSpec) -> HexTacToeNet:
         "trunk.input_conv.conv.weight" if canvas_realness
         else "trunk.input_conv.weight"
     )
+    _reject_graph_shaped_state_for_grid_spec(state, spec, inp_w_key)
     inp_w = state[inp_w_key]
     filters = int(inp_w.shape[0])
     in_channels = int(inp_w.shape[1])

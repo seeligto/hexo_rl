@@ -77,6 +77,28 @@ impl PyRegistrySpec {
     /// computing the `InferenceBatcher.pool_size` auto-derive heuristic.
     #[getter] pub fn k_max(&self) -> u32 { self.inner.k_max }
 
+    // ── GNN-integration schema v4 — representation discriminant + graph geom.
+    /// "grid" (dense CNN planes) | "graph" (axis-graph GNN). Read by the
+    /// Python `build_net` dispatch + `graph_collate` resolver (seam design
+    /// §5-below). Grid for every pre-v4 encoding.
+    #[getter] pub fn representation(&self) -> &'static str { self.inner.representation.as_str() }
+    /// Convenience mirror of `representation == "graph"`.
+    #[getter] pub fn is_graph(&self) -> bool { self.inner.is_graph() }
+    /// Per-node feature width (graph only; `None` for grid). = 11.
+    #[getter] pub fn node_feat_dim(&self) -> Option<usize> { self.inner.node_feat_dim }
+    /// Per-edge feature width (graph only). = 5.
+    #[getter] pub fn edge_feat_dim(&self) -> Option<usize> { self.inner.edge_feat_dim }
+    /// GNN win-length (graph only). = 6.
+    #[getter] pub fn win_length(&self) -> Option<usize> { self.inner.win_length }
+    /// GNN legal-move / axis-walk radius (graph only). = 6.
+    #[getter] pub fn graph_radius(&self) -> Option<usize> { self.inner.graph_radius }
+    /// Number of win axes (graph only). = 3.
+    #[getter] pub fn win_axes(&self) -> Option<usize> { self.inner.win_axes }
+    /// Ragged-payload contract version this encoding speaks (graph only). = 1.
+    #[getter] pub fn contract_version(&self) -> Option<u32> { self.inner.contract_version }
+    /// Required native builder tag the resolver asserts (graph only). = 1.
+    #[getter] pub fn builder_impl_required(&self) -> Option<u8> { self.inner.builder_impl_required }
+
     /// Alias for `policy_logit_count` — matches the retired Python @dataclass
     /// `n_actions` @property (Wave 8 Batch A FF.2 parity).
     #[getter] pub fn n_actions(&self) -> usize { self.inner.policy_logit_count }

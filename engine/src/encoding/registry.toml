@@ -15,6 +15,17 @@
 #           Board::get_cluster_views(); = 1 for single-window encodings.
 #           Used by InferenceBatcher pool-size auto-derive in
 #           SelfPlayRunner::new (closes the cycle 1 hardcoded 512 prefill).
+# Schema v4 additions (GNN-integration WP-3, 2026-07-14) — BACKWARD-COMPATIBLE:
+#   representation — "grid" | "graph" discriminant. ABSENT → "grid", so every
+#           pre-v4 grid entry stays valid v4 unchanged (they omit the key and
+#           keep schema_version=3). Only graph encodings declare schema_version=4.
+#   node_feat_dim / edge_feat_dim / win_length / graph_radius / win_axes /
+#   contract_version / builder_impl_required — axis-graph geometry, present ONLY
+#           for representation="graph"; the worker reads them into BuildParams so
+#           no 6/11/5 literal lands on the build path. Validator gates the
+#           grid-only invariants on representation="grid" and the graph
+#           invariants on "graph" (single-sourced against hexo_graph constants).
+#           See docs/designs/gnn_inference_seam_design.md §5-below.
 #
 # Adding a new encoding:
 #   1. Append a `[encodings.<name>]` table with all required keys (§3.1).
@@ -416,3 +427,45 @@ n_source_planes         = 21
 k_max                   = 1            # single-window → 1 cluster view per leaf
 schema_version          = 3
 notes                   = "§169 A4 / §170 P4 P2 variant; plane-8 polarity INSIDE->CANVAS for PartialConv2d trunk-entry. Pair with bootstrap_corpus_v8_canvas_realness.npz (sha 110ea6b2…)."
+
+# ---------------------------------------------------------------------------
+# gnn_axis_v1 — GNN axis-graph encoding (representation="graph", schema v4).
+# GNN-integration WP-3 (C3). Whole-board axis graph (NO K-cluster windows);
+# per-legal-node policy with NO off-window drop (ragged, seam design §1
+# option (b)). The dense-plane fields are inert for a graph (n_planes=0,
+# plane_layout=[], kept_plane_indices=[], n_source_planes=0); the axis-graph
+# geometry lives in the schema-v4 graph fields below, which the worker reads
+# into hexo_graph::BuildParams — zero scattered 6/11/5 literals on the build
+# path (CLAUDE.md registry rule). Action space is UNCHANGED: a graph plays the
+# identical 19×19+pass board, so policy_logit_count STAYS 362 (contract §C4).
+# Ragged payload contract v1 (docs/designs/gnn_ragged_contract_v1.md);
+# builder = native hexo-graph (BUILDER_IMPL_NATIVE=1), asserted by the resolver.
+# ---------------------------------------------------------------------------
+[encodings.gnn_axis_v1]
+representation          = "graph"
+board_size              = 19          # action-space board (19×19+pass)
+trunk_size              = 19          # window_flat_idx origin for policy_dst_slot
+cluster_window_size     = "none"
+cluster_threshold       = "none"
+legal_move_radius       = 6           # matches graph_radius
+n_planes                = 0           # graph carries no dense planes
+plane_layout            = []
+policy_logit_count      = 362         # 19*19 + 1 — UNCHANGED action space
+has_pass_slot           = true
+is_multi_window         = false
+value_pool              = "none"
+policy_pool             = "none"
+sym_table_id            = "size_19"   # D6 aug reuses axis_perm (contract Part 3)
+kept_plane_indices      = []
+n_source_planes         = 0
+k_max                   = 1           # whole-board: one graph per leaf
+# ── schema-v4 graph fields (representation="graph" only) ──
+node_feat_dim           = 11          # relative-7 + threat-4 (hexo_graph::NODE_FEAT_DIM)
+edge_feat_dim           = 5           # axis one-hot(3) + signed_dist + src_player
+win_length              = 6
+graph_radius            = 6
+win_axes                = 3
+contract_version        = 1           # ragged-payload contract this encoding speaks
+builder_impl_required   = 1           # native tag the resolver asserts
+schema_version          = 4
+notes                   = "GNN axis-graph (legacy relative+threat schema). Ragged payload contract v1. Whole-board (no K-cluster); per-legal-node policy, no off-window drop. Builder = native hexo-graph."

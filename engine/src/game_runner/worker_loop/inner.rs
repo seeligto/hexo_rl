@@ -729,6 +729,16 @@ fn infer_and_expand(
     infer: InferContext,
     variance: ClusterVarianceAtomics,
 ) -> usize {
+    // ── WP-3 step 6: graph-seam dispatch (seam design §3.2) ──────────────────
+    // Hoisted at the worker boundary (NOT per-sim): a `representation="graph"`
+    // batcher routes to the ragged GNN path; every grid batcher (all 11 dense
+    // encodings) returns `false` here, so the dense instruction stream below is
+    // byte-identical (one never-taken predicted branch per leaf-batch, the graph
+    // fn is `#[cold]`/`#[inline(never)]` so it never bloats the inlined hot path).
+    if infer.batcher.is_graph() {
+        return infer_and_expand_graph(tree, batch_size, agg_trunk_sz, infer);
+    }
+
     let leaves = tree.select_leaves(batch_size);
     if leaves.is_empty() { return 0; }
 
@@ -834,6 +844,88 @@ fn infer_and_expand(
     } else {
         tree.expand_and_backup(&aggregated_policies, &aggregated_values);
     }
+    n
+}
+
+/// GNN counterpart of `infer_and_expand` (seam design §3.2). Selected once per
+/// leaf-batch when the batcher is `representation="graph"` (never per-sim; the
+/// dispatch is hoisted at the top of `infer_and_expand`). Builds ONE axis graph
+/// per evaluated leaf (§S186 — never a search-time delta), submits the batch
+/// through the parallel graph queue, and expands each leaf's assembled ragged
+/// `LegalSetPolicy` via `expand_and_backup_ls_at`.
+///
+/// **S2 (review forward-flag, F1 coord/slot class):** the assembled
+/// `LegalSetPolicy.dense` slots are baked against the BUILDER's per-leaf
+/// `window_center` (via `policy_dst_slot`), so the builder centre is captured
+/// here (`g.window_center`) and threaded into `expand_and_backup_ls_at` — the
+/// read frame is the SAME object the slots were baked with, not a coincident
+/// `board.window_center()` re-derivation.
+///
+/// Whole-board graph → one value per leaf (no K-cluster min-pool). v1
+/// inference-time symmetry is DEFAULT-OFF (coord pre-rotation is WP-5 aug), so
+/// `infer.sym_idx` is NOT applied on this path. Returns 0 (skip the batch,
+/// matching the dense inference-failure degradation) on a build-guard trip or a
+/// graph-inference failure.
+#[cold]
+#[inline(never)]
+fn infer_and_expand_graph(
+    tree: &mut MCTSTree,
+    batch_size: usize,
+    agg_trunk_sz: i32,
+    infer: InferContext,
+) -> usize {
+    let leaves = tree.select_leaves(batch_size);
+    if leaves.is_empty() { return 0; }
+
+    let mut graphs = Vec::with_capacity(leaves.len());
+    let mut centers = Vec::with_capacity(leaves.len());
+    for leaf in &leaves {
+        // Stone list from the board's sparse cell map (order irrelevant — the
+        // builder coordinate-sorts). `Cell`/`Player` are `#[repr(i8)]`
+        // (P1/One = 1, P2/Two = -1); the cast lands ±1 as the builder expects.
+        let mut stones: Vec<(i64, i64, i64)> = Vec::new();
+        for (&(q, r), &cell) in leaf.cells_iter() {
+            stones.push((i64::from(q), i64::from(r), cell as i64));
+        }
+        let current_player = leaf.current_player as i64;
+        let moves_remaining = i64::from(leaf.moves_remaining);
+        match infer.batcher.build_leaf_graph(&stones, current_player, moves_remaining) {
+            Some(g) => {
+                centers.push(g.window_center);
+                graphs.push(g);
+            }
+            // Seam guard tripped (unreachable for a valid self-play board — coords
+            // bounded, player/moves in range). Degrade like a dense inference
+            // failure: skip the whole batch.
+            None => return 0,
+        }
+    }
+
+    let results = match infer.batcher.submit_batch_and_wait_graph_rust(graphs) {
+        Ok(r) => r,
+        Err(()) => return 0,
+    };
+    if results.len() < leaves.len() { return 0; }
+
+    let mut aggregated_ls: Vec<records::LegalSetPolicy> = Vec::with_capacity(results.len());
+    let mut aggregated_values: Vec<f32> = Vec::with_capacity(results.len());
+    for (ls, v) in results {
+        aggregated_ls.push(ls);
+        aggregated_values.push(v);
+    }
+
+    let n = leaves.len();
+    // Expand frame trunk = spec.trunk_size (`agg_trunk_sz`), which is the SAME
+    // trunk the builder used for `policy_dst_slot` (batcher `graph_trunk_size`).
+    // ALWAYS-ON (graph-only call site; one integer compare per leaf batch —
+    // release builds strip debug_asserts, and a trunk mismatch here misreads
+    // every in-window slot).
+    assert_eq!(
+        agg_trunk_sz,
+        infer.batcher.graph_trunk_size(),
+        "graph trunk mismatch: spec agg_trunk_sz vs batcher graph_trunk_size"
+    );
+    tree.expand_and_backup_ls_at(&aggregated_ls, &aggregated_values, &centers, agg_trunk_sz);
     n
 }
 

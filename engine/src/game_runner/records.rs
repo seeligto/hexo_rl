@@ -420,6 +420,182 @@ pub fn aggregate_policy_ls(
     LegalSetPolicy { dense, overflow }
 }
 
+/// GNN counterpart of `aggregate_policy_ls` (seam design §3.4, the one new
+/// records fn for WP-3 option (b)). The GNN policy head emits ONE probability
+/// per legal node directly (whole-board graph — NO K-cluster scatter-max), so
+/// this is a pure re-key of the ragged per-legal-node probs into the EXISTING
+/// `LegalSetPolicy` no-drop consumer:
+///   - in-window legal node (`policy_dst_slot[i] != OFF_WINDOW_SLOT`) → `dense[slot]`;
+///   - off-window legal node (`policy_dst_slot[i] == OFF_WINDOW_SLOT` = -1) → `overflow[coord]`.
+///
+/// This reproduces the +414 no-drop decode regime (the dense-`[B,362]` scatter
+/// would DROP the 43.55% off-window legal cells WP-1 measured — the pre-R1
+/// handicap; seam design §1). `expand_and_backup_ls` then consumes the result
+/// byte-identically to the CNN legal-set path.
+///
+/// `legal_probs` are pre-normalized by the per-graph segmented softmax (§4.3),
+/// so there is NO renorm here — unlike `aggregate_policy_ls`, which renorms a
+/// K-cluster scatter-max. The pass slot stays 0.0 (no pass in HTTT). The i32
+/// `policy_dst_slot`/`OFF_WINDOW_SLOT` (-1 sentinel) is single-sourced from the
+/// builder crate so the sentinel can never drift from what `build_axis_graph`
+/// emits (contract §2.1/§2.2 amendment).
+/// Returns `Err(reason)` (never panics/aborts) on a ragged length desync or an
+/// out-of-range slot — the workspace release profile is `panic="abort"`, so the
+/// WP-3 review N4 note asks the seam consumer to die loud through
+/// `submit_graph_inference_failure` (§7) rather than abort the process. Both
+/// error legs are unreachable in practice (the caller pre-checks the segment
+/// length; slots come from the builder's always-on `verify_contract`), but a
+/// public seam that reads an untrusted slice returns the failure gracefully.
+#[inline]
+pub fn assemble_ls_from_gnn_probs(
+    n_actions: usize,
+    legal_probs: &[f32],
+    policy_dst_slot: &[i32],
+    legal_coords: &[(i32, i32)],
+) -> Result<LegalSetPolicy, String> {
+    if legal_probs.len() != policy_dst_slot.len() || legal_probs.len() != legal_coords.len() {
+        return Err(format!(
+            "assemble_ls_from_gnn_probs: ragged length mismatch — probs {} slots {} coords {}",
+            legal_probs.len(),
+            policy_dst_slot.len(),
+            legal_coords.len()
+        ));
+    }
+
+    let mut dense = vec![0.0f32; n_actions];
+    let mut overflow: FxHashMap<(i32, i32), f32> = FxHashMap::default();
+
+    for i in 0..legal_probs.len() {
+        let slot = policy_dst_slot[i];
+        if slot == hexo_graph::OFF_WINDOW_SLOT {
+            overflow.insert(legal_coords[i], legal_probs[i]);
+        } else {
+            // In-window slot: bounded by the builder's always-on
+            // `verify_contract` (`ScatterSlotOutOfBounds`), but guard here too
+            // since this fn is a public seam consumer of an untrusted slice.
+            let idx = slot as usize;
+            if slot < 0 || idx >= n_actions {
+                return Err(format!(
+                    "assemble_ls_from_gnn_probs: slot {slot} out of range 0..{n_actions}"
+                ));
+            }
+            dense[idx] = legal_probs[i];
+        }
+    }
+
+    // Segmented-softmax invariant: probs already sum to 1 over the legal set.
+    // ALWAYS-ON (WP-3 red-team: debug_asserts are inert in the release .so
+    // self-play actually runs) — one f32 sum per position, never renorm.
+    let sum: f32 = dense.iter().sum::<f32>() + overflow.values().sum::<f32>();
+    if !(legal_probs.is_empty() || (sum - 1.0).abs() < 1e-3) {
+        return Err(format!(
+            "assemble_ls_from_gnn_probs: probs sum to {sum} not 1 (segmented-softmax desync)"
+        ));
+    }
+
+    Ok(LegalSetPolicy { dense, overflow })
+}
+
+/// GNN-integration WP-5a (§1.2) — build the ONE compact graph-position record
+/// from the search-root board + the assembled ragged `LegalSetPolicy`.
+///
+/// Whole-board (NO K-cluster loop, NO dense planes, NO aux — the GNN encodes the
+/// board natively; design §1.3 DROPs ownership/winning_line/chain/ply). The
+/// visit target is the coord→prob map over the FULL legal set — in- AND
+/// off-window — read from `ls` BY COORD, so the `records.rs:62` off-window skip
+/// is NOT inherited (design §6.1; that skip is the pre-R1 decode handicap the
+/// +414 evidence removed). `outcome`/`value_valid` are placeholders → stamped at
+/// game end by `finalize_graph_outcome`. Truncates to the top-`max_visits` cells
+/// by mass so the fixed HEXG slot never over-caps (visits are sparse in the
+/// deploy Gumbel regime; a denser target keeps its highest-mass moves).
+#[allow(clippy::too_many_arguments)] // mirrors the dense record fns' spec-derived scalar surface
+pub fn record_position_graph(
+    board: &Board,
+    ls: &LegalSetPolicy,
+    trunk_sz: i32,
+    current_player: i8,
+    moves_remaining: u8,
+    ply_index: u16,
+    is_full_search: bool,
+    max_visits: usize,
+) -> crate::replay_buffer::hexg::GraphRecord {
+    let (bcq, bcr) = board.window_center();
+    let half = (trunk_sz - 1) / 2;
+
+    // Visit target: read the ragged mass at each legal coord (no floor — a cell
+    // absent from `ls` is truly 0-visit, and unstored cells read 0 at sample).
+    let legal = board.legal_moves();
+    let mut visits: Vec<(i16, i16, f32)> = Vec::with_capacity(legal.len());
+    for &(q, r) in &legal {
+        let p = ls.get(q, r, bcq, bcr, trunk_sz, half, 0.0);
+        if p > 0.0 {
+            visits.push((q as i16, r as i16, p));
+        }
+    }
+    // Top-`max_visits` by mass — keep the highest-visit moves if the target is
+    // denser than the fixed slot (bounded fallback; renorm is unnecessary — the
+    // ragged CE tolerates a tiny truncated tail).
+    if visits.len() > max_visits {
+        visits.sort_unstable_by(|a, b| {
+            b.2.partial_cmp(&a.2).unwrap_or(std::cmp::Ordering::Equal)
+        });
+        visits.truncate(max_visits);
+    }
+
+    // Stones from the board's sparse occupied-cell map (order irrelevant — the
+    // rebuild coordinate-sorts). `Cell` is `#[repr(i8)]` (P1=1, P2=-1).
+    let mut stones: Vec<(i16, i16, i8)> = Vec::new();
+    for (&(q, r), &cell) in board.cells_iter() {
+        stones.push((q as i16, r as i16, cell as i8));
+    }
+
+    crate::replay_buffer::hexg::GraphRecord {
+        stones,
+        visits,
+        current_player,
+        moves_remaining,
+        ply_index,
+        is_full_search,
+        outcome: 0.0,      // placeholder → finalize_graph_outcome
+        value_valid: true, // placeholder → finalize_graph_outcome
+        game_length: 0,    // placeholder → finalize_graph_outcome
+    }
+}
+
+/// GNN-integration WP-5a (§1.3) — stamp the §178 per-row outcome + draw-mask onto
+/// a graph record at game end. This is the KEEP-verbatim half of `finalize_game`
+/// (`inner.rs`) — it reads winner / terminal_reason / the row's move-time player
+/// only, NO cell geometry — so INV26 / the §178 outcome split transfers to graph
+/// rows UNCHANGED. `terminal_reason == 2` is the ply-cap branch (fabricated
+/// label → `value_valid = 0`, masked from the value loss).
+#[inline]
+#[must_use]
+pub fn finalize_graph_outcome(
+    rec_player: i8,
+    winner: Option<crate::board::Player>,
+    terminal_reason: u8,
+    ply_cap_value: f32,
+    draw_reward: f32,
+) -> (f32, u8) {
+    let outcome = match winner {
+        Some(p) => {
+            if p as i8 == rec_player {
+                1.0
+            } else {
+                -1.0
+            }
+        }
+        None => {
+            if terminal_reason == 2 {
+                ply_cap_value
+            } else {
+                draw_reward
+            }
+        }
+    };
+    (outcome, u8::from(terminal_reason != 2))
+}
+
 /// Legal-set counterpart of `aggregate_policy_to_local`: projects the ragged
 /// global `ls` into the dense-362 frame of the cluster centred on `center`. For
 /// each legal move in this cluster's window it reads `ls` BY COORD — in-global-
@@ -900,5 +1076,250 @@ mod dws3_tests {
         // the ragged target must remain a distribution after the soft blend (dense + overflow)
         let total: f32 = ls.dense.iter().sum::<f32>() + ls.overflow.values().sum::<f32>();
         assert!((total - 1.0).abs() < 1e-5, "LS soft injection must stay a distribution, sum={total}");
+    }
+}
+
+#[cfg(test)]
+mod gnn_assemble_tests {
+    //! WP-3 step 4 — `assemble_ls_from_gnn_probs` on REAL axis-graph fixtures.
+    //! Uses the native `hexo_graph::build_axis_graph` producer (single-source)
+    //! so the in-window/off-window split under test is exactly what the seam
+    //! will carry. The motivating case (seam design §1.4 falsifier: 20% of
+    //! deploy-argmax moves off-window) is exercised directly — an off-window
+    //! argmax MUST survive into `overflow`, never be dropped.
+    use super::*;
+    use hexo_graph::{build_axis_graph, BuildParams, StoneList, OFF_WINDOW_SLOT};
+
+    /// Two far-apart stone clusters → bbox-midpoint window centre (17,0), trunk
+    /// 19 covers q∈[8,26]; legal cells near cluster-2 (q≈29-35) fall OFF-window
+    /// (`policy_dst_slot == -1`). Returns (graph, legal_coords) where
+    /// `legal_coords[i] = node_coords[legal_node_gather[i]]`.
+    fn spread_graph() -> (hexo_graph::AxisGraph, Vec<(i32, i32)>) {
+        let mut stones: Vec<(i32, i32, i8)> = Vec::new();
+        for q in 0..5i32 {
+            stones.push((q, 0, 1)); // P1
+        }
+        for q in 30..35i32 {
+            stones.push((q, 0, -1)); // P2
+        }
+        let params = BuildParams { win_length: 6, radius: 6, current_player: 1, moves_remaining: 2, trunk_size: 19 };
+        let g = build_axis_graph(&StoneList { stones }, &params);
+        let legal_coords: Vec<(i32, i32)> = g
+            .legal_node_gather
+            .iter()
+            .map(|&row| (g.node_coords[row as usize * 2], g.node_coords[row as usize * 2 + 1]))
+            .collect();
+        (g, legal_coords)
+    }
+
+    #[test]
+    fn assemble_splits_in_window_and_off_window() {
+        let (g, coords) = spread_graph();
+        let slots = &g.policy_scatter_index.0;
+        let n_legal = slots.len();
+        let n_off = slots.iter().filter(|&&s| s == OFF_WINDOW_SLOT).count();
+        let n_in = n_legal - n_off;
+        assert!(n_off > 0 && n_in > 0, "fixture must be a MIXED board (in {n_in}, off {n_off})");
+
+        // uniform distribution over the legal set (pre-normalized, as §4.3 emits)
+        let probs = vec![1.0f32 / n_legal as f32; n_legal];
+        let ls = assemble_ls_from_gnn_probs(362, &probs, slots, &coords).expect("assemble ok");
+
+        // every off-window node landed in overflow (NOT dropped); every
+        // in-window node landed at its dense slot; total mass conserved.
+        assert_eq!(ls.overflow.len(), n_off, "all off-window nodes retained in overflow");
+        for (i, &slot) in slots.iter().enumerate() {
+            if slot == OFF_WINDOW_SLOT {
+                let v = ls.overflow.get(&coords[i]).copied().unwrap_or(0.0);
+                assert!((v - probs[i]).abs() < 1e-6, "off-window prob preserved by coord");
+            } else {
+                assert!((ls.dense[slot as usize] - probs[i]).abs() < 1e-6, "in-window prob at dense slot");
+            }
+        }
+        let total: f32 = ls.dense.iter().sum::<f32>() + ls.overflow.values().sum::<f32>();
+        assert!((total - 1.0).abs() < 1e-4, "no mass dropped, sum={total}");
+    }
+
+    #[test]
+    fn assemble_off_window_argmax_survives() {
+        // The seam-design §1.4 motivating case: the model's CHOSEN move (argmax)
+        // is OFF-window. A dense-[B,362] drop would erase it (pre-R1 handicap);
+        // option (b) must carry it into overflow and keep it the global argmax.
+        let (g, coords) = spread_graph();
+        let slots = &g.policy_scatter_index.0;
+        let n_legal = slots.len();
+        let off_idx = slots
+            .iter()
+            .position(|&s| s == OFF_WINDOW_SLOT)
+            .expect("fixture has an off-window legal node");
+
+        // 0.9 mass on the off-window node, 0.1 spread over the rest → argmax off.
+        let mut probs = vec![0.1f32 / (n_legal - 1) as f32; n_legal];
+        probs[off_idx] = 0.9;
+        let ls = assemble_ls_from_gnn_probs(362, &probs, slots, &coords).expect("assemble ok");
+
+        let off_coord = coords[off_idx];
+        let carried = ls.overflow.get(&off_coord).copied().expect("off-window argmax in overflow");
+        assert!((carried - 0.9).abs() < 1e-6, "off-window argmax mass preserved, got {carried}");
+        let dense_max = ls.dense.iter().copied().fold(0.0f32, f32::max);
+        let overflow_max = ls.overflow.values().copied().fold(0.0f32, f32::max);
+        assert!(overflow_max >= dense_max, "the off-window cell is the GLOBAL argmax (overflow {overflow_max} >= dense {dense_max})");
+        assert!((overflow_max - 0.9).abs() < 1e-6, "global argmax is the off-window chosen move");
+    }
+
+    #[test]
+    fn assemble_all_in_window_leaves_overflow_empty() {
+        // A compact single-cluster board: every legal cell is in-window, so
+        // overflow stays empty and dense carries the whole distribution.
+        let stones = vec![(0, 0, 1i8), (1, 0, -1i8), (0, 1, 1i8)];
+        let params = BuildParams { win_length: 6, radius: 6, current_player: 1, moves_remaining: 2, trunk_size: 19 };
+        let g = build_axis_graph(&StoneList { stones }, &params);
+        let slots = &g.policy_scatter_index.0;
+        assert!(slots.iter().all(|&s| s != OFF_WINDOW_SLOT), "compact board is fully in-window");
+        let coords: Vec<(i32, i32)> = g
+            .legal_node_gather
+            .iter()
+            .map(|&row| (g.node_coords[row as usize * 2], g.node_coords[row as usize * 2 + 1]))
+            .collect();
+        let n = slots.len();
+        let probs = vec![1.0f32 / n as f32; n];
+        let ls = assemble_ls_from_gnn_probs(362, &probs, slots, &coords).expect("assemble ok");
+        assert!(ls.overflow.is_empty(), "no off-window cells → empty overflow");
+        assert!((ls.dense.iter().sum::<f32>() - 1.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn assemble_read_back_at_builder_center_matches_and_wrong_center_misreads() {
+        // WP-3 step 6 / review S2: the assembled `dense` slots are baked against
+        // the BUILDER's `window_center`. `expand_and_backup_ls_at` threads that
+        // exact centre into `LegalSetPolicy::get`. This pins the F1 coord/slot
+        // class: (a) reading back at the builder centre recovers every prob;
+        // (b) a WRONG centre shifts the in-window slot map → misreads.
+        let (g, coords) = spread_graph();
+        let slots = &g.policy_scatter_index.0;
+        let n = slots.len();
+        // Distinct probs per node so a misread is detectable (not all-equal).
+        let raw: Vec<f32> = (0..n).map(|i| (i + 1) as f32).collect();
+        let s: f32 = raw.iter().sum();
+        let probs: Vec<f32> = raw.iter().map(|p| p / s).collect();
+        let ls = assemble_ls_from_gnn_probs(362, &probs, slots, &coords).expect("assemble ok");
+
+        let (bcq, bcr) = g.window_center;
+        let (trunk, half, floor) = (19i32, 9i32, -1.0f32);
+
+        // (a) matched-centre round-trip: recover every legal node's prob.
+        for i in 0..n {
+            let (q, r) = coords[i];
+            let got = ls.get(q, r, bcq, bcr, trunk, half, floor);
+            assert!(
+                (got - probs[i]).abs() < 1e-6,
+                "read-back at builder centre must recover the assembled prob (coord {q},{r})"
+            );
+        }
+
+        // (b) a wrong centre shifts in-window slots → at least one in-window
+        //     coord misreads (off-window cells are coord-keyed, centre-agnostic).
+        let mut any_in_window = false;
+        let mut any_misread = false;
+        for i in 0..n {
+            if slots[i] == OFF_WINDOW_SLOT {
+                continue;
+            }
+            any_in_window = true;
+            let (q, r) = coords[i];
+            let got = ls.get(q, r, bcq + 3, bcr + 3, trunk, half, floor);
+            if (got - probs[i]).abs() > 1e-6 {
+                any_misread = true;
+                break;
+            }
+        }
+        assert!(any_in_window, "spread fixture must have in-window legal nodes");
+        assert!(
+            any_misread,
+            "a wrong window centre MUST misread in-window slots — the F1 frame class S2 guards"
+        );
+    }
+
+    // ── WP-5a record-construction (§1.2/§1.3) ──────────────────────────────
+
+    /// A 3-stone mid-turn board (P1 to move, 2 moves remaining).
+    fn small_board() -> Board {
+        let mut b = Board::new();
+        b.apply_move(0, 0).unwrap(); // P1 ply 0
+        b.apply_move(2, 0).unwrap(); // P2 first
+        b.apply_move(0, 2).unwrap(); // P2 second — turn passes to P1
+        b
+    }
+
+    #[test]
+    fn record_position_graph_captures_stones_and_visit_mass() {
+        let b = small_board();
+        let (bcq, bcr) = b.window_center();
+        let (trunk, half) = (19i32, 9i32);
+        let legal = b.legal_moves();
+        // Plant known mass on two legal cells via their in-window dense slots.
+        let mut dense = vec![0.0f32; 362];
+        let c0 = legal[0];
+        let c1 = legal[1];
+        let i0 = Board::window_flat_idx_at_geom(c0.0, c0.1, bcq, bcr, trunk, half);
+        let i1 = Board::window_flat_idx_at_geom(c1.0, c1.1, bcq, bcr, trunk, half);
+        assert!(i0 < 362 && i1 < 362, "chosen legal cells must be in-window");
+        dense[i0] = 0.7;
+        dense[i1] = 0.3;
+        let ls = LegalSetPolicy { dense, overflow: FxHashMap::default() };
+
+        let rec = super::record_position_graph(
+            &b, &ls, trunk, b.current_player as i8, b.moves_remaining, b.ply as u16, true, 128,
+        );
+
+        // 3 stones, matching the board's occupied cells.
+        assert_eq!(rec.stones.len(), 3);
+        let stone_set: std::collections::HashSet<(i16, i16)> =
+            rec.stones.iter().map(|&(q, r, _)| (q, r)).collect();
+        assert!(stone_set.contains(&(0, 0)) && stone_set.contains(&(2, 0)) && stone_set.contains(&(0, 2)));
+
+        // Visit target carries exactly the planted mass by coord (no drop).
+        let vmap: std::collections::HashMap<(i16, i16), f32> =
+            rec.visits.iter().map(|&(q, r, p)| ((q, r), p)).collect();
+        assert!((vmap[&(c0.0 as i16, c0.1 as i16)] - 0.7).abs() < 1e-6);
+        assert!((vmap[&(c1.0 as i16, c1.1 as i16)] - 0.3).abs() < 1e-6);
+        assert_eq!(rec.visits.len(), 2, "only the two nonzero-mass cells stored (sparse)");
+        assert_eq!(rec.outcome, 0.0, "outcome is a placeholder at record time");
+        assert!(rec.is_full_search);
+    }
+
+    #[test]
+    fn record_position_graph_truncates_to_top_k() {
+        let b = small_board();
+        let (bcq, bcr) = b.window_center();
+        let (trunk, half) = (19i32, 9i32);
+        let legal = b.legal_moves();
+        assert!(legal.len() >= 5);
+        // Ascending mass on 5 legal cells; top-2 truncation must keep the two highest.
+        let mut dense = vec![0.0f32; 362];
+        for (k, &(q, r)) in legal.iter().take(5).enumerate() {
+            let idx = Board::window_flat_idx_at_geom(q, r, bcq, bcr, trunk, half);
+            if idx < 362 {
+                dense[idx] = 0.1 * (k as f32 + 1.0); // 0.1..0.5
+            }
+        }
+        let ls = LegalSetPolicy { dense, overflow: FxHashMap::default() };
+        let rec = super::record_position_graph(&b, &ls, trunk, 1, 2, 0, true, 2);
+        assert_eq!(rec.visits.len(), 2, "top-k truncation to max_visits=2");
+        let kept: Vec<f32> = rec.visits.iter().map(|&(_, _, p)| p).collect();
+        assert!(kept.iter().all(|&p| p >= 0.399), "kept the two highest-mass cells, got {kept:?}");
+    }
+
+    #[test]
+    fn finalize_graph_outcome_matches_178_split() {
+        use crate::board::Player;
+        // Win as this row's player → +1, supervised.
+        assert_eq!(super::finalize_graph_outcome(1, Some(Player::One), 0, -0.5, -0.1), (1.0, 1));
+        // Win as the opponent → −1, supervised.
+        assert_eq!(super::finalize_graph_outcome(-1, Some(Player::One), 0, -0.5, -0.1), (-1.0, 1));
+        // Ply-cap (terminal_reason 2) → ply_cap_value, MASKED (value_valid 0).
+        assert_eq!(super::finalize_graph_outcome(1, None, 2, -0.5, -0.1), (-0.5, 0));
+        // Organic draw (terminal_reason 3) → draw_reward, supervised.
+        assert_eq!(super::finalize_graph_outcome(1, None, 3, -0.5, -0.1), (-0.1, 1));
     }
 }

@@ -31,6 +31,45 @@ pub enum PolicyPool {
     LegalSetScatterMax,
 }
 
+/// Input representation discriminant (GNN-integration schema v4). `Grid` =
+/// the dense CNN plane encodings (every pre-schema-v4 entry); `Graph` = the
+/// axis-graph / GNN encodings (`gnn_axis_v1`). Absent in TOML → `Grid`
+/// (back-compat, `docs/designs/gnn_inference_seam_design.md` §5-below). The
+/// grid-only cross-field invariants (`policy_logit_count==bs²+pass`,
+/// `len(plane_layout)==n_planes`, kept-plane relationships, trunk==board) are
+/// gated on `Grid`; graph encodings carry the `node_feat_dim`/`win_length`/…
+/// fields and their own invariants instead.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+pub enum Representation {
+    Grid,
+    Graph,
+}
+
+impl Representation {
+    pub fn parse(s: &str) -> Result<Self, String> {
+        match s {
+            "grid" => Ok(Representation::Grid),
+            "graph" => Ok(Representation::Graph),
+            other => Err(format!(
+                "representation must be one of [grid,graph]; got {other:?}"
+            )),
+        }
+    }
+
+    #[inline]
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Representation::Grid => "grid",
+            Representation::Graph => "graph",
+        }
+    }
+
+    #[inline]
+    pub fn is_graph(&self) -> bool {
+        matches!(self, Representation::Graph)
+    }
+}
+
 impl ValuePool {
     pub fn parse(s: &str) -> Result<Self, String> {
         match s {
@@ -120,9 +159,45 @@ pub struct RegistrySpec {
     /// `InferenceBatcher.pool_size` default when the caller omits an
     /// explicit kwarg. NOT a hard runtime cap on `get_cluster_views()`.
     pub k_max: u32,
+
+    // ── GNN-integration WP-3 (schema v4) additions ───────────────────────
+    // Graph-representation discriminant + axis-graph geometry fields. The
+    // `Option` fields are `Some(..)` ONLY for `representation == Graph`
+    // (validated), and BuildParams reads them from the spec so no `6`/`11`/`5`
+    // literal lands on the worker path (CLAUDE.md registry rule; seam design
+    // §5-below). Grid encodings leave them `None`.
+    /// `Grid` (dense CNN planes) vs `Graph` (axis-graph GNN). TOML key
+    /// `representation`; absent → `Grid`.
+    pub representation: Representation,
+    /// Per-node feature width (graph only). = 11 for gnn_axis_v1
+    /// (relative-7 + threat-4; = `hexo_graph::NODE_FEAT_DIM`).
+    pub node_feat_dim: Option<usize>,
+    /// Per-edge feature width (graph only). = 5 (= `hexo_graph::EDGE_FEAT_DIM`).
+    pub edge_feat_dim: Option<usize>,
+    /// GNN win-length (graph only). = 6. Feeds `BuildParams::win_length`.
+    pub win_length: Option<usize>,
+    /// GNN legal-move / axis-walk radius (graph only). = 6. Feeds
+    /// `BuildParams::radius`.
+    pub graph_radius: Option<usize>,
+    /// Number of win axes (graph only). = 3 (= `hexo_graph::WIN_AXES.len()`).
+    pub win_axes: Option<usize>,
+    /// Ragged-payload contract version this encoding speaks (graph only). = 1;
+    /// the collate resolver asserts `contract_version == 1`.
+    pub contract_version: Option<u32>,
+    /// Required builder_impl tag the resolver asserts on any training/self-play
+    /// path (graph only). = 1 (native; = `hexo_graph::BUILDER_IMPL_NATIVE`).
+    pub builder_impl_required: Option<u8>,
 }
 
 impl RegistrySpec {
+    /// True for the axis-graph GNN encodings (`representation == Graph`).
+    /// Hot-path / ctor dispatch reads this to select the graph seam over the
+    /// dense CNN path (seam design §3.2 / §5-below).
+    #[inline]
+    pub fn is_graph(&self) -> bool {
+        self.representation.is_graph()
+    }
+
     /// Total cells per trunk input tensor = `trunk_size²`.
     ///
     /// `board_size` is canvas geometry (logical grid extent); `trunk_size` is
@@ -298,6 +373,14 @@ mod tests {
             kept_plane_indices: &[0, 1, 2, 3, 8, 9, 10, 11],
             n_source_planes: 18,
             k_max: 1,
+            representation: Representation::Grid,
+            node_feat_dim: None,
+            edge_feat_dim: None,
+            win_length: None,
+            graph_radius: None,
+            win_axes: None,
+            contract_version: None,
+            builder_impl_required: None,
         }
     }
 

@@ -11,7 +11,11 @@ from hexo_rl.encoding import all_specs
 from hexo_rl.model.network import HexTacToeNet
 
 
-@pytest.mark.parametrize("spec", list(all_specs()), ids=lambda s: s.name)
+@pytest.mark.parametrize(
+    "spec",
+    [s for s in all_specs() if s.representation == "grid"],
+    ids=lambda s: s.name,
+)
 def test_ctor_accepts_all_registered(spec):
     net = HexTacToeNet(
         encoding=spec.name,
@@ -21,7 +25,11 @@ def test_ctor_accepts_all_registered(spec):
     assert net is not None
 
 
-@pytest.mark.parametrize("spec", list(all_specs()), ids=lambda s: s.name)
+@pytest.mark.parametrize(
+    "spec",
+    [s for s in all_specs() if s.representation == "grid"],
+    ids=lambda s: s.name,
+)
 def test_forward_shape_matches_spec(spec):
     net = HexTacToeNet(
         encoding=spec.name,

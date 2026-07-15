@@ -19,7 +19,6 @@ from typing import Any, Optional
 import structlog
 import torch
 
-from hexo_rl.model.network import HexTacToeNet
 from hexo_rl.training.trainer import Trainer
 
 log = structlog.get_logger(__name__)
@@ -386,7 +385,7 @@ class AnchorState:
     the loaded checkpoint.
     """
 
-    best_model: Optional[HexTacToeNet]
+    best_model: Optional[torch.nn.Module]
     best_model_step: Optional[int]
     best_model_path: Path
 
@@ -406,7 +405,7 @@ def resolve_anchor(
     in_channels: int,
     input_channels: Any,
     se_reduction_ratio: int,
-    value_head_type: str = "scalar",
+    value_head_type: "str | None" = None,
     n_value_bins: int = 65,
     run_id: str | None = None,
 ) -> AnchorState:
@@ -425,13 +424,21 @@ def resolve_anchor(
     Mutates ``inf_model`` via ``load_state_dict`` when the architecture
     matches the loaded anchor. Sweep variants intentionally leave inf_model
     on trainer.model weights (arch-mismatch logged, no sync).
+
+    ``value_head_type=None`` (the default) resolves representation-aware via
+    ``resolve_value_head_type(spec, config)`` on the fresh-init branch —
+    "dist65" for a graph encoding, "scalar" for grid (byte-identical to the
+    old ``= "scalar"`` default for every grid caller). The production caller
+    (``loop.py``) passes ``_arch.value_head_type`` explicitly, which
+    ``lifecycle.build_inference_model`` already resolved the same way
+    (WP-4 review finding 1).
     """
     best_model_path = Path(
         eval_ext_config.get("eval_pipeline", {}).get("gating", {}).get(
             "best_model_path", "checkpoints/best_model.pt"
         )
     )
-    best_model: HexTacToeNet | None = None
+    best_model: torch.nn.Module | None = None
     best_model_step: int | None = None
     if eval_pipeline is None:
         return AnchorState(None, None, best_model_path)
@@ -566,11 +573,31 @@ def resolve_anchor(
             msg="No anchor or bootstrap available — initialising best_model.pt from current trainer.model. "
                 "Drop a bootstrap_model.pt (or one of _BOOTSTRAP_ANCHOR_CANDIDATES) into checkpoints/ to anchor wr_best meaningfully.",
         )
-        best_model = HexTacToeNet(
+        # WP-4 (C4, contract node 11c) — single construction authority. See
+        # `hexo_rl.training.orchestrator.init_trainer`'s fresh-run branch for
+        # the full rationale; dispatches on the encoding resolved from
+        # `config` ("grid" -> byte-identical HexTacToeNet(**kwargs), "graph"
+        # -> GnnNet). `config={}` (every pre-WP-4 caller/test) resolves to
+        # the v6 grid default — unchanged behavior.
+        from hexo_rl.encoding import resolve_from_config as _registry_resolve_anchor
+        from hexo_rl.model.build_net import build_net, resolve_value_head_type
+        _anchor_spec = _registry_resolve_anchor(config)
+        # WP-4 review finding 1 — representation-aware default when the
+        # caller omitted value_head_type (None): dist65 for graph, scalar
+        # for grid, declared config value wins. An explicit caller value
+        # (loop.py passes _arch.value_head_type) is used as-is.
+        _anchor_vht = (
+            value_head_type
+            if value_head_type is not None
+            else resolve_value_head_type(_anchor_spec, config)
+        )
+        best_model = build_net(
+            _anchor_spec,
+            config,
             board_size=board_size, res_blocks=res_blocks, filters=filters,
             in_channels=in_channels, input_channels=input_channels,
             se_reduction_ratio=se_reduction_ratio,
-            value_head_type=value_head_type,
+            value_head_type=_anchor_vht,
             n_value_bins=n_value_bins,
         ).to(device)
         # §S181-AUDIT Wave 2 — fresh anchor adopts EMA weights when enabled

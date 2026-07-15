@@ -251,7 +251,7 @@ mod tests {
     #[test]
     fn test_registry_loads_all_known_encodings() {
         let names: Vec<&str> = all_specs().map(|s| s.name).collect();
-        for expected in ["v6", "v6tp", "v6_live2", "v6_live2_ls", "v6w25", "v7full", "v7", "v7e30", "v7mw", "v8", "v8_canvas_realness"] {
+        for expected in ["v6", "v6tp", "v6_live2", "v6_live2_ls", "v6w25", "v7full", "v7", "v7e30", "v7mw", "v8", "v8_canvas_realness", "gnn_axis_v1"] {
             assert!(
                 names.contains(&expected),
                 "missing {:?} in {:?}",
@@ -261,10 +261,38 @@ mod tests {
         }
         assert_eq!(
             names.len(),
-            11,
-            "expected exactly 11 encodings, got {:?}",
+            12,
+            "expected exactly 12 encodings, got {:?}",
             names
         );
+    }
+
+    #[test]
+    fn test_registry_loads_gnn_axis_v1() {
+        // GNN-integration schema v4 — the axis-graph encoding. Grid-only fields
+        // are inert (n_planes=0, empty plane/kept); the graph geometry lives in
+        // the schema-v4 fields.
+        let s = lookup("gnn_axis_v1").expect("gnn_axis_v1 present");
+        assert_eq!(s.representation, super::super::spec::Representation::Graph);
+        assert!(s.is_graph());
+        assert_eq!(s.board_size, 19);
+        assert_eq!(s.trunk_size, 19);
+        assert_eq!(s.policy_logit_count, 362);
+        assert!(s.has_pass_slot);
+        assert!(!s.is_multi_window);
+        assert_eq!(s.n_planes, 0);
+        assert!(s.plane_layout.is_empty());
+        assert!(s.kept_plane_indices.is_empty());
+        assert_eq!(s.n_source_planes, 0);
+        assert_eq!(s.node_feat_dim, Some(11));
+        assert_eq!(s.edge_feat_dim, Some(5));
+        assert_eq!(s.win_length, Some(6));
+        assert_eq!(s.graph_radius, Some(6));
+        assert_eq!(s.win_axes, Some(3));
+        assert_eq!(s.contract_version, Some(1));
+        assert_eq!(s.builder_impl_required, Some(1));
+        assert_eq!(s.schema_version, 4);
+        assert_eq!(s.legal_move_radius, 6);
     }
 
     #[test]
@@ -321,9 +349,9 @@ mod tests {
     }
 
     #[test]
-    fn test_all_specs_includes_all_11() {
+    fn test_all_specs_includes_all_12() {
         let count = all_specs().count();
-        assert_eq!(count, 11);
+        assert_eq!(count, 12);
     }
 
     #[test]

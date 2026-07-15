@@ -16,6 +16,7 @@ from engine import RegistrySpec as EncodingSpec  # type: ignore[attr-defined]
 
 from hexo_rl.encoding import compat
 from hexo_rl.encoding._probes import FIRST_CONV_KEYS as _FIRST_CONV_KEYS
+from hexo_rl.encoding._probes import GNN_GRAPH_MARKER_KEY as _GNN_GRAPH_MARKER_KEY
 from hexo_rl.encoding._probes import POLICY_FC_KEYS as _POLICY_FC_KEYS
 from hexo_rl.encoding.registry import EncodingRegistryError, _load as _load_registry, lookup
 
@@ -483,6 +484,23 @@ def detect_encoding_from_state_dict(
         Registry `EncodingSpec` (via `lookup(name)`), or None when
         lenient and no match.
     """
+    # GNN-integration WP-4 (C4/C7 single-source, contract nodes 11d-e,
+    # `docs/designs/gnn_ragged_contract_v1.md` Part 1) — graph-detect
+    # branch. A GnnNet state dict (`hexo_rl.model.gnn_net.GnnNet`) has NO
+    # `trunk.input_conv(.conv)?.weight` (the grid marker the probe below
+    # looks for); it has `representation.input_proj.weight` (the GINE
+    # trunk's first Linear, `hexo_rl.bots.strix_v1_net.RepresentationNetwork
+    # .__init__`). MUST run before the grid `inp_w` probe — both `strict`
+    # branches below are grid-only and would otherwise mis-route a graph
+    # state dict into a raise (strict=True) or a silent None (strict=False),
+    # neither correct. Only one graph encoding is registered today
+    # (`gnn_axis_v1`) so the match is unambiguous; a future second graph
+    # encoding needs a real disambiguator here (mirrors the v6_live2 vs
+    # v6_live2_ls shape-identical case below — label hint or explicit
+    # declaration, never silent shape-guessing).
+    if _GNN_GRAPH_MARKER_KEY in state:
+        return lookup("gnn_axis_v1")
+
     buffer_channels = lookup("v6").n_planes
     inp_w = state.get("trunk.input_conv.conv.weight")
     if inp_w is None:

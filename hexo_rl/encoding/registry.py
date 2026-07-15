@@ -36,6 +36,11 @@ _REGISTERED_NAMES: tuple[str, ...] = (
     "v7mw",
     "v8",
     "v8_canvas_realness",
+    # GNN-integration WP-3 (schema v4) — axis-graph GNN encoding
+    # (representation="graph"). Reachable via lookup / all_specs so the
+    # audit §1 lists it and graph_collate can read its spec (win_length,
+    # graph_radius, node_feat_dim, …). Rust owns parse + validation.
+    "gnn_axis_v1",
 )
 
 
