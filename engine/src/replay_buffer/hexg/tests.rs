@@ -598,3 +598,79 @@ fn legit_push_unaffected_by_prob_validation_guard() {
     assert_eq!(buf.record_at(0), rec, "legit push content must be unaffected by the guard");
     assert_eq!(buf.game_ids[0], 42);
 }
+
+// ── WP5b commit-A red-team fix-pass regression tests (ADV-A / ADV-B) ────────
+
+/// ADV-A (outcome finiteness unguarded on the write seam,
+/// `WP5b_commitA_redteam.md` #1): a NaN outcome must be rejected LOUD at push
+/// time, before it can ever reach `GraphTargets.outcomes` and poison
+/// `binned_value_loss`.
+#[test]
+fn push_rejects_nan_outcome() {
+    let mut buf = HexgBuffer::new(4, ENC).unwrap();
+    let rec = GraphRecord {
+        outcome: f32::NAN,
+        ..sample_record()
+    };
+    let err = buf
+        .push_record_impl(&rec, 0)
+        .expect_err("a NaN outcome must be rejected at push, not silently pass the guard");
+    let msg = super::push::validate_outcome(f32::NAN)
+        .expect_err("pure helper must also reject NaN");
+    assert!(msg.contains("NaN"), "error must report the offending value: {msg}");
+    let _ = err; // push_record_impl's PyErr construction exercised above.
+    assert_eq!(buf.size, 0, "rejected push must not mutate the buffer");
+}
+
+/// ADV-A: an infinite outcome (+inf) must be rejected LOUD at push time,
+/// mirroring the NaN case (both are non-finite, same guard).
+#[test]
+fn push_rejects_inf_outcome() {
+    let mut buf = HexgBuffer::new(4, ENC).unwrap();
+    let rec = GraphRecord {
+        outcome: f32::INFINITY,
+        ..sample_record()
+    };
+    let err = buf
+        .push_record_impl(&rec, 0)
+        .expect_err("an infinite outcome must be rejected at push, not silently pass the guard");
+    let msg = super::push::validate_outcome(f32::INFINITY)
+        .expect_err("pure helper must also reject +inf");
+    assert!(msg.contains("inf"), "error must report the offending value: {msg}");
+    let _ = err;
+    assert_eq!(buf.size, 0, "rejected push must not mutate the buffer");
+}
+
+/// ADV-B (stone-list player field unvalidated, `WP5b_commitA_redteam.md` #1):
+/// a stone player outside {+1, -1} must be rejected LOUD at push time, before
+/// it can silently rebuild a wrong-feature graph at sample time.
+#[test]
+fn push_rejects_bad_stone_player() {
+    let mut buf = HexgBuffer::new(4, ENC).unwrap();
+    let rec = GraphRecord {
+        stones: vec![(0, 0, 1), (1, 0, 5), (0, 1, 1), (2, 1, -1)],
+        ..sample_record()
+    };
+    let err = buf.push_record_impl(&rec, 0).expect_err(
+        "a stone player outside {+1,-1} must be rejected at push, not silently accepted",
+    );
+    let msg = super::push::validate_stone_player(1, 0, 5)
+        .expect_err("pure helper must also reject an out-of-range stone player");
+    assert!(msg.contains("(1, 0)"), "error must name the offending coord: {msg}");
+    assert!(msg.contains('5'), "error must report the offending value: {msg}");
+    let _ = err;
+    assert_eq!(buf.size, 0, "rejected push must not mutate the buffer");
+}
+
+/// Negative control: a legit push (finite outcome, all stone players ±1) must
+/// be entirely unaffected by the ADV-A/ADV-B push-time guards.
+#[test]
+fn legit_push_unaffected_by_outcome_and_stone_player_guards() {
+    let mut buf = HexgBuffer::new(4, ENC).unwrap();
+    let rec = sample_record();
+    buf.push_record_impl(&rec, 42)
+        .expect("a legit record's finite outcome and ±1 stone players must pass the guards");
+    assert_eq!(buf.size, 1);
+    assert_eq!(buf.record_at(0), rec, "legit push content must be unaffected by the guards");
+    assert_eq!(buf.game_ids[0], 42);
+}
