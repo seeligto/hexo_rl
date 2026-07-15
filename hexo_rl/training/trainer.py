@@ -69,6 +69,23 @@ from engine import HexgBuffer, ReplayBuffer
 log = structlog.get_logger()
 
 
+# Standing §6.3 guard list (graph path) — every loss-weight knob that has NO
+# consumer in `_train_on_graph_batch` (GnnNet ships ONLY policy + dist65 value
+# heads; graph loss = policy_ce + binned_value, nothing else). A nonzero value
+# on a graph config is a config ERROR raised loud at the first train step —
+# silent-no-op knobs are forbidden on the graph path. Module-level constant
+# (S7 follow-up) so the launch-config test enumerates the SAME source of truth
+# the guard checks (`tests/test_run4_gnn_launch_path.py`) — no drift between
+# guard and test. `entropy_reg_weight` added same follow-up: it is read ONLY
+# by the dense `_train_on_batch` (trainer.py `entropy_weight = ...`), so on a
+# graph config it was exactly the silent-no-op class §6.3 exists to forbid.
+GRAPH_FORBIDDEN_NONZERO_WEIGHTS: tuple = (
+    "aux_opp_reply_weight", "uncertainty_weight", "ownership_weight",
+    "threat_weight", "aux_chain_weight", "ply_index_weight",
+    "entropy_reg_weight",
+)
+
+
 def _resolve_amp_dtype(config: Dict[str, Any]) -> torch.dtype:
     """Map config ``amp_dtype`` string to a torch.dtype. Default fp16."""
     raw = str(config.get("amp_dtype", "fp16")).lower()
@@ -624,21 +641,22 @@ class Trainer:
 
         # Standing §6.3 guard: GnnNet ships ONLY a policy head + dist65 value
         # head — no ownership/threat/chain/opp-reply/uncertainty/ply-index
-        # heads exist to consume an aux loss. A positive aux weight on a
-        # graph config is a config error (silent aux-loss-on-an-absent-head
-        # is unconstructable another way), not a silent no-op — raise loud.
-        for _aux_key in (
-            "aux_opp_reply_weight", "uncertainty_weight", "ownership_weight",
-            "threat_weight", "aux_chain_weight", "ply_index_weight",
-        ):
+        # heads exist to consume an aux loss, and the graph loss body below
+        # reads no entropy regularizer either. A positive weight on a graph
+        # config is a config error (silent weight-on-an-absent-consumer is
+        # unconstructable another way), not a silent no-op — raise loud.
+        # Key list = GRAPH_FORBIDDEN_NONZERO_WEIGHTS (module constant, single
+        # source of truth shared with the run4 launch-config test).
+        for _aux_key in GRAPH_FORBIDDEN_NONZERO_WEIGHTS:
             _aux_w = float(self.config.get(_aux_key, 0.0))
             if _aux_w != 0.0:
                 raise ValueError(
                     f"_train_on_graph_batch: {_aux_key}={_aux_w} is nonzero on a "
                     "graph (representation='graph') config — GnnNet has no aux "
-                    "heads (policy + dist65 value only). Zero every aux_*/"
-                    "uncertainty/ownership/threat/chain/ply_index weight for a "
-                    "graph run (standing §6.3)."
+                    "heads (policy + dist65 value only) and no entropy "
+                    "regularizer on the graph loss. Zero every "
+                    "GRAPH_FORBIDDEN_NONZERO_WEIGHTS key for a graph run "
+                    "(standing §6.3)."
                 )
 
         batch_size = int(self.config["batch_size"])

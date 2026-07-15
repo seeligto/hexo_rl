@@ -135,17 +135,62 @@ def build_inference_model(
     return inf_model, arch
 
 
+def _graph_warmup_batch(spec: Any, device: torch.device):
+    """Minimal 1-position synthetic graph batch for ``cuda_warmup``'s graph
+    branch (S7 F2). Reuses the SAME production path a real graph train/self-play
+    step rides — ``HexgBuffer.push_graph_position`` → ``sample_graph_batch`` (C1
+    native builder) → ``collate_graph_batch`` / ``stone_mask_from_batch``
+    (``hexo_rl.selfplay.graph_collate``, the single resolver — see
+    ``Trainer._train_on_graph_batch``) — not a hand-rolled tensor shape, so it
+    stays byte-compatible with whatever the resolver's 18-assertion contract
+    requires. Self-contained (one hardcoded stone + its empty neighbor); does
+    NOT depend on the WP-A ``wpa_positions.json`` fixture, which may be absent
+    on a real launch host.
+    """
+    from engine import HexgBuffer
+    from hexo_rl.selfplay.graph_collate import collate_graph_batch, stone_mask_from_batch
+
+    # One stone at the origin (player +1) + its (0,1) empty neighbor as the
+    # sole visited/legal move — satisfies push_graph_position's validation
+    # (current_player / stone player in {+1,-1}, finite outcome).
+    buf = HexgBuffer(1, spec.name)
+    buf.push_graph_position(
+        [(0, 0, 1)],       # stones: one (q, r, player)
+        [(0, 1, 1.0)],     # visits: one (q, r, prob) — an empty neighbor of (0,0)
+        -1,                # current_player (opponent to move)
+        1,                 # moves_remaining
+        0,                 # ply
+        True,              # is_full_search
+        0.0,               # outcome (unused by a forward-only warmup)
+        True,              # value_valid
+        1,                 # game_length
+        0,                 # game_id
+    )
+    wire, _targets = buf.sample_graph_batch(1, augment=False)
+    graph_batch = collate_graph_batch(wire, device=str(device), semantic="full")
+    stone_mask = stone_mask_from_batch(graph_batch)
+    return graph_batch, stone_mask
+
+
 def cuda_warmup(
     inf_model: torch.nn.Module,
     device: torch.device,
     board_size: int,
+    spec: Any = None,
 ) -> None:
     """Warm up CUDA kernels with a dummy forward pass.
 
     ``board_size`` here is the model trunk side (registry `trunk_size`,
     e.g. 19 for v6, 25 for v6w25/v8). Callers should pass either
     ``arch.board_size`` (post-`_propagate_encoding_into_config` it equals
-    the trunk) or ``spec.trunk_size`` directly.
+    the trunk) or ``spec.trunk_size`` directly. Unused on the graph path
+    (a graph net has no trunk/board-size geometry — see `build_net.py`).
+
+    ``spec`` (S7 F2, GNN-integration program) — the resolved registry spec
+    (``arch.spec`` from `build_inference_model`), consulted ONLY for
+    ``spec.representation`` ("grid" | "graph"), the SAME single dispatch
+    discriminant `build_net` uses. ``None`` (every pre-S7 caller/test) keeps
+    the grid branch — byte-identical to the pre-S7 behaviour.
     """
     # ── CUDA warm-up ─────────────────────────────────────────────────────────
     # Force CUDA kernel compilation now (before workers start) so the first
@@ -155,22 +200,35 @@ def cuda_warmup(
     if device.type == "cuda":
         log.info("cuda_warmup_start")
         _t_warmup = time.time()
+        _representation = getattr(spec, "representation", "grid")
         with torch.no_grad():
             with torch.autocast(device_type="cuda"):
-                # Warmup width must match what forward() expects as input.
-                # Sweep variants (`_input_channels` set) index_select from the
-                # wire width inside forward, so they need the wire width; every
-                # other model (v6 → 8, v6tp → 10) takes exactly in_channels with
-                # no internal slice. Using the v6 WIRE_CHANNELS constant fed an
-                # 8-plane dummy into v6tp's 10-channel conv and crashed here.
-                from hexo_rl.model.network import WIRE_CHANNELS as _WIRE_CH
-                _base = getattr(inf_model, "_orig_mod", inf_model)
-                if getattr(_base, "_input_channels", None) is not None:
-                    _warmup_ch = _WIRE_CH
+                if _representation == "graph":
+                    # S7 F2: GnnNet ships only `forward_batch` (no bare
+                    # `forward()` — nn.Module's default raises
+                    # NotImplementedError, S7 Part-1 Finding F2). Warm up via
+                    # the same graph seam self-play/training actually use.
+                    _graph_batch, _stone_mask = _graph_warmup_batch(spec, device)
+                    inf_model.forward_batch(
+                        _graph_batch.x, _graph_batch.edge_index, _graph_batch.edge_attr,
+                        _graph_batch.legal_mask, _stone_mask,
+                        node_offsets=_graph_batch.node_offsets,
+                    )
                 else:
-                    _warmup_ch = int(getattr(_base, "in_channels", _WIRE_CH))
-                _dummy = torch.zeros(1, _warmup_ch, board_size, board_size, device=device)
-                inf_model(_dummy)
+                    # Warmup width must match what forward() expects as input.
+                    # Sweep variants (`_input_channels` set) index_select from the
+                    # wire width inside forward, so they need the wire width; every
+                    # other model (v6 → 8, v6tp → 10) takes exactly in_channels with
+                    # no internal slice. Using the v6 WIRE_CHANNELS constant fed an
+                    # 8-plane dummy into v6tp's 10-channel conv and crashed here.
+                    from hexo_rl.model.network import WIRE_CHANNELS as _WIRE_CH
+                    _base = getattr(inf_model, "_orig_mod", inf_model)
+                    if getattr(_base, "_input_channels", None) is not None:
+                        _warmup_ch = _WIRE_CH
+                    else:
+                        _warmup_ch = int(getattr(_base, "in_channels", _WIRE_CH))
+                    _dummy = torch.zeros(1, _warmup_ch, board_size, board_size, device=device)
+                    inf_model(_dummy)
         torch.cuda.synchronize()
         log.info("cuda_warmup_done", elapsed_sec=round(time.time() - _t_warmup, 1))
 

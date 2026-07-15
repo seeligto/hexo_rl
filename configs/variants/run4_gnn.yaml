@@ -62,6 +62,22 @@ ply_cap_value: 0.0
 # leave it to inherit a nonzero base default.
 bot_batch_share: 0
 
+# ── §6.3 loss-weight zeros (S7 follow-up): GnnNet ships policy + dist65 only
+# (design §1.3 DROP — no ownership/threat/chain/opp-reply/uncertainty/
+# ply-index heads, no entropy regularizer on the graph loss). The base
+# training.yaml defaults are nonzero for most of these; inherited, they hit
+# `_train_on_graph_batch`'s GRAPH_FORBIDDEN_NONZERO_WEIGHTS loud-raise at
+# the FIRST train step. Declare every guard-listed key 0 explicitly (F1
+# preserve-ckpt-baked: declare, don't inherit — ply_index_weight's base is
+# already 0 but is pinned here for the same reason).
+aux_opp_reply_weight: 0.0
+uncertainty_weight: 0.0
+ownership_weight: 0.0
+threat_weight: 0.0
+aux_chain_weight: 0.0
+ply_index_weight: 0.0
+entropy_reg_weight: 0.0
+
 # ── recency — commit B lands the sample-side sampler
 # (`HexgBuffer.sample_graph_batch(recent_frac=...)`, delta doc §4); the real
 # value now applies (commit-A's "declare recency_weight:0 until the sampler
@@ -88,6 +104,29 @@ selfplay:
   random_opening_plies: 0
 
 mixing:
+  # S7 F1 (smoke-gate blocker, closed here): run4_gnn_design.md Decision 1
+  # rules INIT=BC-prefit, **corpus-mix OFF** (§1.2: "the F1 preserve-ckpt-
+  # baked warning means the run4 variant must DECLARE `bot_batch_share: 0`
+  # AND corpus-mix weights explicitly, not inherit"). Without an explicit
+  # declaration here this key silently inherited configs/training.yaml's
+  # base `"<auto>"` default, which `expand_auto_paths` resolves to
+  # `data/gnn_corpus_v1.hexg` (registered in `_CORPUS_PATHS`, WP-5b
+  # export target) and stamps `_pretrained_buffer_path_auto_resolved: true`
+  # — `load_pretrained_buffer` then hard-raises because `gnn_axis_v1` has
+  # deliberately NO registered sha pin yet (`_CORPUS_SHA_PINS` — "add an
+  # entry once a real gnn_corpus_v1.hexg is minted"). That crash (S7 Part-1
+  # Finding F1) fires BEFORE self-play even starts, independent of any
+  # smoke-harness isolation. Declaring `null` here (not the `"<auto>"`
+  # literal) skips `expand_auto_paths`'s expansion entirely, so
+  # `load_pretrained_buffer` takes its `if not pretrained_path: return None`
+  # no-op branch — real corpus-mix OFF, matching Decision 1, not a
+  # sha-pin-gated auto-resolve. The other mixing weights
+  # (initial_pretrained_weight/min_pretrained_weight/decay_steps/
+  # pretrain_max_samples) are inert whenever `pretrained_buffer_path` is
+  # falsy (step_coordinator.py's mixed-batch branch requires
+  # `pretrained_buffer is not None`) — no separate declaration needed.
+  pretrained_buffer_path: null
+
   # Namespaced buffer_persist_path (§RUN3-STEP0 law) — a shared
   # un-namespaced path across lineages silently auto-restored a stale
   # cross-lineage buffer in run3 (STEP0-FAIL). commit-A's HexgBuffer restore
