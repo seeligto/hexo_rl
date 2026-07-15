@@ -1,13 +1,22 @@
 # Run3-CNN Pre-Registration — stop rule + verdict defs + baseline pins
 
-**Status:** PRE-REGISTERED, Phase-1 preflight (A+B) COMPLETE, launch (Phase-1 C) IN PROGRESS
-(2026-07-15). Committed, binding record of the run3-CNN comparison protocol — the final
-Phase 0 gate. `<LAUNCH_COMMIT_SHA>`/`<LAUNCH_CONFIG_SHA>` are stamped below at their final
-values now (the Phase-1 A-fixes commit is done and will not change), ahead of the STEP-0
-launch confirmation itself — this is NOT yet a "LAUNCHED" status flip; see the Phase-1 launch
-report for the STEP-0 verdict.
+**Status:** PRE-REGISTERED, Phase-1 preflight (A+B) COMPLETE, **Phase-1 C launch attempt
+STEP0-FAIL** (2026-07-15). Committed, binding record of the run3-CNN comparison protocol —
+the final Phase 0 gate; NOT yet cleared. The 2026-07-15T09:21Z launch attempt crashed ~53s
+after corpus load on an unhandled `ValueError` (`resolve_anchor` / `anchor_encoding_mismatch`)
+— the box's shared `checkpoints/best_model.pt` was a stale leftover (wrong encoding,
+`v6_live2` not `v6_live2_ls`) from an unrelated prior run, not a defect in run3's own
+config/mint/corpus (all of which resolved and loaded cleanly up to that point). Full
+root-cause + recommended fix: see the Phase-1 launch report
+(`/tmp/claude-1000/-home-timmy-Work-Hexo-hexo-rl/81b84b7c-3cc3-4ff1-a5de-2e2def266709/scratchpad/phase1-launch-report.md`).
+`<LAUNCH_COMMIT_SHA>`/`<LAUNCH_CONFIG_SHA>` below are stamped from this attempt for the
+record — the code/config state itself is believed launch-ready — but **the freeze clause
+does NOT take effect** (STEP-0 did not confirm green); the next launch attempt (after the
+stale anchor/buffer files are cleared) re-triggers §9's freeze check, not a re-verification
+of this doc's content.
 **Frozen-after-launch:** every number, estimator, artifact SHA, and verdict boundary in
-§0–§7 below is FROZEN the instant run3's STEP-0 gate confirms green. Launch commit SHA:
+§0–§7 below is FROZEN the instant run3's STEP-0 gate confirms green (NOT YET — see Status
+above). Launch commit SHA:
 `ef9325124d374fe0b70a1fc698a6713e7a725b8c` (the Phase-1 A-fixes commit — promotion-gate book
 resolution + dist65 bootstrap mint; the code/config state archived to the vast box for
 launch). Launch config SHA: `fc7b3bfd61a7dc1872eeff87786eb2ce9eb1a57641ffd1dea3091280dd56b0a0`
