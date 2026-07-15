@@ -71,6 +71,15 @@ def ragged_policy_ce(
     """
     from hexo_rl.selfplay.graph_collate import segment_softmax
 
+    # fp32 cast at entry (mirrors `binned_value_loss`, binned_value.py:49):
+    # under autocast, `torch.exp` inside `segment_softmax` autopromotes to
+    # fp32 but a fp16 `policy_logits` drags fp16 `seg_max`/`denom` along,
+    # so `denom.scatter_add_(0, seg, ex)` dtype-mismatches (ex is fp32,
+    # denom is fp16) and crashes step 0 under the run4 fp16 regime
+    # (WP5b commit-B red-team BREAK-1). Casting here also fixes the latent
+    # fp16 log-clamp underflow (`1e-12` flushes to 0 in fp16 → log(0)=-inf
+    # → NaN loss) since `probs`/`logp` inherit fp32 from `policy_logits`.
+    policy_logits = policy_logits.to(torch.float32)
     device = policy_logits.device
     b = int(legal_offsets.shape[0]) - 1
     if b == 0 or policy_logits.numel() == 0:

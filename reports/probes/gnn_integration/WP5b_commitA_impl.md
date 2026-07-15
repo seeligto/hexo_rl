@@ -265,3 +265,103 @@ bench concern, matches the delta doc's own framing of the fix as ~6 lines.
 
 All 4 fix-pass files (Rust push.rs guard, Rust tests, 2 Python test files)
 touched; nothing `git add`ed per instruction.
+
+## Post-commit regression fix (confres 6c gate)
+
+**Symptom:** `tests/test_confres_6c_grep_gate.py::test_replay_buffer_sizes_from_window_set`
+FAILED at `a1549f0` (and at commit A `0bc70b7` itself, confirmed by a prior
+agent via stash — not re-verified here, trusted per task instruction). Passed
+at the pre-commit-A parent.
+
+**Root cause:** commit A's P1 buffer-class dispatch (`init_replay_buffer`,
+orchestrator.py, diff quoted above) refactored
+
+```python
+buffer = ReplayBuffer(capacity=capacity, encoding=_window_set(config.get("encoding")).name)
+```
+
+into
+
+```python
+_spec = _window_set(config.get("encoding"))
+if bool(getattr(_spec, "is_graph", False)):
+    buffer = HexgBuffer(capacity=capacity, encoding=_spec.name)
+else:
+    buffer = ReplayBuffer(capacity=capacity, encoding=_spec.name)
+```
+
+— hoisting the `_window_set(...)` call into a `_spec` local so it can be
+reused for both the `is_graph` dispatch and the two buffer constructors
+(exactly what the commit A docstring calls "THE ONE RESOLVER"). The old
+test's regex (`buffer = ReplayBuffer\(capacity=capacity, encoding=([^)]+)\)`)
+captured `_spec.name` as the encoding arg and asserted the literal substring
+`"window_set"` appears in that capture — which no longer holds now that the
+call is one line up, bound to a variable.
+
+**Ruling: (b) — refactor is semantically correct, test's grep pattern was
+too literal to recognize the new (still window_set-derived) code shape.**
+
+Evidence for (b) over (a):
+- `_spec` is assigned unconditionally, immediately before the branch
+  (orchestrator.py:792, `_spec = _window_set(config.get("encoding"))`), from
+  the SAME resolver call (`hexo_rl.config.resolve.encoding.window_set`,
+  aliased `_window_set`) the pre-commit-A code called inline — no other
+  assignment to `_spec` exists in `init_replay_buffer` between the import
+  and the `ReplayBuffer(...)` call.
+- The dense (`else`) branch is byte-identical in effect: `_spec.name` ==
+  `_window_set(config.get("encoding")).name`, i.e. the CONFRES 6c invariant
+  ("buffer sizes derived from window_set, not a raw pre-checkpoint spec or a
+  v6-literal fallback") holds unchanged for the dense path. The graph branch
+  (`HexgBuffer(capacity=capacity, encoding=_spec.name)`) is sized from the
+  identical `_spec.name`, i.e. it's covered by the SAME invariant, not a
+  parallel unguarded path.
+- The refactor was necessary, not incidental: `_spec` is read twice
+  (`is_graph` check, then `.name` in either arm) — inlining `_window_set(...)`
+  at each call site would double the resolver call for no benefit.
+
+**Fix:** updated the test (not the orchestrator) to recognize both shapes,
+while keeping the invariant load-bearing:
+1. Slice the test's search to the `init_replay_buffer` function body only
+   (`def init_replay_buffer(` .. `def restore_buffer_from_checkpoint(`),
+   matching the existing body-slicing style already used by
+   `test_recent_buffer_reresolves_from_combined_config` /
+   `test_batch_buffer_alloc_hard_errors_no_v6_literal_fallback` in the same
+   file.
+2. If the captured encoding arg still contains the literal `window_set`
+   inline call, pass immediately (covers the old shape, and any future
+   revert to it).
+3. Otherwise, require the arg match `<identifier>.name` exactly, then
+   require that `<identifier>` have an assignment `<identifier> = window_set(`
+   / `<identifier> = _window_set(` **earlier in the same function body**
+   (position-ordered: `assign_match.start() < m.start()`) — i.e. the
+   indirection must resolve straight back to a `window_set(...)` call, not
+   to `normalize_encoding_name(...)`, a hardcoded literal, or a
+   post-checkpoint-spec variable.
+
+**Verification the tightened test still pins the invariant (not a
+rubber-stamp):** ran the new grep logic against a synthetic mutated copy of
+`orchestrator.py` (`_spec = normalize_encoding_name(config.get("encoding"))`
+in place of the `_window_set(...)` call, dense branch otherwise untouched,
+file written to `/tmp/.../orch_bad_check.py` and deleted after, source tree
+never touched) — the updated assertion correctly evaluates to
+`assign_match found and before m.start(): False`, i.e. it would still FAIL
+on that regression.
+
+**Test results:**
+- `tests/test_confres_6c_grep_gate.py::test_replay_buffer_sizes_from_window_set`
+  — PASS.
+- `.venv/bin/python -m pytest tests/test_confres_6c_grep_gate.py -q` — 4
+  passed.
+- `.venv/bin/python -m pytest tests/test_orchestrator_gnn_buffer.py
+  tests/training/test_gnn_train_step.py -q -m "not slow"` — 13 passed (no
+  commit-A/B regression from the test-only change, as expected).
+- `.venv/bin/python -m pytest --collect-only -q -m "not slow and not
+  integration"` — 2748/2774 collected (26 deselected), 0 errors.
+
+**Files touched:** `tests/test_confres_6c_grep_gate.py` only (source
+untouched — no overlap with the uncommitted commit-B files in this
+worktree's working tree: `engine/src/replay_buffer/hexg/{mod,sample,tests}.rs`,
+`hexo_rl/encoding/resolvers.py`, `hexo_rl/training/orchestrator.py`,
+`hexo_rl/training/trainer.py`, `tests/test_training_loop_event_schema.py`,
+and the new untracked commit-B files — none of these were read for anything
+beyond context, none were edited).

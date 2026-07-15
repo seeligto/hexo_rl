@@ -202,7 +202,7 @@ fn sample_wire_matches_direct_builder_unaugmented() {
     let rec = sample_record();
     buf.push_record_impl(&rec, 0).unwrap();
 
-    let (wire, targets) = buf.sample_graph_batch_impl(1, false).unwrap();
+    let (wire, targets) = buf.sample_graph_batch_impl(1, false, 0.0).unwrap();
     assert_eq!(wire.t_n_graphs(), 1);
     assert_eq!(wire.t_builder_impl(), 1, "sampled wire must carry builder_impl=1 (F7)");
     assert_eq!(wire.t_contract_version(), 1);
@@ -276,7 +276,7 @@ fn augmented_sample_target_is_coherent_every_element() {
     let mut buf = HexgBuffer::new(4, ENC).unwrap();
     buf.push_record_impl(&sample_record(), 0).unwrap();
     for _ in 0..48 {
-        let (wire, targets) = buf.sample_graph_batch_impl(1, true).unwrap();
+        let (wire, targets) = buf.sample_graph_batch_impl(1, true, 0.0).unwrap();
         if targets.argmax_valid[0] == 0 {
             continue; // all-zero target (no argmax leg)
         }
@@ -385,7 +385,7 @@ fn failed_truncated_load_is_loud_and_leaves_buffer_untouched() {
     }
     // Sampling must still be coherent (size==sum(hist) invariant intact, no
     // foreign/corrupt slot content reachable).
-    let (_, targets) = victim.sample_graph_batch_impl(4, false).unwrap();
+    let (_, targets) = victim.sample_graph_batch_impl(4, false, 0.0).unwrap();
     assert_eq!(targets.outcomes.len(), 4);
 
     let _ = std::fs::remove_file(&good_path);
@@ -422,7 +422,7 @@ fn sample_rejects_illegal_cell_visit_mass_drop() {
     };
     buf.push_record_impl(&rec, 7).unwrap();
     assert!(
-        buf.sample_graph_batch_impl(1, false).is_err(),
+        buf.sample_graph_batch_impl(1, false, 0.0).is_err(),
         "illegal-cell visit mass drop must raise, not silently under-weight"
     );
 }
@@ -459,7 +459,7 @@ fn legit_push_sample_roundtrip_does_not_trip_mass_drop_guard() {
     buf.push_record_impl(&sample_record(), 0).unwrap();
     for aug in [false, true] {
         for _ in 0..24 {
-            buf.sample_graph_batch_impl(1, aug)
+            buf.sample_graph_batch_impl(1, aug, 0.0)
                 .expect("legit round-trip must not trip the B2 mass-drop guard");
         }
     }
@@ -495,7 +495,7 @@ fn empty_board_record_survives_d6_augmented_sample_align() {
     };
     buf.push_record_impl(&rec, 0).unwrap();
     for _ in 0..48 {
-        buf.sample_graph_batch_impl(1, true)
+        buf.sample_graph_batch_impl(1, true, 0.0)
             .expect("empty-board record must survive D6-augmented sample-align (sym forced to identity)");
     }
 }
@@ -708,4 +708,94 @@ fn legit_push_unaffected_by_outcome_and_stone_player_guards() {
     assert_eq!(buf.size, 1);
     assert_eq!(buf.record_at(0), rec, "legit push content must be unaffected by the guards");
     assert_eq!(buf.game_ids[0], 42);
+}
+
+// ── R1 recency sampler (WP-5b commit B §4) ────────────────────────────────
+//
+// game_id is left untagged (-1) for every push in these tests — the
+// self-play convention (commit-A Adjudication 2, whole-board single-row, no
+// correlation dedup) AND the thing that makes the window assertion exact:
+// `sample_indices`'s dedup-by-game_id retry loop treats -1 as always-unique
+// (never replaces a drawn index), so it cannot leak an out-of-window index
+// into the recent slice via its full-ring fallback. `ply_index` carries the
+// push-order tag instead (mirrors `ring_wraps_and_caps_size`'s convention).
+
+#[test]
+fn recency_sampler_draws_the_newest_slot_fraction() {
+    // capacity > 512 so recent_window() = max(256, capacity/2) is strictly
+    // NARROWER than the full ring once filled (`recent_window` doc, sample.rs).
+    let cap = 600;
+    let total_pushes: u32 = 700; // wraps the ring once (700 > 600)
+    let mut buf = HexgBuffer::new(cap, ENC).unwrap();
+    for i in 0..total_pushes {
+        let mut rec = sample_record();
+        rec.ply_index = (i % (u16::MAX as u32 + 1)) as u16;
+        buf.push_record_impl(&rec, -1).unwrap();
+    }
+    assert_eq!(buf.size, cap);
+    let window = buf.recent_window();
+    assert_eq!(window, 300, "max(256, 600/2) == 300 — narrower than the 600-slot ring");
+    let newest_threshold = (total_pushes - window as u32) as u16; // 400
+
+    // recent_frac=1.0 -> the WHOLE batch drawn from the newest-slots window.
+    let idx = buf.sample_indices(64, 1.0);
+    assert_eq!(idx.len(), 64);
+    for i in &idx {
+        let ply = buf.ply_index[*i];
+        assert!(
+            ply >= newest_threshold,
+            "recent_frac=1.0 draw ply={ply} must be within the newest {window} \
+             pushes (>= {newest_threshold})"
+        );
+    }
+}
+
+#[test]
+fn recency_sampler_zero_frac_is_byte_identical_to_full_ring_sample() {
+    let cap = 600;
+    let total_pushes: u32 = 700;
+    let mut buf = HexgBuffer::new(cap, ENC).unwrap();
+    for i in 0..total_pushes {
+        let mut rec = sample_record();
+        rec.ply_index = (i % (u16::MAX as u32 + 1)) as u16;
+        buf.push_record_impl(&rec, -1).unwrap();
+    }
+    let window = buf.recent_window();
+    let newest_threshold = (total_pushes - window as u32) as u16;
+
+    // recent_frac=0.0 must sample the FULL ring, unbiased toward the newest
+    // window — draw a large batch and confirm at least one ply falls BELOW
+    // the recent-window threshold (statistically certain: uniform weights,
+    // 300/600 of the ring is "old", P(all 500 draws land in the newest 300)
+    // = (300/600)^500, astronomically small).
+    let idx = buf.sample_indices(500, 0.0);
+    assert_eq!(idx.len(), 500);
+    let any_old = idx.iter().any(|&i| buf.ply_index[i] < newest_threshold);
+    assert!(
+        any_old,
+        "recent_frac=0.0 must sample beyond the newest-slots window (unbiased full-ring, \
+         byte-identical selection to pre-commit-B)"
+    );
+}
+
+#[test]
+fn recency_sampler_recent_window_clamped_by_size_before_ring_fills() {
+    // Before the ring wraps (size < capacity), head == size, so the window
+    // must never reach into never-written slots: recent_window() <= size.
+    let cap = 1000;
+    let mut buf = HexgBuffer::new(cap, ENC).unwrap();
+    for i in 0..50u32 {
+        let mut rec = sample_record();
+        rec.ply_index = i as u16;
+        buf.push_record_impl(&rec, -1).unwrap();
+    }
+    assert_eq!(buf.size, 50);
+    let window = buf.recent_window();
+    assert_eq!(window, 50, "window must clamp to the live size, not max(256, capacity/2)=500");
+    // Every recent-frac=1.0 draw must be a live slot (ply < 50, no zero-init
+    // never-written slot leaking through the head-relative window math).
+    let idx = buf.sample_indices(20, 1.0);
+    for i in &idx {
+        assert!(buf.ply_index[*i] < 50, "must never draw a never-written slot");
+    }
 }

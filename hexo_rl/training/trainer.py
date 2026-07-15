@@ -41,7 +41,7 @@ from hexo_rl.training.aux_decode import decode_ownership, decode_winning_line, m
 from hexo_rl.training.losses import (
     compute_policy_loss, compute_kl_policy_loss, compute_value_loss,
     compute_aux_loss, compute_ply_index_loss, compute_total_loss, compute_uncertainty_loss,
-    compute_chain_loss, fp16_backward_step,
+    compute_chain_loss, fp16_backward_step, ragged_policy_ce,
 )
 from hexo_rl.training.binned_value import binned_value_loss
 from hexo_rl.training.checkpoints import (
@@ -58,7 +58,7 @@ from hexo_rl.training.checkpoints import (
 from hexo_rl.encoding import (
     resolve_from_checkpoint as registry_resolve_ckpt,  # noqa: F401  (re-export for §172 A5)
 )
-from engine import ReplayBuffer
+from engine import HexgBuffer, ReplayBuffer
 
 
 # §176 P14 re-export of `legacy_spec_for_registry_name` retired in cycle 3
@@ -480,6 +480,20 @@ class Trainer:
             dict with keys "loss", "policy_loss", "value_loss",
             and optionally "opp_reply_loss".
         """
+        # WP-5b commit B (P1) — graph dispatch. `buffer` is the P1-resolver
+        # object (commit-A `orchestrator.init_replay_buffer`): a
+        # ``HexgBuffer`` for a ``representation="graph"`` run, a dense
+        # ``ReplayBuffer`` otherwise. `recent_buffer` is always `None` for a
+        # graph run (commit-A P3 — `init_recent_buffer` skips constructing
+        # the dense `RecentBuffer` for a graph spec); recency instead flows
+        # through `HexgBuffer.sample_graph_batch(recent_frac=recency_weight)`
+        # inside `_train_on_graph_batch` (WP-5b §4). Dense `_train_on_batch`
+        # below is UNTOUCHED — a graph buffer never reaches it (it would
+        # (N,C,H,W)-reshape-fail loud on `buffer.sample_batch_with_pos`,
+        # which `HexgBuffer` does not even implement).
+        if isinstance(buffer, HexgBuffer):
+            return self._train_on_graph_batch(buffer, augment=augment)
+
         batch_size = int(self.config["batch_size"])
         recency_weight = float(self.config.get("recency_weight", 0.0))
 
@@ -578,6 +592,162 @@ class Trainer:
                                      n_recent=n_recent,
                                      position_indices=position_indices,
                                      value_target_valid=value_target_valid)
+
+    # ── Graph training step (WP-5b commit B, P1) ───────────────────────────────
+
+    def _train_on_graph_batch(
+        self,
+        buffer: "HexgBuffer",
+        augment: bool = True,
+    ) -> Dict[str, float]:
+        """Graph-representation training step — the `GnnNet` sibling of
+        `_train_on_batch` (dense CNN). Wraps the ALREADY e2e-tested core
+        (`tests/training/test_gnn_hexg_buffer.py`) — `sample_graph_batch` →
+        `collate_graph_batch` (full 18-assertion set) → `forward_batch` →
+        `ragged_policy_ce` + `binned_value_loss` → `backward` — in the
+        trainer loop: optimizer/scheduler/EMA/step + loss_info + the graph
+        `train_step` event (delta doc §2/§10).
+
+        dist65-verbatim (delta doc §3): `binned_value_loss` is the SAME
+        symbol the CNN branch calls (`trainer.py` `_train_on_batch`,
+        `binned_value_loss(value_aux, outcomes_t, value_mask=value_mask_t)`)
+        — imported once at module scope, no graph-local copy. `ragged_policy_ce`
+        is the WP-5a no-drop policy-loss primitive (`losses.py:45`).
+
+        Only reachable via `train_step`'s `isinstance(buffer, HexgBuffer)`
+        dispatch — never called from the dense path.
+        """
+        from hexo_rl.selfplay.graph_collate import (
+            collate_graph_batch,
+            stone_mask_from_batch,
+        )
+
+        # Standing §6.3 guard: GnnNet ships ONLY a policy head + dist65 value
+        # head — no ownership/threat/chain/opp-reply/uncertainty/ply-index
+        # heads exist to consume an aux loss. A positive aux weight on a
+        # graph config is a config error (silent aux-loss-on-an-absent-head
+        # is unconstructable another way), not a silent no-op — raise loud.
+        for _aux_key in (
+            "aux_opp_reply_weight", "uncertainty_weight", "ownership_weight",
+            "threat_weight", "aux_chain_weight", "ply_index_weight",
+        ):
+            _aux_w = float(self.config.get(_aux_key, 0.0))
+            if _aux_w != 0.0:
+                raise ValueError(
+                    f"_train_on_graph_batch: {_aux_key}={_aux_w} is nonzero on a "
+                    "graph (representation='graph') config — GnnNet has no aux "
+                    "heads (policy + dist65 value only). Zero every aux_*/"
+                    "uncertainty/ownership/threat/chain/ply_index weight for a "
+                    "graph run (standing §6.3)."
+                )
+
+        batch_size = int(self.config["batch_size"])
+        recency_weight = float(self.config.get("recency_weight", 0.0))
+
+        # sample_graph_batch(recent_frac=...) — WP-5b §4. recent_frac=0.0
+        # (recency_weight absent/0) is byte-identical to pre-commit-B
+        # (whole batch weighted-sampled over the full ring).
+        wire, targets = buffer.sample_graph_batch(
+            batch_size, augment=augment, recent_frac=recency_weight,
+        )
+
+        # Trainer runs the FULL 18-assertion set every batch (semantic="full"
+        # — the hot self-play path runs the cheaper "canary" cadence; the
+        # trainer=full-always vs hot-path=canary split is the seam design's
+        # own §6.1 distinction, pinned at THIS call site per delta doc P4).
+        graph_batch = collate_graph_batch(
+            wire,
+            device=str(self.device),
+            semantic="full",
+            target_argmax_cells=targets.target_argmax_cells,
+        )
+        stone_mask = stone_mask_from_batch(graph_batch)
+
+        policy_target_t = torch.from_numpy(
+            np.asarray(targets.policy_target, dtype=np.float32)
+        ).to(self.device)
+        outcomes_t = torch.from_numpy(
+            np.asarray(targets.outcomes, dtype=np.float32)
+        ).to(self.device)
+        value_valid_t = torch.from_numpy(
+            np.asarray(targets.value_valid, dtype=np.uint8)
+        ).to(self.device)
+        is_full_search_t = torch.from_numpy(
+            np.asarray(targets.is_full_search, dtype=np.uint8)
+        ).to(self.device)
+
+        self.optimizer.zero_grad()
+
+        with autocast(device_type=self.device.type, dtype=self.amp_dtype,
+                      enabled=self.fp16):
+            policy_logits, _value, bin_logits = self.model.forward_batch(
+                graph_batch.x, graph_batch.edge_index, graph_batch.edge_attr,
+                graph_batch.legal_mask, stone_mask,
+                node_offsets=graph_batch.node_offsets,
+            )
+            policy_loss = ragged_policy_ce(
+                policy_logits, policy_target_t, graph_batch.legal_offsets,
+                full_search_mask=is_full_search_t,
+            )
+            # dist65-verbatim (§3): the SAME symbol the CNN dist65 arm calls
+            # (`binned_value_loss`, imported at module scope, `trainer.py:46`).
+            value_loss = binned_value_loss(
+                bin_logits, outcomes_t, value_mask=value_valid_t,
+            )
+            loss = policy_loss + value_loss
+
+        max_grad_norm = float(self.config.get("grad_clip", 1.0))
+        grad_norm = fp16_backward_step(
+            loss, self.optimizer, self.scaler, self.model, self._scaler_enabled,
+            max_grad_norm=max_grad_norm,
+        )
+
+        self.step += 1
+
+        if self.scheduler is not None and math.isfinite(grad_norm):
+            self.scheduler.step()
+
+        if (self.ema_model is not None
+                and math.isfinite(grad_norm)
+                and self.step % self.ema_update_every == 0):
+            _base = getattr(self.model, "_orig_mod", self.model)
+            self.ema_model.update_parameters(_base)
+
+        lr = self.optimizer.param_groups[0]["lr"]
+
+        # Hard-required keys (delta doc §10): `emit_training_events`
+        # (events.py:235-237,339-341) direct-indexes loss/policy_loss/
+        # value_loss; step_coordinator.py:981 direct-indexes policy_loss.
+        # `grad_norm`/`lr` are core (non-aux) keys, cheap and genuinely
+        # informative. NO aux keys (ownership/threat/chain/opp_reply/
+        # uncertainty/ply) — those `.get(...)`-guarded reads stay absent/safe.
+        result: Dict[str, float] = {
+            "loss": loss.item(),
+            "policy_loss": policy_loss.item(),
+            "value_loss": value_loss.item(),
+            "grad_norm": grad_norm,
+            "lr": lr,
+        }
+
+        interval = int(self.config.get("checkpoint_interval", 100))
+        if self.step % interval == 0:
+            self.save_checkpoint(result)
+
+        log.info(
+            "train_step",
+            step=self.step,
+            representation="graph",
+            loss=result["loss"],
+            policy_loss=result["policy_loss"],
+            value_loss=result["value_loss"],
+            grad_norm=result["grad_norm"],
+            lr=result["lr"],
+            n_graphs=int(wire.n_graphs),
+            n_legal_nodes=int(policy_target_t.numel()),
+            fp16_scale=self.scaler.get_scale(),
+        )
+
+        return result
 
     def _train_on_batch(
         self,

@@ -141,6 +141,14 @@ _CORPUS_PATHS: dict[str, str] = {
     "v7mw":               "data/bootstrap_corpus.npz",   # shared with v6/v7full (§176a)
     "v8":                 "data/bootstrap_corpus_v8.npz",
     "v8_canvas_realness": "data/bootstrap_corpus_v8_canvas_realness.npz",
+    # GNN-integration WP-5b commit B (§5/§7): the HEXG re-export
+    # (`scripts/export_gnn_hexg_corpus.py`), NOT an NPZ — a replay-and-rebuild
+    # of the move-list corpus (no-drop; the dense NPZ's off-window projection
+    # is NOT inherited, delta doc §5.1 T2). Registered so the DEFERRED
+    # mixing-batch load (standing §7.2) hangs on the WP0.4 single resolver
+    # when it lands; the export itself gates on games-manifest provenance
+    # (§5.1), not this path/pin.
+    "gnn_axis_v1":        "data/gnn_corpus_v1.hexg",
 }
 
 _CORPUS_SHA_PINS: dict[str, str] = {
@@ -152,6 +160,11 @@ _CORPUS_SHA_PINS: dict[str, str] = {
     # not launch-critical); do not add an entry unless a launch actually
     # depends on byte-identical corpus bytes across hosts.
     "v6_live2_ls": "3813edc2fb10a7c5ab976a0293e38cbba0fd6b84e5295630f339ca421b345c97",
+    # gnn_axis_v1: deliberately NOT pinned yet (delta doc §9/§14 item 5) — the
+    # export's own games-manifest provenance assert (§5.1) is the load-bearing
+    # gate; the mixing-batch LOAD that would consult this pin stays deferred
+    # (standing §7.2). Add an entry here once a real `gnn_corpus_v1.hexg` is
+    # minted and the mixing load wiring lands.
 }
 
 

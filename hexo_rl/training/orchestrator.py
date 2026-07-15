@@ -547,6 +547,24 @@ def init_trainer(
     from hexo_rl.encoding import resolve_from_config as _registry_resolve
 
     if args.checkpoint:
+        # INFO-1 (WP5b commit-B red-team): `maybe_warmstart_gnn_from_bc` fires
+        # ONLY on the fresh (`else`) branch below — a `--checkpoint` resume
+        # takes this branch instead and the warm-start config is silently
+        # ignored (correct precedence: resume weights must win over a BC
+        # prefit), but silent. run2/run3 history shows resumes-with-
+        # same-yaml are routine — warn once so a declared-but-inert knob is
+        # visible in the log, not just in the code.
+        _ws_cfg = combined_config.get("gnn_warm_start")
+        if isinstance(_ws_cfg, dict) and _ws_cfg.get("enabled", False):
+            log.warning(
+                "gnn_warm_start_ignored_on_resume",
+                checkpoint=args.checkpoint,
+                msg=(
+                    "gnn_warm_start.enabled is true but --checkpoint is set — "
+                    "resuming from the checkpoint's weights; gnn_warm_start "
+                    "is ignored (fires only on a fresh, no-checkpoint launch)."
+                ),
+            )
         # CONFRES P3: validate the resolved bootstrap/resume checkpoint exists at LAUNCH
         # (before Trainer.load_checkpoint's torch.load) so a stale Makefile BOOTSTRAP default
         # or a typo'd --checkpoint fails loudly + informatively, not deep in loading.
@@ -716,6 +734,19 @@ def init_trainer(
             value_head_type=_fresh_vht,
             n_value_bins=combined_config.get("n_value_bins", _MHPD["n_value_bins"]),
         )
+        # WP-5b commit B (P6) — GNN fresh-init BC-prefit warm-start seam.
+        # Default-OFF (`gnn_warm_start` absent/enabled:false) is a
+        # byte-identical no-op for every non-warm-start launch (graph or
+        # grid). Fires ONLY on this fresh (no-`--checkpoint`) branch, AFTER
+        # `build_net` constructs the fresh net, BEFORE `Trainer(...)` wraps
+        # it — see hexo_rl.training.gnn_warmstart module docstring for why
+        # this is decoupled from `--checkpoint` (WP-4's
+        # assert_full_gnn_checkpoint_or_raise correctly refuses a
+        # BC-prefit-only state dict on that path; delta doc §8).
+        from hexo_rl.training.gnn_warmstart import maybe_warmstart_gnn_from_bc
+        _gnn_warmstart_fired = maybe_warmstart_gnn_from_bc(
+            model, combined_config, spec=_fresh_spec, log=log,
+        )
         trainer = Trainer(model, combined_config, checkpoint_dir=args.checkpoint_dir, device=device)
         log.info(
             "new_run",
@@ -723,6 +754,7 @@ def init_trainer(
             in_channels=in_channels_arg,
             input_channels=list(input_channels_cfg) if input_channels_cfg is not None else None,
             value_head_type=_fresh_vht,
+            gnn_warmstart_fired=_gnn_warmstart_fired,
         )
     return trainer, board_size
 
