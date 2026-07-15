@@ -924,109 +924,43 @@ impl InferenceBatcher {
         let pulled = py.detach(|| self.inner.pop_graph_batch_blocking(batch_size, max_wait_ms));
 
         let mut ids: Vec<u64> = Vec::with_capacity(pulled.len());
-        let mut node_feat: Vec<f32> = Vec::new();
-        let mut node_coords: Vec<i32> = Vec::new();
-        let mut edge_attr: Vec<f32> = Vec::new();
-        let mut edge_src: Vec<i64> = Vec::new();
-        let mut edge_dst: Vec<i64> = Vec::new();
-        let mut legal_node_gather: Vec<i64> = Vec::new();
-        let mut policy_dst_slot: Vec<i32> = Vec::new();
-        let mut node_offsets: Vec<i64> = vec![0];
-        let mut edge_offsets: Vec<i64> = vec![0];
-        let mut legal_offsets: Vec<i64> = vec![0];
-        let mut n_nodes_checksum: Vec<u32> = Vec::with_capacity(pulled.len());
-        let mut n_stones: Vec<u16> = Vec::with_capacity(pulled.len());
-        let mut window_center: Vec<i32> = Vec::with_capacity(pulled.len() * 2);
-        let mut current_player: Vec<i8> = Vec::with_capacity(pulled.len());
-
-        let mut node_off: i64 = 0;
-        let mut edge_off: i64 = 0;
-        let mut legal_off: i64 = 0;
-
+        let mut graphs: Vec<AxisGraph> = Vec::with_capacity(pulled.len());
         for req in pulled {
-            let id = req.id;
-            let g = req.graph;
             // builder_impl handshake (defense-in-depth; the build path already
             // asserted it) — a non-native tag must never reach the wire.
-            if g.builder_impl != BUILDER_IMPL_NATIVE {
+            if req.graph.builder_impl != BUILDER_IMPL_NATIVE {
                 return Err(PyValueError::new_err(
                     "next_graph_batch: non-native builder_impl on a queued graph",
                 ));
             }
-            ids.push(id);
-            let n_g = g.num_nodes() as i64;
-            let e_g = g.num_edges() as i64;
-            let lg_g = g.legal_node_gather.len() as i64;
-
-            // legal coords (before node_coords is moved into the wire).
-            let legal_coords: Vec<(i32, i32)> = g
+            // Retain per-id assemble metadata (`policy_dst_slot` + legal coords)
+            // for `submit_graph_inference_results` (§3.4 ragged OUTPUT), read
+            // BEFORE the graph is moved into the fuse.
+            let legal_coords: Vec<(i32, i32)> = req
+                .graph
                 .legal_node_gather
                 .iter()
                 .map(|&row| {
                     (
-                        g.node_coords[row as usize * 2],
-                        g.node_coords[row as usize * 2 + 1],
+                        req.graph.node_coords[row as usize * 2],
+                        req.graph.node_coords[row as usize * 2 + 1],
                     )
                 })
                 .collect();
-
-            node_feat.extend_from_slice(&g.node_feat.0);
-            edge_attr.extend_from_slice(&g.edge_attr.0);
-            for &s in &g.edge_index.src {
-                edge_src.push(node_off + i64::from(s));
-            }
-            for &d in &g.edge_index.dst {
-                edge_dst.push(node_off + i64::from(d));
-            }
-            for &row in &g.legal_node_gather {
-                legal_node_gather.push(node_off + i64::from(row));
-            }
-            policy_dst_slot.extend_from_slice(&g.policy_scatter_index.0);
-            n_nodes_checksum.push(g.n_nodes_checksum);
-            n_stones.push(g.n_stones);
-            window_center.push(g.window_center.0);
-            window_center.push(g.window_center.1);
-            current_player.push(g.current_player);
-            node_coords.extend_from_slice(&g.node_coords);
-
             self.inner.in_flight_graphs.insert(
-                id,
+                req.id,
                 InFlightGraph {
-                    policy_dst_slot: g.policy_scatter_index.0.clone(),
+                    policy_dst_slot: req.graph.policy_scatter_index.0.clone(),
                     legal_coords,
                 },
             );
-
-            node_off += n_g;
-            edge_off += e_g;
-            legal_off += lg_g;
-            node_offsets.push(node_off);
-            edge_offsets.push(edge_off);
-            legal_offsets.push(legal_off);
+            ids.push(req.id);
+            graphs.push(req.graph);
         }
 
-        // edge_index = [src_global (E) | dst_global (E)] → Python reshapes (2,E).
-        let mut edge_index = edge_src;
-        edge_index.extend(edge_dst);
-
-        let wire = GraphWire {
-            contract_version: self.graph_contract_version,
-            builder_impl: BUILDER_IMPL_NATIVE,
-            n_graphs: ids.len(),
-            node_feat,
-            node_coords,
-            edge_index,
-            edge_attr,
-            node_offsets,
-            edge_offsets,
-            legal_offsets,
-            legal_node_gather,
-            policy_dst_slot,
-            n_nodes_checksum,
-            n_stones,
-            window_center,
-            current_player,
-        };
+        // Single-source block-diagonal fuse (shared with the HEXG training
+        // sample path so C3/C8 union arithmetic can never drift).
+        let wire = GraphWire::from_axis_graphs(&graphs, self.graph_contract_version);
         Ok((ids, wire))
     }
 
@@ -1229,6 +1163,124 @@ pub struct GraphWire {
     n_stones: Vec<u16>,
     window_center: Vec<i32>,
     current_player: Vec<i8>,
+}
+
+impl GraphWire {
+    /// Block-diagonal fuse a batch of per-leaf `AxisGraph`s into ONE ragged wire
+    /// (contract §2.1). Single source of the fusion arithmetic — both the
+    /// self-play inference seam (`next_graph_batch`) and the HEXG training
+    /// sample path (`replay_buffer::hexg::sample`) call this, so the union
+    /// offsets/globalisation are byte-identical on the C3 (inference) and C8
+    /// (training) sides of the loop. `edge_index`/`legal_node_gather`/all offsets
+    /// come out ALREADY globally offset (i64); `edge_index` is `[src_global | dst_global]`.
+    /// Assumes each graph's `builder_impl == BUILDER_IMPL_NATIVE` (the caller
+    /// runs the F7 handshake before/at fuse time; the training sampler stamps it
+    /// by construction — it only ever calls `build_axis_graph`).
+    // Test-only field accessors — the HEXG rebuild-at-sample parity tests
+    // (`replay_buffer::hexg::tests`) inspect the fused wire against a direct
+    // `build_axis_graph` on the same stones. Not on any production path.
+    #[cfg(test)]
+    pub(crate) fn t_n_graphs(&self) -> usize { self.n_graphs }
+    #[cfg(test)]
+    pub(crate) fn t_builder_impl(&self) -> u8 { self.builder_impl }
+    #[cfg(test)]
+    pub(crate) fn t_contract_version(&self) -> u32 { self.contract_version }
+    #[cfg(test)]
+    pub(crate) fn t_node_feat(&self) -> &[f32] { &self.node_feat }
+    #[cfg(test)]
+    pub(crate) fn t_node_coords(&self) -> &[i32] { &self.node_coords }
+    #[cfg(test)]
+    pub(crate) fn t_edge_index(&self) -> &[i64] { &self.edge_index }
+    #[cfg(test)]
+    pub(crate) fn t_edge_attr(&self) -> &[f32] { &self.edge_attr }
+    #[cfg(test)]
+    pub(crate) fn t_node_offsets(&self) -> &[i64] { &self.node_offsets }
+    #[cfg(test)]
+    pub(crate) fn t_legal_offsets(&self) -> &[i64] { &self.legal_offsets }
+    #[cfg(test)]
+    pub(crate) fn t_legal_node_gather(&self) -> &[i64] { &self.legal_node_gather }
+    #[cfg(test)]
+    pub(crate) fn t_policy_dst_slot(&self) -> &[i32] { &self.policy_dst_slot }
+    #[cfg(test)]
+    pub(crate) fn t_n_stones(&self) -> &[u16] { &self.n_stones }
+
+    pub(crate) fn from_axis_graphs(graphs: &[AxisGraph], contract_version: u32) -> GraphWire {
+        let b = graphs.len();
+        let mut node_feat: Vec<f32> = Vec::new();
+        let mut node_coords: Vec<i32> = Vec::new();
+        let mut edge_attr: Vec<f32> = Vec::new();
+        let mut edge_src: Vec<i64> = Vec::new();
+        let mut edge_dst: Vec<i64> = Vec::new();
+        let mut legal_node_gather: Vec<i64> = Vec::new();
+        let mut policy_dst_slot: Vec<i32> = Vec::new();
+        let mut node_offsets: Vec<i64> = Vec::with_capacity(b + 1);
+        let mut edge_offsets: Vec<i64> = Vec::with_capacity(b + 1);
+        let mut legal_offsets: Vec<i64> = Vec::with_capacity(b + 1);
+        let mut n_nodes_checksum: Vec<u32> = Vec::with_capacity(b);
+        let mut n_stones: Vec<u16> = Vec::with_capacity(b);
+        let mut window_center: Vec<i32> = Vec::with_capacity(b * 2);
+        let mut current_player: Vec<i8> = Vec::with_capacity(b);
+        node_offsets.push(0);
+        edge_offsets.push(0);
+        legal_offsets.push(0);
+
+        let mut node_off: i64 = 0;
+        let mut edge_off: i64 = 0;
+        let mut legal_off: i64 = 0;
+        for g in graphs {
+            let n_g = g.num_nodes() as i64;
+            let e_g = g.num_edges() as i64;
+            let lg_g = g.legal_node_gather.len() as i64;
+
+            node_feat.extend_from_slice(&g.node_feat.0);
+            node_coords.extend_from_slice(&g.node_coords);
+            edge_attr.extend_from_slice(&g.edge_attr.0);
+            for &s in &g.edge_index.src {
+                edge_src.push(node_off + i64::from(s));
+            }
+            for &d in &g.edge_index.dst {
+                edge_dst.push(node_off + i64::from(d));
+            }
+            for &row in &g.legal_node_gather {
+                legal_node_gather.push(node_off + i64::from(row));
+            }
+            policy_dst_slot.extend_from_slice(&g.policy_scatter_index.0);
+            n_nodes_checksum.push(g.n_nodes_checksum);
+            n_stones.push(g.n_stones);
+            window_center.push(g.window_center.0);
+            window_center.push(g.window_center.1);
+            current_player.push(g.current_player);
+
+            node_off += n_g;
+            edge_off += e_g;
+            legal_off += lg_g;
+            node_offsets.push(node_off);
+            edge_offsets.push(edge_off);
+            legal_offsets.push(legal_off);
+        }
+        // edge_index = [src_global (E) | dst_global (E)] → Python reshapes (2,E).
+        let mut edge_index = edge_src;
+        edge_index.extend(edge_dst);
+
+        GraphWire {
+            contract_version,
+            builder_impl: BUILDER_IMPL_NATIVE,
+            n_graphs: b,
+            node_feat,
+            node_coords,
+            edge_index,
+            edge_attr,
+            node_offsets,
+            edge_offsets,
+            legal_offsets,
+            legal_node_gather,
+            policy_dst_slot,
+            n_nodes_checksum,
+            n_stones,
+            window_center,
+            current_player,
+        }
+    }
 }
 
 #[pymethods]

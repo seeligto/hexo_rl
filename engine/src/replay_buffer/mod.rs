@@ -37,6 +37,7 @@ mod push;
 pub mod push_config;
 pub mod sample;
 mod persist;
+pub mod hexg;
 
 use half::f16;
 use numpy::{

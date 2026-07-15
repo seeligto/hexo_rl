@@ -42,6 +42,55 @@ def compute_policy_loss(
     return torch.zeros(1, device=device, dtype=torch.float32).squeeze()
 
 
+def ragged_policy_ce(
+    policy_logits: torch.Tensor,
+    policy_target: torch.Tensor,
+    legal_offsets: torch.Tensor,
+    full_search_mask: Optional[torch.Tensor] = None,
+) -> torch.Tensor:
+    """Ragged per-legal-node policy CE for the GNN graph branch (GNN-integration
+    WP-5 §6.1) — the no-drop replacement for the dense-362 ``compute_policy_loss``.
+
+    The GNN emits ONE logit per legal node (``Lg`` total, graphs concatenated);
+    the target is the record's coord-keyed MCTS visit distribution over the FULL
+    legal set (in- AND off-window — the ``records.rs:62`` off-window skip is NOT
+    inherited). Per graph: ``log_softmax`` over its legal-node segment (the
+    ``segment_softmax`` the seam already added), then ``-Σ target·logp``, masked
+    by ``is_full_search`` (quick-search rows contribute value only, exactly as
+    the CNN ``full_search_mask`` gate).
+
+    Args:
+        policy_logits:    ``(Lg,)`` per-legal-node logits (``GnnNet.forward_batch``).
+        policy_target:    ``(Lg,)`` per-legal-node CE target (per-graph segment
+                          sums to ~1).
+        legal_offsets:    ``(B+1,)`` int64 CSR ptr segmenting the legal nodes.
+        full_search_mask: optional ``(B,)`` bool/uint8 — 1 = full-search (apply
+                          policy loss), 0 = quick-search (skip). ``None`` → all.
+    Returns:
+        scalar mean CE over the (full-search) graphs; ``0`` when none contribute.
+    """
+    from hexo_rl.selfplay.graph_collate import segment_softmax
+
+    device = policy_logits.device
+    b = int(legal_offsets.shape[0]) - 1
+    if b == 0 or policy_logits.numel() == 0:
+        return torch.zeros((), device=device, dtype=torch.float32)
+    probs = segment_softmax(policy_logits, legal_offsets)
+    logp = torch.log(probs.clamp(min=1e-12))
+    per_node = -(policy_target * logp)  # (Lg,)
+    counts = legal_offsets[1:] - legal_offsets[:-1]
+    seg = torch.repeat_interleave(
+        torch.arange(b, device=device, dtype=torch.long), counts
+    )
+    per_graph = torch.zeros(b, device=device, dtype=per_node.dtype)
+    per_graph.scatter_add_(0, seg, per_node)  # (B,)
+    if full_search_mask is not None:
+        mask = full_search_mask.reshape(-1).to(per_graph.dtype)
+        denom = mask.sum().clamp_min(1.0)
+        return (per_graph * mask).sum() / denom
+    return per_graph.mean()
+
+
 def compute_kl_policy_loss(
     log_policy: torch.Tensor,
     target_policy: torch.Tensor,

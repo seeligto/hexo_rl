@@ -48,5 +48,7 @@ fn engine(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<crate::game_runner::SelfPlayRunnerConfig>()?;
     m.add_class::<crate::game_runner::SelfPlayRunner>()?;
     m.add_class::<crate::replay_buffer::ReplayBuffer>()?;
+    m.add_class::<crate::replay_buffer::hexg::HexgBuffer>()?;
+    m.add_class::<crate::replay_buffer::hexg::GraphTargets>()?;
     Ok(())
 }

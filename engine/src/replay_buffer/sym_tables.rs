@@ -127,6 +127,28 @@ fn rotate_n(mut q: i32, mut r: i32, n_rot: usize) -> (i32, i32) {
     (q, r)
 }
 
+/// Apply D6 element `sym_idx ∈ 0..N_SYMS` to an axial coordinate `(q, r)`.
+///
+/// **Single source of the 12 D6 elements** (GNN-integration WP-5a §5.1): the CNN
+/// cell-scatter (`with_shape` below) and the GNN HEXG sample-path coord/visit-key
+/// rotation (`replay_buffer::hexg::sample`) BOTH call this, so "D6 element `s`"
+/// means the identical geometry on the dense-grid and axis-graph paths. The
+/// element is reflect-then-rotate — `reflect = sym_idx >= 6` swaps axes
+/// `(q, r) → (r, q)` FIRST, then `sym_idx % 6` × 60° rotations `(q, r) → (−r, q+r)`
+/// — byte-exactly matching the CNN scatter-table construction. `sym_idx 0` is the
+/// identity. Board-size invariant (pure axial lattice automorphism), so it is the
+/// correct primitive for the infinite-board graph coords (no window clamp).
+#[inline]
+#[must_use]
+pub fn rotate_axial(q: i32, r: i32, sym_idx: usize) -> (i32, i32) {
+    let (mut q, mut r) = (q, r);
+    // Optional reflection first (swap axes) — matches `with_shape` construction.
+    if sym_idx >= 6 {
+        (q, r) = (r, q);
+    }
+    rotate_n(q, r, sym_idx % 6)
+}
+
 /// Compare two axial vectors in a direction-unsigned sense (axis identity).
 #[inline]
 fn same_axis(a: (i32, i32), b: (i32, i32)) -> bool {
@@ -227,17 +249,10 @@ impl SymTables {
             let mut pairs: Vec<(u16, u16)> = Vec::with_capacity(n_cells);
 
             for src in 0..n_cells {
-                let (mut q, mut r) = from_flat(src);
-
-                // Optional reflection first (swap axes).
-                if reflect {
-                    (q, r) = (r, q);
-                }
-
-                // Apply n_rot × 60° rotations: (q, r) → (−r, q+r).
-                for _ in 0..n_rot {
-                    (q, r) = (-r, q + r);
-                }
+                let (sq, sr) = from_flat(src);
+                // Single-source D6 transform (reflect-then-rotate) — WP-5a §5.1
+                // lifted `rotate_axial`; byte-identical to the prior inline loop.
+                let (q, r) = rotate_axial(sq, sr, sym_idx);
 
                 if let Some(dst) = to_flat(q, r) {
                     pairs.push((src as u16, dst));

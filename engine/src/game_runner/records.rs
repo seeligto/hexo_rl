@@ -496,6 +496,106 @@ pub fn assemble_ls_from_gnn_probs(
     Ok(LegalSetPolicy { dense, overflow })
 }
 
+/// GNN-integration WP-5a (§1.2) — build the ONE compact graph-position record
+/// from the search-root board + the assembled ragged `LegalSetPolicy`.
+///
+/// Whole-board (NO K-cluster loop, NO dense planes, NO aux — the GNN encodes the
+/// board natively; design §1.3 DROPs ownership/winning_line/chain/ply). The
+/// visit target is the coord→prob map over the FULL legal set — in- AND
+/// off-window — read from `ls` BY COORD, so the `records.rs:62` off-window skip
+/// is NOT inherited (design §6.1; that skip is the pre-R1 decode handicap the
+/// +414 evidence removed). `outcome`/`value_valid` are placeholders → stamped at
+/// game end by `finalize_graph_outcome`. Truncates to the top-`max_visits` cells
+/// by mass so the fixed HEXG slot never over-caps (visits are sparse in the
+/// deploy Gumbel regime; a denser target keeps its highest-mass moves).
+#[allow(clippy::too_many_arguments)] // mirrors the dense record fns' spec-derived scalar surface
+pub fn record_position_graph(
+    board: &Board,
+    ls: &LegalSetPolicy,
+    trunk_sz: i32,
+    current_player: i8,
+    moves_remaining: u8,
+    ply_index: u16,
+    is_full_search: bool,
+    max_visits: usize,
+) -> crate::replay_buffer::hexg::GraphRecord {
+    let (bcq, bcr) = board.window_center();
+    let half = (trunk_sz - 1) / 2;
+
+    // Visit target: read the ragged mass at each legal coord (no floor — a cell
+    // absent from `ls` is truly 0-visit, and unstored cells read 0 at sample).
+    let legal = board.legal_moves();
+    let mut visits: Vec<(i16, i16, f32)> = Vec::with_capacity(legal.len());
+    for &(q, r) in &legal {
+        let p = ls.get(q, r, bcq, bcr, trunk_sz, half, 0.0);
+        if p > 0.0 {
+            visits.push((q as i16, r as i16, p));
+        }
+    }
+    // Top-`max_visits` by mass — keep the highest-visit moves if the target is
+    // denser than the fixed slot (bounded fallback; renorm is unnecessary — the
+    // ragged CE tolerates a tiny truncated tail).
+    if visits.len() > max_visits {
+        visits.sort_unstable_by(|a, b| {
+            b.2.partial_cmp(&a.2).unwrap_or(std::cmp::Ordering::Equal)
+        });
+        visits.truncate(max_visits);
+    }
+
+    // Stones from the board's sparse occupied-cell map (order irrelevant — the
+    // rebuild coordinate-sorts). `Cell` is `#[repr(i8)]` (P1=1, P2=-1).
+    let mut stones: Vec<(i16, i16, i8)> = Vec::new();
+    for (&(q, r), &cell) in board.cells_iter() {
+        stones.push((q as i16, r as i16, cell as i8));
+    }
+
+    crate::replay_buffer::hexg::GraphRecord {
+        stones,
+        visits,
+        current_player,
+        moves_remaining,
+        ply_index,
+        is_full_search,
+        outcome: 0.0,      // placeholder → finalize_graph_outcome
+        value_valid: true, // placeholder → finalize_graph_outcome
+        game_length: 0,    // placeholder → finalize_graph_outcome
+    }
+}
+
+/// GNN-integration WP-5a (§1.3) — stamp the §178 per-row outcome + draw-mask onto
+/// a graph record at game end. This is the KEEP-verbatim half of `finalize_game`
+/// (`inner.rs`) — it reads winner / terminal_reason / the row's move-time player
+/// only, NO cell geometry — so INV26 / the §178 outcome split transfers to graph
+/// rows UNCHANGED. `terminal_reason == 2` is the ply-cap branch (fabricated
+/// label → `value_valid = 0`, masked from the value loss).
+#[inline]
+#[must_use]
+pub fn finalize_graph_outcome(
+    rec_player: i8,
+    winner: Option<crate::board::Player>,
+    terminal_reason: u8,
+    ply_cap_value: f32,
+    draw_reward: f32,
+) -> (f32, u8) {
+    let outcome = match winner {
+        Some(p) => {
+            if p as i8 == rec_player {
+                1.0
+            } else {
+                -1.0
+            }
+        }
+        None => {
+            if terminal_reason == 2 {
+                ply_cap_value
+            } else {
+                draw_reward
+            }
+        }
+    };
+    (outcome, u8::from(terminal_reason != 2))
+}
+
 /// Legal-set counterpart of `aggregate_policy_to_local`: projects the ragged
 /// global `ls` into the dense-362 frame of the cluster centred on `center`. For
 /// each legal move in this cluster's window it reads `ls` BY COORD — in-global-
@@ -1138,5 +1238,88 @@ mod gnn_assemble_tests {
             any_misread,
             "a wrong window centre MUST misread in-window slots — the F1 frame class S2 guards"
         );
+    }
+
+    // ── WP-5a record-construction (§1.2/§1.3) ──────────────────────────────
+
+    /// A 3-stone mid-turn board (P1 to move, 2 moves remaining).
+    fn small_board() -> Board {
+        let mut b = Board::new();
+        b.apply_move(0, 0).unwrap(); // P1 ply 0
+        b.apply_move(2, 0).unwrap(); // P2 first
+        b.apply_move(0, 2).unwrap(); // P2 second — turn passes to P1
+        b
+    }
+
+    #[test]
+    fn record_position_graph_captures_stones_and_visit_mass() {
+        let b = small_board();
+        let (bcq, bcr) = b.window_center();
+        let (trunk, half) = (19i32, 9i32);
+        let legal = b.legal_moves();
+        // Plant known mass on two legal cells via their in-window dense slots.
+        let mut dense = vec![0.0f32; 362];
+        let c0 = legal[0];
+        let c1 = legal[1];
+        let i0 = Board::window_flat_idx_at_geom(c0.0, c0.1, bcq, bcr, trunk, half);
+        let i1 = Board::window_flat_idx_at_geom(c1.0, c1.1, bcq, bcr, trunk, half);
+        assert!(i0 < 362 && i1 < 362, "chosen legal cells must be in-window");
+        dense[i0] = 0.7;
+        dense[i1] = 0.3;
+        let ls = LegalSetPolicy { dense, overflow: FxHashMap::default() };
+
+        let rec = super::record_position_graph(
+            &b, &ls, trunk, b.current_player as i8, b.moves_remaining, b.ply as u16, true, 128,
+        );
+
+        // 3 stones, matching the board's occupied cells.
+        assert_eq!(rec.stones.len(), 3);
+        let stone_set: std::collections::HashSet<(i16, i16)> =
+            rec.stones.iter().map(|&(q, r, _)| (q, r)).collect();
+        assert!(stone_set.contains(&(0, 0)) && stone_set.contains(&(2, 0)) && stone_set.contains(&(0, 2)));
+
+        // Visit target carries exactly the planted mass by coord (no drop).
+        let vmap: std::collections::HashMap<(i16, i16), f32> =
+            rec.visits.iter().map(|&(q, r, p)| ((q, r), p)).collect();
+        assert!((vmap[&(c0.0 as i16, c0.1 as i16)] - 0.7).abs() < 1e-6);
+        assert!((vmap[&(c1.0 as i16, c1.1 as i16)] - 0.3).abs() < 1e-6);
+        assert_eq!(rec.visits.len(), 2, "only the two nonzero-mass cells stored (sparse)");
+        assert_eq!(rec.outcome, 0.0, "outcome is a placeholder at record time");
+        assert!(rec.is_full_search);
+    }
+
+    #[test]
+    fn record_position_graph_truncates_to_top_k() {
+        let b = small_board();
+        let (bcq, bcr) = b.window_center();
+        let (trunk, half) = (19i32, 9i32);
+        let legal = b.legal_moves();
+        assert!(legal.len() >= 5);
+        // Ascending mass on 5 legal cells; top-2 truncation must keep the two highest.
+        let mut dense = vec![0.0f32; 362];
+        for (k, &(q, r)) in legal.iter().take(5).enumerate() {
+            let idx = Board::window_flat_idx_at_geom(q, r, bcq, bcr, trunk, half);
+            if idx < 362 {
+                dense[idx] = 0.1 * (k as f32 + 1.0); // 0.1..0.5
+            }
+        }
+        let ls = LegalSetPolicy { dense, overflow: FxHashMap::default() };
+        let rec = super::record_position_graph(&b, &ls, trunk, 1, 2, 0, true, 2);
+        assert_eq!(rec.visits.len(), 2, "top-k truncation to max_visits=2");
+        let kept: Vec<f32> = rec.visits.iter().map(|&(_, _, p)| p).collect();
+        assert!(kept.iter().all(|&p| p >= 0.399), "kept the two highest-mass cells, got {kept:?}");
+    }
+
+    #[test]
+    fn finalize_graph_outcome_matches_178_split() {
+        use crate::board::Player;
+        // Win as this row's player → +1, supervised.
+        assert_eq!(super::finalize_graph_outcome(1, Some(Player::One), 0, -0.5, -0.1), (1.0, 1));
+        // Win as the opponent → −1, supervised.
+        assert_eq!(super::finalize_graph_outcome(-1, Some(Player::One), 0, -0.5, -0.1), (-1.0, 1));
+        // Ply-cap (terminal_reason 2) → ply_cap_value, MASKED (value_valid 0).
+        assert_eq!(super::finalize_graph_outcome(1, None, 2, -0.5, -0.1), (-0.5, 0));
+        // Organic draw (terminal_reason 3) → draw_reward, supervised.
+        assert_eq!(super::finalize_graph_outcome(1, None, 3, -0.5, -0.1), (-0.1, 1));
     }
 }
