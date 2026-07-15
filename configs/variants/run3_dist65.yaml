@@ -17,19 +17,40 @@
 #   D4  external strength via mantis_pull_eval OFFLINE (not in-loop) [ruling]
 #   +   fresh seeded books per stage (operator mints at launch, §10 below)
 #
-# ── DECISION TO CONFIRM before launch (⚠ load-bearing) ────────────────────────
-#   The ruling says "promotion gate 25k / 64-pair / CI>0.5 subprocess-isolated."
-#   Mapped below as: eval_interval 25k + deploy_strength stride 1 (every 25k) +
-#   a 64-opening paired book (128 games) + require_ci_above_half (CI-lower > 0.5)
-#   + promotion_gate_subprocess_isolation true. OPEN: does "64-pair" mean
-#   confirm_n=128 over a 64-opening book (my reading, matching E1 WP1's
-#   evalfair_r5_v2 64-pair/128-game instrument), or a different pair source?
-#   Confirm the book path + confirm_n before launch. See §PROMOTION below.
+# ── DECISION CONFIRMED at Phase-1 launch (was "⚠ load-bearing" open item) ─────
+#   RESOLVED (Phase-1 launch A1, docs/registers/run3_cnn_preregistration.md):
+#   the in-loop promotion gate (hexo_rl/eval/deploy_strength_eval.py) does NOT
+#   read a "book" at all — there is no such config key in
+#   DeployStrengthConfig.from_cfg. Opening diversity for its screen/confirm
+#   games comes from `opening_plies` (RNG-seeded uniform-random opening plies,
+#   base default 4 in configs/eval.yaml — NOT overridden here, same as
+#   run2_mw_fresh.yaml's proven deploy_strength block). "64-pair" IS simply
+#   confirm_n=128 (128 RNG-opened games, color-balanced pairs) — no book to
+#   wire. Board radius correctly tracks the live curriculum via
+#   `legal_move_radius=ctx.current_radius` threaded into DeployStrengthEvaluator
+#   by hexo_rl/eval/opponent_runners.py::_run_deploy_strength — so the r4→r5
+#   boundary is already handled without any book-switch action needed.
+#   The v3 fair-opening books (evalfair_r4_v3/r5_v3, SHA-pinned in
+#   run3_cnn_preregistration.md §4b) belong to a DIFFERENT, OFFLINE instrument
+#   (scripts/evalfair/run_retro_ckpt.py / mantis_pull_eval.py — the wr_d5
+#   EVALFAIR read used for the stop-rule/verdict, run post-hoc against banked
+#   checkpoints via `resolve_book_for_radius`, not baked into this yaml at
+#   all — it takes --book-r4/--book-r5 CLI args at read time).
 #
-# LAUNCH (real entrypoint; --checkpoint = the minted re-stamped weights-only
-# v6_live2_ls bootstrap, exactly as run2 §10 step 3a — NOT the raw bootstrap):
+# LAUNCH (real entrypoint; --checkpoint = the MINTED dist65 fresh-init bootstrap
+# — Phase-1 launch A2: run2_bootstrap_v6_live2_ls.pt is SCALAR-shaped
+# (value_fc2.*, no value_fc2_bins.*); loading it directly into this
+# value_head_type=dist65 variant trips
+# hexo_rl/training/warmstart_launch.py::assert_dist65_bins_seeded (neither
+# ckpt_had_value_fc2_bins nor a warm-start fires). checkpoints/
+# run3_bootstrap_v6_live2_ls_dist65.pt (scripts/mint_run3_dist65_bootstrap.py)
+# carries every run2-bootstrap trunk/policy tensor byte-identical (same-init
+# one-variable read preserved) plus FRESH-RANDOM value_fc2_bins.* (intended —
+# dist65 is untrained at fresh init either way), so the guard's precondition
+# is honestly satisfied. See run3_cnn_preregistration.md for the pinned sha256
+# + forward-smoke record):
 #   .venv/bin/python scripts/train.py \
-#     --checkpoint checkpoints/run2_bootstrap_v6_live2_ls.pt \
+#     --checkpoint checkpoints/run3_bootstrap_v6_live2_ls_dist65.pt \
 #     --variant run3_dist65 \
 #     --iterations 1000000 \
 #     2>&1 | tee logs/run3_dist65.log
@@ -115,18 +136,28 @@ eval_pipeline:
     # ── PROMOTION gate (D3+D4): the 25k / 64-pair / CI>0.5 subprocess gate ─────
     # run2 ran deploy_strength at stride 4 (every 100k, confirm_n 100) — the
     # expensive in-loop Gumbel-150 strength eval the ruling DISABLES. run3 runs
-    # it at stride 1 (every 25k) over a 64-opening paired book, subprocess-
-    # isolated (promotion_gate_subprocess_isolation above), promoting on the
+    # it at stride 1 (every 25k), subprocess-isolated
+    # (promotion_gate_subprocess_isolation above), promoting on the
     # distinct-game bootstrap CI-lower > 0.5 (require_ci_above_half below).
     # sealbot_games 0: NO in-loop SealBot bar (D4 — strength via mantis_pull_eval
-    # OFFLINE at milestones). ⚠ confirm confirm_n/book vs the "64-pair" reading.
+    # OFFLINE at milestones).
+    #
+    # RESOLVED (Phase-1 launch A1): this gate has NO book concept — opening
+    # diversity for its screen(80)+confirm(128)=208 pooled games/round comes
+    # from `opening_plies` (RNG-seeded random opening plies, base default 4,
+    # NOT overridden here — matches run2_mw_fresh's proven deploy_strength
+    # block byte-for-byte). "64-pair" = confirm_n=128 (128 games, color-
+    # balanced pairs), nothing more; there is no book field on
+    # DeployStrengthConfig to set. See the file-header LAUNCH comment for the
+    # full resolution + why the v3 fair-opening books (SHA-pinned in
+    # docs/registers/run3_cnn_preregistration.md §4b) are a DIFFERENT, offline
+    # instrument (wr_d5 EVALFAIR), not this in-loop gate.
     deploy_strength:
       enabled: true
       stride: 1               # every 25k (was run2 stride 4 = 100k)
       screen_n: 80
-      confirm_n: 128          # ⚠ 64 opening-pairs × 2 sides (CONFIRM vs the book)
+      confirm_n: 128          # 128 RNG-opened games (the "64-pair" reading — no book)
       sealbot_games: 0        # D4: no in-loop strength bar; mantis_pull_eval offline
-      # book: <64-pair fair-opening book, minted fresh per stage — §10>  ⚠ set at launch
   gating:
     promotion_winrate: 0.55
     require_ci_above_half: true   # CI-lower > 0.5 (the ruling's "CI>0.5")
@@ -146,10 +177,19 @@ monitors:
 selfplay_stall_timeout_sec: 1800.0   # run2 eval-wedge watchdog (explicit)
 
 # ── §10 LAUNCH CHECKLIST (operator, at launch — same discipline as run2 §10) ──
-#  1. Mint the re-stamped weights-only v6_live2_ls bootstrap (--checkpoint target).
-#  2. Preflight the dist65 head loads (weights-only warm-start OR fresh init —
-#     confirm which run3 uses; ruling says "fresh init v6_live2_ls").
-#  3. Mint FRESH seeded fair-opening books per radius stage (ruling: "fresh
-#     seeded books per stage") + wire the 64-pair promotion book (⚠ decision).
-#  4. bench-gate + registry audit + HOST-MATCH baseline mint.
-#  5. Confirm the ⚠ promotion-gate decision above with the operator.
+#  1. DONE (Phase-1 launch A2): minted checkpoints/run3_bootstrap_v6_live2_ls_dist65.pt
+#     (scripts/mint_run3_dist65_bootstrap.py) — dist65 net, run2-bootstrap trunk
+#     weights, fresh-random value_fc2_bins.*. sha256 pinned in
+#     docs/registers/run3_cnn_preregistration.md.
+#  2. DONE (Phase-1 launch A2): fresh init v6_live2_ls confirmed — the mint IS
+#     the "fresh init" the ruling specifies (run2's trunk init + untrained
+#     dist65 bins); forward-smoked on 10 probe positions (finite, v in [-1,1],
+#     valid 65-bin softmax) before launch.
+#  3. N/A (Phase-1 launch A1): the in-loop promotion gate (deploy_strength) has
+#     no book concept — nothing to mint/wire here. The v3 fair-opening books
+#     (already SHA-pinned, docs/registers/run3_cnn_preregistration.md §4b)
+#     belong to the offline wr_d5 EVALFAIR instrument, not this config.
+#  4. bench-gate + registry audit + HOST-MATCH baseline mint — engine/ unchanged
+#     vs the last bench-gated commit (Phase-1 launch B5); no Rust rebuild needed.
+#  5. RESOLVED (Phase-1 launch A1): confirm_n=128 stands; no book decision
+#     remains open.

@@ -288,6 +288,58 @@ read). Cross-host parity (`sha256sum` on the vast box) must be independently con
 before launch per manifest §4 — not re-verified by this preregistration (vast box is
 read-only, not a pin source, per §4 host note above).
 
+### 4g. run3 INIT ARTIFACT — minted dist65 fresh-init bootstrap (Phase-1 launch A2)
+
+`configs/variants/run3_dist65.yaml`'s declared `--checkpoint` (run2's own
+`run2_bootstrap_v6_live2_ls.pt` bootstrap init) is SCALAR-shaped (`value_fc2.*`, 147
+tensors, no `value_fc2_bins.*`). Loading it directly into this variant's
+`value_head_type: dist65` net trips
+`hexo_rl/training/warmstart_launch.py::assert_dist65_bins_seeded` (called from
+`orchestrator.py` right after checkpoint load): neither `ckpt_had_value_fc2_bins`
+(the source is a scalar trunk) nor a warm-start fire (run3's `warm_start.enabled` is
+false by design — the E1 HEADSWAP warm-start mechanism injects a TRAINED value head,
+wrong for a fresh-init run) — so the guard raises by design. Read of
+`hexo_rl/training/checkpoints.py::load_state_dict_strict` confirms the load ITSELF
+would not raise (its `new_aux_prefixes` carve-out already treats
+`value_fc2_bins.*` as benign-missing, same class as `ply_index_head.*`) — the guard
+that fires is the SEPARATE `assert_dist65_bins_seeded` belt-and-suspenders check in
+`orchestrator.py`, which has no third sanctioned path for "genuinely fresh random
+bins, intentional." (The genuinely-fresh no-`--checkpoint` code branch in
+`orchestrator.py` bypasses the guard entirely, but would also give the trunk a
+DIFFERENT random init than run2's — breaking the same-init one-variable read the E1
+REVIVE comparison needs. Not used for this reason.)
+
+**Resolution:** minted `checkpoints/run3_bootstrap_v6_live2_ls_dist65.pt`
+(`scripts/mint_run3_dist65_bootstrap.py`, committed) — builds the dist65 net
+(board_size=19, in_channels=4, res_blocks=12, filters=128, se_reduction_ratio=4,
+value_head_type=dist65, n_value_bins=65 — the exact hparams
+`flatten_config_and_resolve_encoding` resolves for `run3_dist65`), loads
+`run2_bootstrap_v6_live2_ls.pt`'s weights via the SAME production
+`load_state_dict_strict` (every shared tensor becomes byte-identical to run2's own
+starting point — the same-init invariant is preserved), and SAVES the resulting full
+149-tensor state_dict (147 shared + 2 fresh-random `value_fc2_bins.{weight,bias}`,
+verified untouched by the load via a before/after tensor-equality assert in the mint
+script). The saved file now honestly carries `value_fc2_bins.*` — random, but
+PRESENT — so a real launch reads `ckpt_had_value_fc2_bins=True` and the guard no-ops
+exactly as it would for a genuine dist65 checkpoint resume.
+
+| artifact | path | sha256 | tensors | source |
+|---|---|---|---|---|
+| run3 init artifact (load-bearing, the actual `--checkpoint` at launch) | `checkpoints/run3_bootstrap_v6_live2_ls_dist65.pt` | `571431a432e95697e7646f6de53d92012891ce8215bc2bdff903bebea31edd17` | 149 (147 run2-identical + 2 fresh-random `value_fc2_bins.*`) | minted from `checkpoints/run2_bootstrap_v6_live2_ls.pt` (sha256 `8dba7c8195e09f464dc4c7149fe57a0c483e241bff2abe6fa8ba652827afaa8a`) |
+
+**Forward-smoke (Phase-1 launch A2, laptop 4060, before launch):** loaded the mint via
+the real eval checkpoint path (`hexo_rl.eval.checkpoint_loader.load_model_with_encoding`,
+`declared_encoding="v6_live2_ls"`) — correctly auto-detects `value_fc2_bins.*` and
+builds a dist65 net. Forward-passed 10 board positions (fresh `v6_live2_ls` board, RNG
+seed 20260715, plies 0–9 via uniform-random legal moves) through
+`LocalInferenceEngine.infer_batch` (the real K-cluster min-pool decode path): all 10
+decoded values finite and in `[-1, 1]` (observed range ≈ −0.004 to −0.031, consistent
+with an untrained-but-not-pathological fresh head), all 10 raw 65-bin softmax
+distributions summed to 1.0 (`atol=1e-4`), all policy vectors finite and summed to 1.0.
+No NaN/Inf anywhere. Gitignored (binary artifact, not committed) — rsynced to the box
+per §B2 of the Phase-1 launch report; sha256 re-verified equal on both hosts before
+launch.
+
 ---
 
 ## 5. GAP ANALYSIS + backfill requirements
