@@ -42,6 +42,7 @@ use crate::board::{Board, hex_distance};
 use crate::board::encode_chain_planes;
 use crate::inference_bridge::InferenceBatcher;
 use crate::mcts::MCTSTree;
+use crate::replay_buffer::hexg::{GraphRecord, MAX_VISITS};
 use crate::replay_buffer::sym_tables::{N_SYMS, SymTables};
 
 use super::super::gumbel_search::GumbelSearchState;
@@ -284,8 +285,9 @@ pub(super) fn run_worker_thread(
     // Per feedback_registryspec_by_ref_in_hotpath.md the per-sim hot path must
     // see cheap integer locals, not field-access on a struct ref. WorkerGeometry
     // is `Copy` (~32 bytes) and exists purely to keep the fn arity ≤ 7.
-    let WorkerGeometry { n_cells, kept_planes, policy_stride, agg_trunk_sz, has_pass_slot, legal_set } =
-        geometry;
+    let WorkerGeometry {
+        n_cells, kept_planes, policy_stride, agg_trunk_sz, has_pass_slot, legal_set, is_graph,
+    } = geometry;
     // §P52: destructure the captured groups back into the local names used by
     // the hot-loop body. Field order matches the pre-P52 capture order so the
     // body diff is empty. INV25 Cell 3 substring-anchors this pattern in
@@ -314,7 +316,7 @@ pub(super) fn run_worker_thread(
         seeded_games_started,
     } = stats;
     let WorkerAtomics { running, radius_override } = atomics;
-    let WorkerChannels { batcher, results_queue, recent_game_results } = channels;
+    let WorkerChannels { batcher, results_queue, recent_game_results, graph_results_queue } = channels;
     let WorkerParams {
         max_moves,
         leaf_batch_size,
@@ -429,9 +431,9 @@ pub(super) fn run_worker_thread(
         run_one_game(
             &mut tree, &mut rng, &mut version_seen, &running, &radius_override,
             &batcher, sym_tables, worker_registry_spec, init_ctx, kept_planes,
-            policy_stride, has_pass_slot, agg_trunk_sz, legal_set, move_cfg,
+            policy_stride, has_pass_slot, agg_trunk_sz, legal_set, is_graph, move_cfg,
             variance_atomics, move_accumulators, solver_counters, &seed_corpus,
-            &results_queue, &recent_game_results, finalize_counters,
+            &results_queue, &graph_results_queue, &recent_game_results, finalize_counters,
             dbg_game_idx_for_game,
         );
     }
@@ -458,12 +460,14 @@ fn run_one_game(
     has_pass_slot: bool,
     agg_trunk_sz: i32,
     legal_set: bool,
+    is_graph: bool,
     move_cfg: WorkerMoveCfg,
     variance_atomics: ClusterVarianceAtomics,
     move_accumulators: MoveAccumulators,
     solver_counters: SolverCounters,
     seed: &SeedCorpus,
     results_queue: &Mutex<VecDeque<WorkerResultRow>>,
+    graph_results_queue: &Mutex<VecDeque<GraphRecord>>,
     recent_game_results: &Mutex<VecDeque<GameResultRow>>,
     finalize_counters: (
         &AtomicUsize, // games_completed
@@ -488,7 +492,7 @@ fn run_one_game(
         solver_neighbor_dist, solver_visit_weight,
     } = move_cfg;
 
-    let PerGameInit { mut board, mut records_vec, mut move_history,
+    let PerGameInit { mut board, mut records_vec, mut graph_records, mut move_history,
         sym_idx, inv_idx, is_fast_game, game_sims, seeded, prefix_len } =
         init_per_game_board(worker_registry_spec, init_ctx, radius_override, rng, version_seen, seed);
 
@@ -541,9 +545,9 @@ fn run_one_game(
         }
 
         match play_one_move(
-            tree, &mut board, &mut records_vec, &mut move_history,
+            tree, &mut board, &mut records_vec, &mut graph_records, &mut move_history,
             version_seen, rng, running, play_ctx, kept_planes,
-            init_ctx.n_cells, policy_stride, has_pass_slot, agg_trunk_sz, legal_set,
+            init_ctx.n_cells, policy_stride, has_pass_slot, agg_trunk_sz, legal_set, is_graph,
             infer, variance_atomics, move_accumulators, solver_counters,
             &mut solver_fires, init_ctx.worker_id, dbg_game_idx,
         ) {
@@ -560,14 +564,28 @@ fn run_one_game(
     }
 
     let (games_completed, x_wins, o_wins, draws, positions_dropped) = finalize_counters;
-    finalize_game(
-        &board, init_ctx.max_moves, records_vec, move_history, version_seen,
-        sym_idx, sym_tables, init_ctx.n_cells, init_ctx.draw_reward,
-        init_ctx.ply_cap_value, init_ctx.results_queue_cap, init_ctx.worker_id,
-        seeded, solver_fires,
-        results_queue, recent_game_results,
-        games_completed, x_wins, o_wins, draws, positions_dropped,
-    );
+    // GNN-integration WP-5b commit A (R5): ONE hoisted branch at the finalize
+    // call site — grid runs `finalize_game` verbatim (byte-identical, §2 point
+    // 2 of the delta doc); `finalize_game_graph` is a new sibling fn with no
+    // dense caller.
+    if is_graph {
+        finalize_game_graph(
+            &board, init_ctx.max_moves, graph_records, move_history, version_seen,
+            init_ctx.draw_reward, init_ctx.ply_cap_value, init_ctx.results_queue_cap,
+            init_ctx.worker_id, seeded, solver_fires,
+            graph_results_queue, recent_game_results,
+            games_completed, x_wins, o_wins, draws, positions_dropped,
+        );
+    } else {
+        finalize_game(
+            &board, init_ctx.max_moves, records_vec, move_history, version_seen,
+            sym_idx, sym_tables, init_ctx.n_cells, init_ctx.draw_reward,
+            init_ctx.ply_cap_value, init_ctx.results_queue_cap, init_ctx.worker_id,
+            seeded, solver_fires,
+            results_queue, recent_game_results,
+            games_completed, x_wins, o_wins, draws, positions_dropped,
+        );
+    }
 }
 
 /// Per-game state outputs from `init_per_game_board`. Named struct avoids
@@ -575,6 +593,10 @@ fn run_one_game(
 struct PerGameInit {
     board: Board,
     records_vec: Vec<RecordTuple>,
+    /// GNN-integration WP-5b commit A (R3): per-game graph-record accumulator.
+    /// `Vec::new()` — zero-capacity, no allocation — for every grid game; only
+    /// grows (via push) on the `is_graph` record-dispatch branch.
+    graph_records: Vec<GraphRecord>,
     move_history: Vec<(i32, i32)>,
     sym_idx: usize,
     inv_idx: usize,
@@ -676,8 +698,8 @@ fn init_per_game_board(
     let game_sims = if is_fast_game { init_ctx.fast_sims } else { init_ctx.standard_sims };
 
     PerGameInit {
-        board, records_vec, move_history, sym_idx, inv_idx, is_fast_game, game_sims,
-        seeded, prefix_len,
+        board, records_vec, graph_records: Vec::new(), move_history, sym_idx, inv_idx,
+        is_fast_game, game_sims, seeded, prefix_len,
     }
 }
 
@@ -1078,6 +1100,7 @@ fn play_one_move(
     tree: &mut MCTSTree,
     board: &mut Board,
     records_vec: &mut Vec<RecordTuple>,
+    graph_records_vec: &mut Vec<GraphRecord>,
     move_history: &mut Vec<(i32, i32)>,
     version_seen: &mut Vec<u64>,
     rng: &mut ThreadRng,
@@ -1089,6 +1112,7 @@ fn play_one_move(
     has_pass_slot: bool,
     agg_trunk_sz: i32,
     legal_set: bool,
+    is_graph: bool,
     infer: InferContext,
     variance: ClusterVarianceAtomics,
     accumulators: MoveAccumulators,
@@ -1366,11 +1390,22 @@ fn play_one_move(
     };
 
     // ── Record position ──
-    record_position(
-        board, kept_planes, n_cells, agg_trunk_sz, ctx.is_fast_game,
-        ctx.completed_q_values, policy_stride, has_pass_slot, &target_policy,
-        ctx.sym_idx, infer.sym_tables, record_full_search, records_vec,
-    );
+    // GNN-integration WP-5b commit A (R4, delta doc §2 point 1): ONE hoisted
+    // branch. `is_graph` is a `WorkerGeometry` Copy bool set once per worker
+    // spawn; grid = false → this branch is never taken and `record_position`
+    // runs unchanged. `record_position_graph_dispatch` is `#[cold]`/
+    // `#[inline(never)]` so it never bloats the inlined dense record path.
+    if is_graph {
+        record_position_graph_dispatch(
+            board, &target_policy, agg_trunk_sz, record_full_search, graph_records_vec,
+        );
+    } else {
+        record_position(
+            board, kept_planes, n_cells, agg_trunk_sz, ctx.is_fast_game,
+            ctx.completed_q_values, policy_stride, has_pass_slot, &target_policy,
+            ctx.sym_idx, infer.sym_tables, record_full_search, records_vec,
+        );
+    }
 
     if board.apply_move(move_idx.0, move_idx.1).is_err() {
         return MoveOutcome::Break;
@@ -1531,6 +1566,51 @@ fn record_position(
     }
 }
 
+/// GNN-integration WP-5b commit A (R4) — graph sibling of `record_position`.
+/// Whole-board (NO K-cluster loop, NO dense planes) — pushes ONE compact
+/// `GraphRecord` via the WP-5a `records::record_position_graph` primitive
+/// (records.rs — no new correctness logic here, this fn is pure dispatch).
+///
+/// `target_policy` is guaranteed `MovePolicy::Ls` whenever this is called:
+/// `is_graph` and `legal_set` are BOTH derived from `spec.is_graph()` (R1 —
+/// `legal_set = spec.is_graph() || matches!(policy_pool, LegalSetScatterMax)`),
+/// so a graph spec always forces `legal_set = true`, and `play_one_move` only
+/// ever builds `MovePolicy::Dense` when `legal_set == false`. The `Dense` arm
+/// is therefore structurally unreachable, not a runtime data condition — an
+/// `unreachable!()` (always-on, not a stripped `debug_assert!`) is the
+/// correct die-loud response per the delta doc §9 failure-modes table
+/// ("legal_set=false for graph -> ... -> silent" is exactly the class this
+/// forecloses at construction).
+///
+/// `#[cold]`/`#[inline(never)]` — mirrors the WP-3 step-6 graph dispatch
+/// (`infer_and_expand_graph`) so this call never bloats the dense inlined
+/// record path (§2 point 1 of the delta doc).
+#[cold]
+#[inline(never)]
+fn record_position_graph_dispatch(
+    board: &Board,
+    target_policy: &MovePolicy,
+    trunk_sz: i32,
+    move_is_full_search: bool,
+    graph_records_vec: &mut Vec<GraphRecord>,
+) {
+    let ls = match target_policy {
+        MovePolicy::Ls(ls) => ls,
+        MovePolicy::Dense(_) => unreachable!(
+            "record_position_graph_dispatch: target_policy must be MovePolicy::Ls for a \
+             graph spec — R1 forces legal_set=true whenever spec.is_graph() is true"
+        ),
+    };
+    let current_player = board.current_player as i8;
+    let moves_remaining = board.moves_remaining;
+    let ply_index = board.ply as u16;
+    let rec = records::record_position_graph(
+        board, ls, trunk_sz, current_player, moves_remaining, ply_index,
+        move_is_full_search, MAX_VISITS,
+    );
+    graph_records_vec.push(rec);
+}
+
 /// Per-game terminal handler (Wave 11 Batch B; warm path).
 ///
 /// Classifies game outcome (winner, terminal_reason, version_seen range),
@@ -1664,6 +1744,117 @@ fn finalize_game(
     }
 }
 
+/// GNN-integration WP-5b commit A (R5) — graph sibling of `finalize_game`.
+///
+/// Reuses the winner / `terminal_reason` / `version_seen` classification
+/// verbatim (byte-identical duplication of `finalize_game`'s L1567-1601 —
+/// grid's `finalize_game` is untouched, this is a new fn with no dense
+/// caller). Stamps each buffered `GraphRecord`'s `outcome`/`value_valid` via
+/// the WP-5a §178 KEEP-verbatim `records::finalize_graph_outcome` (INV26
+/// transfers unchanged — records.rs docs), sets `game_length` (compound-move
+/// count, the same `(plies+1)/2` convention `pool.py` applies to the dense
+/// `plies` field before push), and drains into `graph_results_queue`. NO
+/// cell-geometry reprojection (no ownership/winning_line aux — `GnnNet` has
+/// no consuming head, design §1.3 DROP). Pushes the SAME
+/// `recent_game_results` metadata row `finalize_game` does (representation-
+/// agnostic — `pool.py::_run_stats_loop` processes `drain_game_results()`
+/// identically for both representations) and increments the same win/draw
+/// counters. Caps `graph_results_queue` at `results_queue_cap` (parity with
+/// the dense backpressure drop — reuses the existing `positions_dropped`
+/// counter; not a new correctness primitive, just the same hygiene pattern
+/// applied to the new queue).
+#[allow(clippy::too_many_arguments)] // per-game finalize; mirrors finalize_game's arity for the same reason
+fn finalize_game_graph(
+    board: &Board,
+    max_moves: usize,
+    graph_records: Vec<GraphRecord>,
+    move_history: Vec<(i32, i32)>,
+    version_seen: &[u64],
+    draw_reward: f32,
+    ply_cap_value: f32,
+    results_queue_cap: usize,
+    worker_id: usize,
+    seeded: bool,
+    solver_fires: u32,
+    graph_results_queue: &Mutex<VecDeque<GraphRecord>>,
+    recent_game_results: &Mutex<VecDeque<GameResultRow>>,
+    games_completed: &AtomicUsize,
+    x_wins: &AtomicU64,
+    o_wins: &AtomicU64,
+    draws: &AtomicU64,
+    positions_dropped: &AtomicU64,
+) {
+    // ── Game End: determine outcome (verbatim twin of finalize_game) ──
+    let winner = board.winner();
+    let plies = board.ply as usize;
+    let winner_code: u8 = match winner {
+        Some(crate::board::Player::One) => 1,
+        Some(_)                         => 2,
+        None                            => 0,
+    };
+    let winning_cells: Vec<(i32, i32)> = board.find_winning_line();
+    let terminal_reason: u8 = match winner {
+        Some(_) => u8::from(winning_cells.is_empty()),
+        None    => if plies >= max_moves { 2 } else { 3 },
+    };
+    let (mv_min, mv_max, mv_distinct) = if version_seen.is_empty() {
+        (0u64, 0u64, 0u32)
+    } else {
+        let mn = *version_seen.iter().min().unwrap();
+        let mx = *version_seen.iter().max().unwrap();
+        (mn, mx, version_seen.len() as u32)
+    };
+    // Compound-move sampling weight — same `(plies+1)/2` (== `div_ceil(2)`,
+    // matching `compound_move` above) convention `pool.py::_run_stats_loop`
+    // applies to the dense `plies` field before `push_many` (the HEXG push
+    // takes `game_length` directly, no Python-side conversion step in the
+    // graph drain — delta doc §6).
+    let game_length: u16 = plies.div_ceil(2).min(u16::MAX as usize) as u16;
+
+    let mut gq = graph_results_queue.lock().expect("graph_results_queue lock poisoned");
+    for mut rec in graph_records {
+        // §178 KEEP-verbatim split (records::finalize_graph_outcome, WP-5a
+        // unit-tested 4 cases) — reads rec.current_player/winner/terminal_reason
+        // only, no cell geometry, so INV26 transfers unchanged.
+        let (outcome, value_valid_u8) = records::finalize_graph_outcome(
+            rec.current_player, winner, terminal_reason, ply_cap_value, draw_reward,
+        );
+        rec.outcome = outcome;
+        rec.value_valid = value_valid_u8 != 0;
+        rec.game_length = game_length;
+        gq.push_back(rec);
+    }
+    games_completed.fetch_add(1, Ordering::Relaxed);
+    match winner {
+        Some(crate::board::Player::One) => { x_wins.fetch_add(1, Ordering::Relaxed); }
+        Some(_)                         => { o_wins.fetch_add(1, Ordering::Relaxed); }
+        None                            => { draws.fetch_add(1, Ordering::Relaxed); }
+    }
+    // Metadata-only game-complete row — SAME queue/schema `finalize_game`
+    // pushes into; `pool.py::_run_stats_loop` drains it representation-blind.
+    {
+        let mut rg = recent_game_results.lock().expect("recent_game_results lock poisoned");
+        rg.push_back((
+            plies, winner_code, move_history, worker_id,
+            terminal_reason, mv_min, mv_max, mv_distinct,
+            u8::from(seeded), solver_fires,
+        ));
+        if rg.len() > 2000 {
+            rg.pop_front();
+        }
+    }
+
+    // Cap the graph results queue to avoid memory explosion if Python is slow
+    // (parity with `finalize_game`'s dense backpressure drop).
+    if gq.len() > results_queue_cap {
+        let to_drop = gq.len() - results_queue_cap;
+        for _ in 0..to_drop {
+            gq.pop_front();
+        }
+        positions_dropped.fetch_add(to_drop as u64, Ordering::Relaxed);
+    }
+}
+
 #[cfg(test)]
 mod seeding_tests {
     //! D-WS3V3 — start-position seeding + relative-explore gate + the dense
@@ -1770,6 +1961,149 @@ mod seeding_tests {
         let stride = 19 * 19 + 1;
         assert!(board.window_flat_idx(5, 0) < stride, "in-window win maps to a logit slot (injected)");
         assert_eq!(board.window_flat_idx(100, 0), usize::MAX, "off-window win has no dense slot (proven-not-injected)");
+    }
+}
+
+#[cfg(test)]
+mod graph_finalize_tests {
+    //! GNN-integration WP-5b commit A (R5, delta doc §10 test-plan row 2) —
+    //! `finalize_game_graph` LIVE-LOOP wiring test. Drives the real fn
+    //! end-to-end (not just the pure `records::finalize_graph_outcome` helper
+    //! `records.rs` already unit-tests): mocked terminal boards for each
+    //! `terminal_reason` class -> drained `GraphRecord.outcome`/`value_valid`
+    //! must match, AND the `recent_game_results` metadata + win/draw counter
+    //! side effects must fire exactly like `finalize_game`'s dense counterpart.
+    //! `winner()`/`find_winning_line()` scan `board.cells` directly (no bbox /
+    //! `legal_moves()` dependency — verified via source read), so a direct
+    //! cell-insert is a faithful terminal board (mirrors `seeding_tests`'
+    //! `test_dense_offwindow_win_is_proven_not_injected` pattern).
+    use super::*;
+    use crate::board::Cell;
+
+    fn mk_record(current_player: i8) -> GraphRecord {
+        GraphRecord {
+            stones: vec![],
+            visits: vec![],
+            current_player,
+            moves_remaining: 2,
+            ply_index: 0,
+            is_full_search: true,
+            outcome: 0.0,      // placeholder — finalize_game_graph must overwrite
+            value_valid: true, // placeholder — finalize_game_graph must overwrite
+            game_length: 0,    // placeholder — finalize_game_graph must overwrite
+        }
+    }
+
+    type Counters = (AtomicUsize, AtomicU64, AtomicU64, AtomicU64, AtomicU64);
+    fn counters() -> Counters {
+        (AtomicUsize::new(0), AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0))
+    }
+
+    #[test]
+    fn finalize_game_graph_win_loss_split_matches_178() {
+        // 6-in-a-row for Player::One along the q axis.
+        let mut board = Board::new();
+        for q in 0..6i32 {
+            board.cells.insert((q, 0), Cell::P1);
+        }
+        board.ply = 11; // winner short-circuits terminal_reason; game_length = (11+1)/2 = 6
+
+        let gq: Mutex<VecDeque<GraphRecord>> = Mutex::new(VecDeque::new());
+        let rg: Mutex<VecDeque<GameResultRow>> = Mutex::new(VecDeque::new());
+        let (games_completed, x_wins, o_wins, draws, positions_dropped) = counters();
+
+        // Two rows from the SAME game: one recorded when P1 (the eventual
+        // winner) was to move — +1; one when P2 (the loser) was to move — −1.
+        let records = vec![mk_record(1), mk_record(-1)];
+
+        finalize_game_graph(
+            &board, 150, records, vec![(0, 0), (1, 0)], &[],
+            -0.5, -0.5, 10_000, 0, false, 0,
+            &gq, &rg, &games_completed, &x_wins, &o_wins, &draws, &positions_dropped,
+        );
+
+        let drained: Vec<GraphRecord> = gq.lock().unwrap().drain(..).collect();
+        assert_eq!(drained.len(), 2);
+        let winner_row = drained.iter().find(|r| r.current_player == 1).unwrap();
+        let loser_row = drained.iter().find(|r| r.current_player == -1).unwrap();
+        assert_eq!((winner_row.outcome, winner_row.value_valid), (1.0, true));
+        assert_eq!((loser_row.outcome, loser_row.value_valid), (-1.0, true));
+        assert_eq!(winner_row.game_length, 6, "game_length = (ply+1)/2 compound moves");
+
+        assert_eq!(games_completed.load(Ordering::Relaxed), 1);
+        assert_eq!(x_wins.load(Ordering::Relaxed), 1);
+        assert_eq!(o_wins.load(Ordering::Relaxed), 0);
+        assert_eq!(draws.load(Ordering::Relaxed), 0);
+
+        let meta = rg.lock().unwrap();
+        assert_eq!(meta.len(), 1, "one recent_game_results metadata row per game");
+        assert_eq!(meta[0].1, 1, "winner_code == 1 for Player::One");
+    }
+
+    #[test]
+    fn finalize_game_graph_ply_cap_masks_value_valid() {
+        let mut board = Board::new(); // empty — no winner
+        board.ply = 150; // >= max_moves(150) -> terminal_reason 2 (ply-cap)
+
+        let gq: Mutex<VecDeque<GraphRecord>> = Mutex::new(VecDeque::new());
+        let rg: Mutex<VecDeque<GameResultRow>> = Mutex::new(VecDeque::new());
+        let (games_completed, x_wins, o_wins, draws, positions_dropped) = counters();
+
+        finalize_game_graph(
+            &board, 150, vec![mk_record(1)], vec![], &[],
+            /* draw_reward */ -0.1, /* ply_cap_value */ -0.5, 10_000, 0, false, 0,
+            &gq, &rg, &games_completed, &x_wins, &o_wins, &draws, &positions_dropped,
+        );
+
+        let drained: Vec<GraphRecord> = gq.lock().unwrap().drain(..).collect();
+        assert_eq!(drained.len(), 1);
+        assert_eq!(
+            (drained[0].outcome, drained[0].value_valid), (-0.5, false),
+            "ply-cap row pays ply_cap_value and is MASKED (value_valid=false)"
+        );
+        assert_eq!(draws.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn finalize_game_graph_organic_draw_stays_supervised() {
+        let mut board = Board::new(); // empty — no winner
+        board.ply = 5; // < max_moves(150) -> terminal_reason 3 (organic draw)
+
+        let gq: Mutex<VecDeque<GraphRecord>> = Mutex::new(VecDeque::new());
+        let rg: Mutex<VecDeque<GameResultRow>> = Mutex::new(VecDeque::new());
+        let (games_completed, x_wins, o_wins, draws, positions_dropped) = counters();
+
+        finalize_game_graph(
+            &board, 150, vec![mk_record(1)], vec![], &[],
+            /* draw_reward */ -0.1, /* ply_cap_value */ -0.5, 10_000, 0, false, 0,
+            &gq, &rg, &games_completed, &x_wins, &o_wins, &draws, &positions_dropped,
+        );
+
+        let drained: Vec<GraphRecord> = gq.lock().unwrap().drain(..).collect();
+        assert_eq!(drained.len(), 1);
+        assert_eq!(
+            (drained[0].outcome, drained[0].value_valid), (-0.1, true),
+            "organic-draw row pays draw_reward and stays SUPERVISED (value_valid=true)"
+        );
+        assert_eq!(draws.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn finalize_game_graph_caps_queue_at_results_queue_cap() {
+        let board = Board::new();
+        let gq: Mutex<VecDeque<GraphRecord>> = Mutex::new(VecDeque::new());
+        let rg: Mutex<VecDeque<GameResultRow>> = Mutex::new(VecDeque::new());
+        let (games_completed, x_wins, o_wins, draws, positions_dropped) = counters();
+
+        let records: Vec<GraphRecord> = (0..5).map(|_| mk_record(1)).collect();
+        finalize_game_graph(
+            &board, 150, records, vec![], &[],
+            -0.1, -0.5, /* results_queue_cap */ 3, 0, false, 0,
+            &gq, &rg, &games_completed, &x_wins, &o_wins, &draws, &positions_dropped,
+        );
+
+        assert_eq!(gq.lock().unwrap().len(), 3, "backpressure drop caps the graph queue like the dense queue");
+        assert_eq!(positions_dropped.load(Ordering::Relaxed), 2);
     }
 }
 

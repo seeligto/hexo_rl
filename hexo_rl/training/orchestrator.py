@@ -31,12 +31,12 @@ import argparse
 import os
 import sys
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Optional, Union
 
 import structlog
 import torch
 
-from engine import ReplayBuffer
+from engine import HexgBuffer, ReplayBuffer
 from hexo_rl.monitoring.events import emit_event
 from hexo_rl.selfplay.utils import N_ACTIONS as _N_ACTIONS
 from hexo_rl.training.batch_assembly import allocate_batch_buffers
@@ -733,7 +733,7 @@ def init_replay_buffer(
     config: dict,
     train_cfg: dict,
     log: "structlog.stdlib.BoundLogger",
-) -> tuple[ReplayBuffer, list, int, int]:
+) -> tuple[Union[ReplayBuffer, HexgBuffer], list, int, int]:
     """Build the replay buffer and resolve capacity / min_buffer_size /
     weight schedule.
 
@@ -741,7 +741,14 @@ def init_replay_buffer(
     -------
     buffer, buffer_schedule, capacity, min_buf_size
 
-    Mirrors ``scripts/train.py::main`` lines 381-415 verbatim.
+    Mirrors ``scripts/train.py::main`` lines 381-415 verbatim, except for the
+    GNN-integration WP-5b commit A (P1) buffer-class dispatch below — THE ONE
+    RESOLVER (delta doc §1/§8): a ``representation="graph"`` encoding
+    constructs a ``HexgBuffer`` instead of the dense ``ReplayBuffer``; every
+    downstream consumer (``set_weight_schedule``, ``save_to_path``/
+    ``load_from_path``, ``.size``/``.capacity``) is polymorphic on the one
+    object, so no second resolver is needed. A grid encoding is byte-identical
+    to pre-commit-A (``ReplayBuffer`` unconditionally).
     """
     buffer_schedule_raw = train_cfg.get("buffer_schedule", config.get("buffer_schedule", []))
     buffer_schedule = sorted(
@@ -768,7 +775,15 @@ def init_replay_buffer(
     # Byte-pure on no-conflict configs; correct on a metadata-wins resume where the buffer used to
     # size from the pre-checkpoint spec (B5b, design §4 window_set).
     from hexo_rl.config.resolve.encoding import window_set as _window_set
-    buffer = ReplayBuffer(capacity=capacity, encoding=_window_set(config.get("encoding")).name)
+    _spec = _window_set(config.get("encoding"))
+    # P1 — THE ONE RESOLVER (delta doc §1/§8): dispatch on the resolved spec's
+    # representation. `HexgBuffer.new` itself LOUD-rejects a grid encoding
+    # (defense-in-depth if this branch is ever bypassed), so a graph spec can
+    # never silently construct a dense `ReplayBuffer` (contract audit node 7).
+    if bool(getattr(_spec, "is_graph", False)):
+        buffer = HexgBuffer(capacity=capacity, encoding=_spec.name)
+    else:
+        buffer = ReplayBuffer(capacity=capacity, encoding=_spec.name)
 
     glw = train_cfg.get("game_length_weights", config.get("game_length_weights", {}))
     if glw:
@@ -787,7 +802,7 @@ def init_replay_buffer(
 # ── Section 9: buffer restore on resume ──────────────────────────────────────
 def restore_buffer_from_checkpoint(
     args: argparse.Namespace,
-    buffer: ReplayBuffer,
+    buffer: Union[ReplayBuffer, HexgBuffer],
     capacity: int,
     mixing_cfg: dict,
     log: "structlog.stdlib.BoundLogger",
@@ -801,7 +816,18 @@ def restore_buffer_from_checkpoint(
     ``_bp`` is the persist Path (used downstream by the recent buffer
     sidecar load); ``None`` when the persist branch never ran.
 
-    Mirrors ``scripts/train.py::main`` lines 417-436 verbatim.
+    Mirrors ``scripts/train.py::main`` lines 417-436 verbatim, except for the
+    P2 graph loud-fail below (delta doc §4.1, Adjudication 1): the dense
+    branch keeps the pre-existing swallow-and-warn (resilient to a corrupt
+    persist file — run continues on a fresh buffer); a graph buffer
+    RE-RAISES on a restore failure instead. Rationale: for a graph run a
+    HEXG-vs-HEXB (or wrong-encoding) file at the persist path is
+    definitionally a lineage/config error (the exact §RUN3-STEP0 Bug-2 class
+    — a shared un-namespaced ``buffer_persist_path`` silently auto-restoring
+    stale unknown-lineage data), not a transient one; the loud abort is cheap
+    (burns zero GPU-days) and the launch yaml must namespace
+    ``buffer_persist_path`` per §RUN3-STEP0 law so this only fires on a
+    genuine mismatch.
     """
     _MIN_BUFFER_PREFILL_SKIP = 10_000
     _buffer_restored = False
@@ -818,6 +844,15 @@ def restore_buffer_from_checkpoint(
                     log.info("corpus_prefill_running", restored_positions=n_loaded,
                              reason="buffer_too_small", threshold=_MIN_BUFFER_PREFILL_SKIP)
             except Exception as e:
+                if isinstance(buffer, HexgBuffer):
+                    log.error(
+                        "buffer_restore_failed_graph_loud", path=str(_bp), error=str(e),
+                        msg="graph buffer restore failed — re-raising (delta doc §4.1 "
+                            "Adjudication 1 / §RUN3-STEP0): a stale/wrong-format persist "
+                            "file at a graph buffer_persist_path is a lineage error, not "
+                            "a transient. Namespace buffer_persist_path per §RUN3-STEP0.",
+                    )
+                    raise
                 log.warning("buffer_restore_failed", error=str(e))
     if _buffer_restored:
         log.info("corpus_prefill_skipped", msg="buffer well-restored from file",
@@ -914,6 +949,17 @@ def init_recent_buffer(
     supplied, re-resolve the spec from it via the ONE encoding→spec authority
     (``resolve.encoding.window_set``) — a latent-bug fix, byte-pure on no-conflict configs where
     pre- and post-checkpoint encodings agree (design §4 window_set, handoff 6c).
+
+    P3 (GNN-integration WP-5b commit A, delta doc §7) — recency-buffer absorption,
+    write-side half only: for a ``representation="graph"`` spec, ``recent_buffer``
+    stays ``None`` even when ``recency_weight > 0`` — a dense ``RecentBuffer``'s
+    ``state_shape = (n_planes, trunk, trunk)`` is degenerate at a graph spec's
+    ``n_planes=0`` (contract audit node 7 / design §8.5 "dense numpy ring"). The
+    recency EFFECT is sample-side (``HexgBuffer.sample_graph_batch(recent_frac=...)``,
+    commit B — that sampler param does not exist yet); commit A only guarantees the
+    write side does not build a meaningless dense ring. A graph config with
+    ``recency_weight > 0`` therefore has recency INERT until commit B lands — logged
+    loud below so a launch does not silently assume recency is active.
     """
     _recency_weight = float(train_cfg.get("recency_weight", 0.0))
     recent_buffer: RecentBuffer | None = None
@@ -921,23 +967,34 @@ def init_recent_buffer(
         if combined_config is not None:
             from hexo_rl.config.resolve.encoding import window_set as _window_set
             registry_spec = _window_set(combined_config.get("encoding"))
-        _recent_cap = max(256, capacity // 2)
-        recent_buffer = RecentBuffer(
-            capacity=_recent_cap,
-            state_shape=(registry_spec.n_planes, registry_spec.trunk_size, registry_spec.trunk_size),
-            policy_len=registry_spec.policy_logit_count,
-            aux_stride=registry_spec.trunk_size * registry_spec.trunk_size,
-        )
-        log.info("recent_buffer_init", capacity=_recent_cap, recency_weight=_recency_weight,
-                 state_shape=recent_buffer._states.shape[1:], policy_len=registry_spec.policy_logit_count)
-        if _buffer_restored and _bp is not None:
-            _rbp = Path(str(_bp) + ".recent")
-            if _rbp.exists():
-                try:
-                    _rn = recent_buffer.load_from_path(str(_rbp))
-                    log.info("recent_buffer_restored", path=str(_rbp), positions=_rn)
-                except Exception as _re:
-                    log.warning("recent_buffer_restore_failed", error=str(_re))
+        if bool(getattr(registry_spec, "is_graph", False)):
+            log.warning(
+                "recent_buffer_skipped_graph",
+                recency_weight=_recency_weight,
+                msg="recency_weight>0 on a graph run is INERT until commit B lands "
+                    "HexgBuffer.sample_graph_batch(recent_frac=...) — the dense "
+                    "RecentBuffer write-side ring is intentionally skipped for "
+                    "representation=graph (delta doc §7); declare recency_weight:0 "
+                    "in the launch yaml until commit B ships the sampler.",
+            )
+        else:
+            _recent_cap = max(256, capacity // 2)
+            recent_buffer = RecentBuffer(
+                capacity=_recent_cap,
+                state_shape=(registry_spec.n_planes, registry_spec.trunk_size, registry_spec.trunk_size),
+                policy_len=registry_spec.policy_logit_count,
+                aux_stride=registry_spec.trunk_size * registry_spec.trunk_size,
+            )
+            log.info("recent_buffer_init", capacity=_recent_cap, recency_weight=_recency_weight,
+                     state_shape=recent_buffer._states.shape[1:], policy_len=registry_spec.policy_logit_count)
+            if _buffer_restored and _bp is not None:
+                _rbp = Path(str(_bp) + ".recent")
+                if _rbp.exists():
+                    try:
+                        _rn = recent_buffer.load_from_path(str(_rbp))
+                        log.info("recent_buffer_restored", path=str(_rbp), positions=_rn)
+                    except Exception as _re:
+                        log.warning("recent_buffer_restore_failed", error=str(_re))
     return recent_buffer, _recency_weight
 
 

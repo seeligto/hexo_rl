@@ -32,6 +32,11 @@ pub(super) struct WorkerGeometry {
     /// `LegalSetScatterMax` — the worker uses the ragged legal-set MCTS prior /
     /// improved-policy target (no off-window drop) instead of the dense path.
     pub(super) legal_set: bool,
+    /// GNN-integration WP-5b commit A: true when `spec.representation ==
+    /// "graph"`. Gates the record/finalize dispatch (`inner.rs`) between the
+    /// dense K-cluster path and the whole-board HEXG path. False for every
+    /// grid encoding — the dense path is a never-taken branch.
+    pub(super) is_graph: bool,
 }
 
 #[derive(Clone)]

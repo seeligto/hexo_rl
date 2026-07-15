@@ -156,11 +156,28 @@ impl SelfPlayRunner {
                 None => true, // v6 default
             };
             // §D-MULTICLUSTER-S0: legal-set (no off-window drop) path selector.
+            // GNN-integration WP-5b commit A (R1, delta doc §3): a graph spec
+            // declares `policy_pool = "none"` (whole-board — no K-cluster scatter-
+            // max), so the pre-existing `policy_pool`-derived test alone resolves
+            // FALSE for graph. Force `legal_set = true` whenever `is_graph()` so
+            // `play_one_move` extracts `MovePolicy::Ls` (the LegalSetPolicy the
+            // WP-3 graph search already assembles) instead of the dense `Dense`
+            // extractor misreading an Ls-expanded tree. Gated on `is_graph()` —
+            // every grid spec keeps its prior policy_pool-derived value, byte-
+            // identical.
             let legal_set: bool = match self.registry_spec {
-                Some(s) => matches!(s.policy_pool, crate::encoding::PolicyPool::LegalSetScatterMax),
+                Some(s) => s.is_graph()
+                    || matches!(s.policy_pool, crate::encoding::PolicyPool::LegalSetScatterMax),
                 None => false,
             };
-            // Wave 10 Batch A: bundle 5 per-worker geometry scalars into
+            // GNN-integration WP-5b commit A (R2): true for a `representation ==
+            // "graph"` spec. Gates the record/finalize dispatch in `inner.rs`
+            // between the dense K-cluster path and the whole-board HEXG path.
+            let is_graph: bool = match self.registry_spec {
+                Some(s) => s.is_graph(),
+                None => false,
+            };
+            // Wave 10 Batch A: bundle 6 per-worker geometry scalars into
             // `WorkerGeometry` (`Copy`, ~32 B) so `run_worker_thread` arity
             // stays ≤ 7 (avoids clippy::too_many_arguments; preserves F1
             // 18 → 18 per U10/J.2.a). Destructured back to local scalars
@@ -172,6 +189,7 @@ impl SelfPlayRunner {
                 agg_trunk_sz,
                 has_pass_slot,
                 legal_set,
+                is_graph,
             };
             // §P51: `sym_tables_static` is `&'static SymTables` (Copy); each
             // closure captures it by `move` with zero allocation cost. No
@@ -232,6 +250,10 @@ impl SelfPlayRunner {
             batcher: self.batcher.clone(),
             results_queue: self.results.clone(),
             recent_game_results: self.recent_game_results.clone(),
+            // GNN-integration WP-5b commit A (R6): parallel graph queue, cheap
+            // Arc::clone; idle for every grid spec (only locked on the
+            // `is_graph` finalize branch).
+            graph_results_queue: self.graph_results.clone(),
         };
         let params_proto = WorkerParams {
             max_moves: self.max_moves_per_game,
