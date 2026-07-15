@@ -21,3 +21,12 @@ POLICY_FC_KEYS: tuple[str, ...] = (
     "policy.fc.weight",
     "policy.weight",
 )
+
+# GNN-integration WP-4 fix pass (review finding 3) — the graph-representation
+# state-dict marker. A `GnnNet` / strix `HeXONet` state dict has NO grid
+# marker at all (`trunk.input_conv(.conv)?.weight`); its unambiguous
+# signature is the GINE trunk's first Linear
+# (`hexo_rl.bots.strix_v1_net.RepresentationNetwork.input_proj`). Canonical
+# single definition — `compat.py`, `resolvers.py`, and any future detector
+# import from here (never inline the string).
+GNN_GRAPH_MARKER_KEY: str = "representation.input_proj.weight"

@@ -13,7 +13,12 @@ import pytest
 import torch
 
 from hexo_rl.encoding import lookup
-from hexo_rl.model.build_net import GNN_CONFIG_DEFAULTS, RepresentationMismatch, build_net
+from hexo_rl.model.build_net import (
+    GNN_CONFIG_DEFAULTS,
+    RepresentationMismatch,
+    build_net,
+    resolve_value_head_type,
+)
 from hexo_rl.model.gnn_net import GnnNet
 from hexo_rl.model.network import HexTacToeNet
 
@@ -120,3 +125,46 @@ def test_unknown_representation_raises():
 
     with pytest.raises(RepresentationMismatch, match="RepresentationMismatch"):
         build_net(_FakeSpec(), {})
+
+
+# ── resolve_value_head_type — the ONE shared representation-aware default
+# (WP-4 review finding 1, MUST-FIX) ─────────────────────────────────────────
+
+
+def test_resolve_vht_graph_omitted_defaults_dist65():
+    assert resolve_value_head_type(lookup("gnn_axis_v1"), {}) == "dist65"
+    assert resolve_value_head_type(lookup("gnn_axis_v1"), None) == "dist65"
+
+
+def test_resolve_vht_graph_explicit_null_defaults_dist65():
+    """`value_head_type: null` in a graph config resolves dist65 — the old
+    lifecycle `str(config.get(...))` wrap turned this into the literal
+    string 'None'."""
+    assert resolve_value_head_type(lookup("gnn_axis_v1"), {"value_head_type": None}) == "dist65"
+
+
+def test_resolve_vht_grid_omitted_defaults_scalar():
+    assert resolve_value_head_type(lookup("v6"), {}) == "scalar"
+    assert resolve_value_head_type(lookup("v6_live2_ls"), None) == "scalar"
+
+
+def test_resolve_vht_declared_wins_both_representations():
+    assert resolve_value_head_type(lookup("v6"), {"value_head_type": "dist65"}) == "dist65"
+    # A declared-but-wrong graph value still travels — build_net's graph
+    # branch is where it dies loud (RepresentationMismatch), keeping the
+    # resolver a pure default rule, not a validator.
+    assert resolve_value_head_type(lookup("gnn_axis_v1"), {"value_head_type": "scalar"}) == "scalar"
+
+
+def test_resolve_vht_none_spec_defaults_grid_scalar():
+    assert resolve_value_head_type(None, {}) == "scalar"
+
+
+def test_graph_dispatch_launch_config_without_value_head_type_builds():
+    """The realistic operator launch config: graph encoding, value_head_type
+    never declared. Pre-fix every production call site defaulted it to
+    'scalar' and build_net raised — the finding-1 landmine."""
+    spec = lookup("gnn_axis_v1")
+    config: dict = {}
+    net = build_net(spec, config, value_head_type=resolve_value_head_type(spec, config))
+    assert isinstance(net, GnnNet)

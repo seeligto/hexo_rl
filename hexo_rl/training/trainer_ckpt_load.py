@@ -615,7 +615,7 @@ def load_checkpoint(
         # from what was actually trained — the same F1 class the C7
         # red-team named for the BC warm-start transfer).
         assert_full_gnn_checkpoint_or_raise(model_state, checkpoint_label=str(checkpoint_path))
-        from hexo_rl.model.build_net import build_net
+        from hexo_rl.model.build_net import build_net, resolve_value_head_type
         _gnn_inferred = infer_gnn_hparams_from_state_dict(model_state)
         # Only the `gnn_*`-prefixed keys are `build_net` config knobs
         # (node_feat_dim/edge_feat_dim come from the registry spec, not
@@ -626,7 +626,10 @@ def load_checkpoint(
         for _gnn_key, _gnn_val in _gnn_inferred.items():
             if _gnn_key.startswith("gnn_"):
                 config[_gnn_key] = _gnn_val
-        config["value_head_type"] = config.get("value_head_type", "dist65")
+        # Representation-aware default via the ONE shared resolver (WP-4
+        # review finding 1) — declared config value wins, else dist65 for
+        # this (graph) spec.
+        config["value_head_type"] = resolve_value_head_type(resolved_spec, config)
         if "n_value_bins" in _gnn_inferred:
             config["n_value_bins"] = _gnn_inferred["n_value_bins"]
         model = build_net(

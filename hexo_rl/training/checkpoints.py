@@ -86,6 +86,8 @@ def infer_model_hparams(state_dict: Dict[str, torch.Tensor]) -> Dict[str, int]:
     return inferred
 
 
+from hexo_rl.encoding._probes import GNN_GRAPH_MARKER_KEY as _GNN_GRAPH_MARKER_KEY
+
 _GNN_CONV_LAYER_PATTERN = re.compile(r"^representation\.convs\.(\d+)\.")
 
 
@@ -118,7 +120,7 @@ def infer_gnn_hparams_from_state_dict(state_dict: Dict[str, torch.Tensor]) -> Di
     """
     inferred: Dict[str, int] = {}
 
-    input_proj_w = state_dict.get("representation.input_proj.weight")
+    input_proj_w = state_dict.get(_GNN_GRAPH_MARKER_KEY)
     if input_proj_w is not None and input_proj_w.ndim == 2:
         inferred["gnn_hidden"] = int(input_proj_w.shape[0])
         inferred["node_feat_dim"] = int(input_proj_w.shape[1])
@@ -170,18 +172,21 @@ def assert_full_gnn_checkpoint_or_raise(
     this gives the SAME failure a clear diagnosis up front instead of a
     generic missing-key dump.
     """
-    has_graph_trunk = "representation.input_proj.weight" in state_dict
+    has_graph_trunk = _GNN_GRAPH_MARKER_KEY in state_dict
     has_dist65_value_head = "value_head.fc2_bins.weight" in state_dict
     if has_graph_trunk and not has_dist65_value_head:
         raise ValueError(
             f"{checkpoint_label}: graph state dict has representation.*/"
             "policy_head.* keys but NO value_head.fc2_bins.weight — this "
             "looks like a BC-prefit-only state dict (e.g. gnn_bc_040000.pt), "
-            "not a full production GnnNet checkpoint. The BC-prefit "
-            "warm-start transfer is a separate, not-yet-built loader "
-            "(docs/designs/gnn_integration_scope.md §C7); this loader only "
+            "not a full production GnnNet checkpoint. This loader only "
             "resumes/evaluates a FULL GnnNet checkpoint (representation + "
-            "policy_head + value_head all present)."
+            "policy_head + dist65 value_head all present). The BC-prefit "
+            "warm-start path is `hexo_rl.model.gnn_net."
+            "load_representation_policy_from_bc` (transfers representation+"
+            "policy onto a fresh GnnNet; the launch-integrated warm-start "
+            "loader is separate, not-yet-built — "
+            "docs/designs/gnn_integration_scope.md §C7)."
         )
 
 

@@ -58,6 +58,7 @@ def build_inference_model(
 ) -> tuple[torch.nn.Module, InfModelArch]:
     # ── Inference model — separate instance owned by InferenceServer ──────────
     from hexo_rl.encoding import resolve_from_config as _registry_resolve
+    from hexo_rl.model.build_net import build_net, resolve_value_head_type
     _spec              = _registry_resolve(trainer.config)
     board_size         = _spec.trunk_size
     res_blocks         = int(trainer.config.get("res_blocks",         MODEL_HPARAM_DEFAULTS["res_blocks"]))
@@ -65,7 +66,13 @@ def build_inference_model(
     in_channels        = int(trainer.config.get("in_channels",        MODEL_HPARAM_DEFAULTS["in_channels"]))
     se_reduction_ratio = int(trainer.config.get("se_reduction_ratio", MODEL_HPARAM_DEFAULTS["se_reduction_ratio"]))
     input_channels     = trainer.config.get("input_channels", None)
-    value_head_type    = str(trainer.config.get("value_head_type",    MODEL_HPARAM_DEFAULTS["value_head_type"]))
+    # Representation-aware default (WP-4 review finding 1) — the shared
+    # resolver: declared config value wins; omitted (or explicitly null)
+    # defaults to dist65 for a graph spec, "scalar" for grid (byte-identical
+    # to the old `str(config.get(..., "scalar"))` for every grid config —
+    # and the old `str()` wrap turned an explicit null into the literal
+    # string "None", which the resolver also fixes).
+    value_head_type    = resolve_value_head_type(_spec, trainer.config)
     n_value_bins       = int(trainer.config.get("n_value_bins",       MODEL_HPARAM_DEFAULTS["n_value_bins"]))
     # gnn_* hparams (graph path only; harmless no-op dict for a grid run) —
     # threaded onto `arch` so `build_eval_model` rebuilds the identical GNN
@@ -83,7 +90,6 @@ def build_inference_model(
     # `hexo_rl.training.orchestrator.init_trainer`'s fresh-run branch for the
     # full rationale; `_spec.representation` picks HexTacToeNet ("grid",
     # byte-identical kwargs) vs GnnNet ("graph").
-    from hexo_rl.model.build_net import build_net
     inf_model = build_net(
         _spec,
         trainer.config,

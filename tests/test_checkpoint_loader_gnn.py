@@ -17,11 +17,15 @@ import torch
 
 from hexo_rl.encoding import lookup as registry_lookup
 from hexo_rl.eval.checkpoint_loader import load_model_with_encoding
+from hexo_rl.model.build_net import RepresentationMismatch
 from hexo_rl.model.gnn_net import GnnNet
 from hexo_rl.model.network import HexTacToeNet
 
 _FAST_RES_BLOCKS = 2
 _FAST_FILTERS = 16
+
+REPO = Path(__file__).resolve().parents[1]
+BANKED_BC_CHECKPOINT = REPO / "checkpoints" / "probes" / "gnn_bc" / "gnn_bc_040000.pt"
 
 
 def _small_gnn_net() -> GnnNet:
@@ -93,6 +97,73 @@ def test_gnn_bc_shaped_state_dict_named_raise(tmp_path):
                 "metadata": {"encoding_name": "gnn_axis_v1"}}, ckpt)
     with pytest.raises(ValueError, match="BC-prefit-only"):
         load_model_with_encoding(ckpt, torch.device("cpu"))
+
+
+# ── WP-4 fix pass (review finding 2) — unknown STAMP label falls through to
+# state-dict detection instead of dying generic ─────────────────────────────
+
+
+def test_unknown_stamp_label_falls_through_to_detection_full_gnn(tmp_path):
+    """A full GnnNet checkpoint stamped with an UNREGISTERED label (the
+    probe pipeline's 'strix_axis_graph', train_bc.py) must fall through to
+    shape detection (logged), resolve gnn_axis_v1, and round-trip — not die
+    'unknown encoding label'."""
+    payload = {
+        "model_state_dict": _small_gnn_net().state_dict(),
+        "encoding": "strix_axis_graph",  # top-level stamp, never registered
+    }
+    ckpt = tmp_path / "gnn_unknown_stamp.pt"
+    torch.save(payload, ckpt)
+    model, spec, label = load_model_with_encoding(ckpt, torch.device("cpu"))
+    assert label == "gnn_axis_v1"
+    assert isinstance(model, GnnNet)
+
+
+@pytest.mark.skipif(not BANKED_BC_CHECKPOINT.exists(), reason="banked BC-prefit checkpoint not present")
+def test_real_banked_bc_prefit_reaches_named_diagnostic():
+    """WP-4 review finding 2, the exact repro: the REAL banked
+    gnn_bc_040000.pt carries the unregistered 'strix_axis_graph' stamp;
+    pre-fix the eval loader died 'unknown encoding label' before
+    assert_full_gnn_checkpoint_or_raise could fire. Post-fix the unknown
+    stamp falls through to detection -> gnn_axis_v1 -> _build_gnn_model ->
+    the actionable BC-prefit raise, pointing at the warm-start path."""
+    with pytest.raises(ValueError, match="BC-prefit-only") as ei:
+        load_model_with_encoding(BANKED_BC_CHECKPOINT, torch.device("cpu"))
+    # The message points the operator at the warm-start transfer path.
+    assert "load_representation_policy_from_bc" in str(ei.value)
+
+
+def test_unknown_declared_encoding_still_raises(tmp_path):
+    """The fall-through is stamp-only: a caller-DECLARED unknown name is an
+    assertion and stays loud (never silently re-detected)."""
+    ckpt = tmp_path / "gnn_weights_only2.pt"
+    torch.save(_small_gnn_net().state_dict(), ckpt)
+    with pytest.raises(ValueError):
+        load_model_with_encoding(
+            ckpt, torch.device("cpu"), declared_encoding="strix_axis_graph",
+        )
+
+
+# ── WP-4 fix pass (review finding 5) — grid-declared-on-GNN-sd named raise ──
+
+
+def test_grid_declared_on_gnn_state_dict_named_raise(tmp_path):
+    """Reverse-F1 diagnosability: declaring a grid encoding for a bare GNN
+    state dict used to die with a raw KeyError('trunk.input_conv.weight').
+    Now raises the named RepresentationMismatch telling the user the state
+    dict is graph-shaped."""
+    ckpt = tmp_path / "gnn_bare_weights.pt"
+    torch.save(_small_gnn_net().state_dict(), ckpt)
+    with pytest.raises(RepresentationMismatch, match="GRAPH-shaped"):
+        load_model_with_encoding(ckpt, torch.device("cpu"), declared_encoding="v6")
+
+
+def test_v8_declared_on_gnn_state_dict_named_raise(tmp_path):
+    """Same reverse-F1 direction through the kata (v8) builder."""
+    ckpt = tmp_path / "gnn_bare_weights_v8.pt"
+    torch.save(_small_gnn_net().state_dict(), ckpt)
+    with pytest.raises(RepresentationMismatch, match="GRAPH-shaped"):
+        load_model_with_encoding(ckpt, torch.device("cpu"), declared_encoding="v8")
 
 
 # ── grid unaffected (has_pass_slot-only dispatch preserved) ────────────────

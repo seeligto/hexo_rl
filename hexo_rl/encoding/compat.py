@@ -24,6 +24,7 @@ from __future__ import annotations
 from typing import Any, Mapping
 
 from hexo_rl.encoding._probes import FIRST_CONV_KEYS as _FIRST_CONV_KEYS
+from hexo_rl.encoding._probes import GNN_GRAPH_MARKER_KEY as _GNN_GRAPH_MARKER_KEY
 from hexo_rl.encoding._probes import POLICY_FC_KEYS as _POLICY_FC_KEYS
 from hexo_rl.encoding.registry import EncodingRegistryError, _load
 
@@ -76,10 +77,22 @@ def infer_encoding_from_state_dict(
 ) -> str:
     """Return registered encoding name for a legacy checkpoint.
 
-    Filename heuristic first (longest-first); falls back to state-dict
-    shape inference. Raises `EncodingRegistryError` on ambiguity or
-    no-match.
+    Graph-marker check FIRST (WP-4 review finding 3), then filename
+    heuristic (longest-first), then state-dict shape inference. Raises
+    `EncodingRegistryError` on ambiguity or no-match.
     """
+    # GNN-integration WP-4 fix pass (review finding 3) — the graph marker
+    # MUST beat the filename substring: a bare GNN state dict saved under a
+    # grid-substring filename (e.g. `gnn_v6_checkpoint_bare.pt`) used to
+    # SILENTLY grid-resolve to v6 here — the exact F1-class
+    # (D-FORENSIC) silent-misdetect this program exists to kill, reachable
+    # live via `resolve_from_checkpoint` / `resolve_encoding_for_eval`.
+    # The state dict's own shape is ground truth; a filename is a hint.
+    # (Also kills the `test_t10_manifest.py::test_shape_fallback`
+    # filename-beats-shape flake class at its root for graph state dicts.)
+    if _GNN_GRAPH_MARKER_KEY in state_dict:
+        return "gnn_axis_v1"
+
     name = _filename_match(path_hint)
     if name is not None:
         return name

@@ -52,6 +52,37 @@ class RepresentationMismatch(ValueError):
         super().__init__(f"RepresentationMismatch: {msg}")
 
 
+def resolve_value_head_type(spec: Any, config: Optional[Mapping[str, Any]] = None) -> str:
+    """Representation-aware ``value_head_type`` default — the ONE shared
+    resolver for every merge point that feeds ``build_net`` (WP-4 review
+    finding 1, MUST-FIX).
+
+    A declared config value always wins. When the config omits the key (or
+    explicitly nulls it), the default follows the representation:
+    ``"dist65"`` for a graph spec — ``GnnNet`` ships only
+    ``GnnDist65ValueHead``, and the blanket ``"scalar"`` default
+    (``MODEL_HPARAM_DEFAULTS``) made every graph launch that didn't declare
+    ``value_head_type: dist65`` raise ``RepresentationMismatch`` before
+    reaching the net (the "omit it" advice in that error was unreachable
+    from any production call site) — else the canonical grid default
+    (``"scalar"``), byte-identical to the pre-WP-4 ``config.get(...,
+    MODEL_HPARAM_DEFAULTS["value_head_type"])`` at every grid call site.
+
+    Consumers: ``orchestrator.init_trainer`` (fresh run, 11a),
+    ``lifecycle.build_inference_model`` (11b; ``build_eval_model`` +
+    ``anchor.resolve_anchor`` inherit via ``InfModelArch.value_head_type``),
+    ``anchor.resolve_anchor`` (11c, direct-call fallback), and the C7 resume
+    graph branch (``trainer_ckpt_load.load_checkpoint``).
+    """
+    declared = (config or {}).get("value_head_type")
+    if declared is not None:
+        return str(declared)
+    if getattr(spec, "representation", "grid") == "graph":
+        return "dist65"
+    from hexo_rl.training.model_defaults import MODEL_HPARAM_DEFAULTS
+    return str(MODEL_HPARAM_DEFAULTS["value_head_type"])
+
+
 # GNN hparam config keys, with defaults mirroring GnnNet's own ctor defaults
 # (the probe-284k class that carries the +414 [+320,+560] BT-Elo evidence,
 # `gnn_net.py` module docstring "Net-scale ruling"). A launch config does

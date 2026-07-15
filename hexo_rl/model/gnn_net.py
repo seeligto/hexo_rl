@@ -269,6 +269,9 @@ def load_representation_policy_from_bc(
     ``torch.allclose`` against the source — the F1 guard: a silent key-mismatch
     drop under `strict=False` is exactly the failure class that self-played the
     wrong representation for 272k+ steps undetected (`d-forensic-f1-lineage...`).
+    Scope (by design): the landed-verify proves the LOAD landed what the file
+    said — it does NOT (and cannot) validate that the file's own contents are
+    sane; shape-preserving corruption inside the source passes it.
 
     Returns ``{"loaded_keys": [...], "verified_tensors": int}``.
     Raises ``RuntimeError`` on key mismatch or a failed landed-verify.

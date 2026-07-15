@@ -470,9 +470,33 @@ def load_model_with_encoding(
     try:
         _registry_lookup(label)
     except EncodingRegistryError as exc:
-        raise ValueError(
-            f"checkpoint {ckpt_path}: unknown encoding label {label!r}"
-        ) from exc
+        # WP-4 review finding 2 — an UNKNOWN *checkpoint stamp* label (never
+        # a declared/override name, which are caller assertions and must
+        # stay loud) falls through to state-dict detection instead of dying
+        # generic. Concrete case: the banked BC-prefit artifacts
+        # (`checkpoints/probes/gnn_bc/gnn_bc_*.pt`) carry a top-level
+        # `encoding: "strix_axis_graph"` stamp (`train_bc.py`) that was
+        # never registered — the generic "unknown encoding label" raise
+        # short-circuited BEFORE `_build_gnn_model`'s actionable
+        # `assert_full_gnn_checkpoint_or_raise` diagnostic could fire.
+        # Detection is shape-marker-driven (`detect_encoding_label`,
+        # strict), so a garbage state dict still dies loud here.
+        if (
+            declared_name is None
+            and override_name is None
+            and label == ckpt_stamp_name
+        ):
+            _log.warning(
+                "unknown_ckpt_encoding_stamp_falling_through_to_detection",
+                checkpoint=str(ckpt_path),
+                stamp=label,
+                stamp_source=ckpt_stamp_source,
+            )
+            label = detect_encoding_label(ckpt_path, state)
+        else:
+            raise ValueError(
+                f"checkpoint {ckpt_path}: unknown encoding label {label!r}"
+            ) from exc
 
     if label == "gnn_axis_v1":
         # GNN-integration WP-4 (C4) — graph representation, no plane/pass-slot
@@ -602,6 +626,10 @@ def _build_gnn_model(state: dict, spec: EncodingSpec):
     # above). strict=True already guarantees full landing for this state
     # dict (no legacy tower.*-alias tolerance exists on GnnNet); this is a
     # belt-and-suspenders parity re-check, not the only defense.
+    # Scope (by design, WP-4 review finding 4): this verifies the LOAD
+    # landed what the file said — it does NOT validate the file's own
+    # contents; shape-preserving corruption (e.g. a transposed SQUARE
+    # tensor) inside the checkpoint passes both strict-load and allclose.
     reloaded = model.state_dict()
     for key, src in state.items():
         dst = reloaded.get(key)
@@ -615,7 +643,32 @@ def _build_gnn_model(state: dict, spec: EncodingSpec):
     return model
 
 
+def _reject_graph_shaped_state_for_grid_spec(state: dict, spec: EncodingSpec, missing_key: str) -> None:
+    """WP-4 fix pass (review finding 5) — reverse-F1 diagnosability.
+
+    A GRID spec (declared/stamped/inferred) handed a GRAPH-shaped state dict
+    used to die with a raw ``KeyError: 'trunk.input_conv.weight'`` — loud,
+    but zero hint that the state dict is a GNN net mis-declared as grid.
+    Raise the named ``RepresentationMismatch`` family error instead when the
+    graph marker is present; a genuinely-malformed grid state dict keeps its
+    original ``KeyError`` behavior (the caller's indexing raises next).
+    """
+    from hexo_rl.encoding._probes import GNN_GRAPH_MARKER_KEY
+    from hexo_rl.model.build_net import RepresentationMismatch
+
+    if missing_key not in state and GNN_GRAPH_MARKER_KEY in state:
+        raise RepresentationMismatch(
+            f"encoding {spec.name!r} (representation='grid') declared for a "
+            f"GRAPH-shaped state dict — no {missing_key!r}, but the GNN "
+            f"marker {GNN_GRAPH_MARKER_KEY!r} is present. This checkpoint "
+            "is a GnnNet (graph representation, encoding 'gnn_axis_v1'); "
+            "fix the declared/stamped encoding instead of loading it as a "
+            "grid CNN."
+        )
+
+
 def _build_min_max_model(state: dict, spec: EncodingSpec) -> HexTacToeNet:
+    _reject_graph_shaped_state_for_grid_spec(state, spec, "trunk.input_conv.weight")
     inp_w = state["trunk.input_conv.weight"]
     filters = int(inp_w.shape[0])
     in_channels = int(inp_w.shape[1])
@@ -707,6 +760,7 @@ def _build_kata_model(state: dict, spec: EncodingSpec) -> HexTacToeNet:
         "trunk.input_conv.conv.weight" if canvas_realness
         else "trunk.input_conv.weight"
     )
+    _reject_graph_shaped_state_for_grid_spec(state, spec, inp_w_key)
     inp_w = state[inp_w_key]
     filters = int(inp_w.shape[0])
     in_channels = int(inp_w.shape[1])

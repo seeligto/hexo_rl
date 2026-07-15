@@ -230,3 +230,42 @@ def test_compat_infer_ambiguous_raises():
 def test_compat_infer_no_probe_keys_raises():
     with pytest.raises(EncodingRegistryError):
         infer_encoding_from_state_dict({"foo": torch.zeros(1)}, "")
+
+
+# ── GNN-integration WP-4 fix pass (review finding 3) — graph marker beats
+# filename substring in the compat resolver ──────────────────────────────────
+
+
+def _gnn_marker_state_dict() -> dict:
+    """Minimal graph-shaped state dict — the marker key is what detection
+    keys on (`hexo_rl.encoding._probes.GNN_GRAPH_MARKER_KEY`)."""
+    return {
+        "representation.input_proj.weight": torch.zeros(128, 11),
+        "representation.input_proj.bias": torch.zeros(128),
+        "policy_head.mlp.0.weight": torch.zeros(128, 512),
+    }
+
+
+def test_compat_graph_marker_beats_grid_filename_substring():
+    """Pre-fix SILENT-CORRUPT (WP-4 review finding 3): a bare GNN state dict
+    saved under a filename containing a registered grid substring ('v6')
+    silently grid-resolved via `_filename_match`. The state dict's own graph
+    marker must win over any filename hint."""
+    sd = _gnn_marker_state_dict()
+    assert infer_encoding_from_state_dict(sd, "checkpoints/gnn_v6_bare.pt") == "gnn_axis_v1"
+    # Broader grid-substring variants of the same trap.
+    assert infer_encoding_from_state_dict(sd, "gnn_v6_checkpoint_bare.pt") == "gnn_axis_v1"
+    assert infer_encoding_from_state_dict(sd, "v8_gnn_export.pt") == "gnn_axis_v1"
+
+
+def test_compat_graph_marker_wins_with_no_filename_hint():
+    sd = _gnn_marker_state_dict()
+    assert infer_encoding_from_state_dict(sd, "") == "gnn_axis_v1"
+
+
+def test_compat_grid_sd_with_gnn_in_filename_still_resolves_grid():
+    """The inverse direction must NOT regress: a grid state dict whose
+    filename happens to contain 'gnn' has no graph marker → the pre-existing
+    filename/shape chain resolves it exactly as before."""
+    sd = _synthetic_state_dict(8, 626)  # v6w25 — unique by shape
+    assert infer_encoding_from_state_dict(sd, "gnn_experiment_dir/ckpt.pt") == "v6w25"

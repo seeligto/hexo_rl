@@ -690,8 +690,21 @@ def init_trainer(
         # encoding); `GnnNet` for "graph" — the SILENT-CORRUPT hole this
         # closes (a `representation=graph` config used to build a CNN here
         # unconditionally and self-play it with no error).
-        from hexo_rl.model.build_net import build_net
+        # value_head_type default is representation-aware (WP-4 review
+        # finding 1): a graph config that never declares it resolves to
+        # dist65, not the grid "scalar" default (which raised
+        # RepresentationMismatch on every undeclared graph launch).
+        from hexo_rl.model.build_net import build_net, resolve_value_head_type
         _fresh_spec = _registry_resolve(combined_config)
+        _fresh_vht = resolve_value_head_type(_fresh_spec, combined_config)
+        if getattr(_fresh_spec, "representation", "grid") == "graph":
+            # Persist the resolved dist65 default into the config the Trainer
+            # owns (and bakes into every checkpoint) so downstream consumers
+            # (lifecycle rebuilds, resume, warm-start guards) read the SAME
+            # resolution instead of re-deriving. Graph-only: a grid config
+            # keeps its pre-WP-4 byte-identical contents (key stays absent
+            # when undeclared).
+            combined_config["value_head_type"] = _fresh_vht
         model = build_net(
             _fresh_spec,
             combined_config,
@@ -700,7 +713,7 @@ def init_trainer(
             filters=filters,
             in_channels=in_channels_arg,
             input_channels=input_channels_cfg,
-            value_head_type=combined_config.get("value_head_type", _MHPD["value_head_type"]),
+            value_head_type=_fresh_vht,
             n_value_bins=combined_config.get("n_value_bins", _MHPD["n_value_bins"]),
         )
         trainer = Trainer(model, combined_config, checkpoint_dir=args.checkpoint_dir, device=device)
@@ -709,7 +722,7 @@ def init_trainer(
             model_params=sum(p.numel() for p in model.parameters()),
             in_channels=in_channels_arg,
             input_channels=list(input_channels_cfg) if input_channels_cfg is not None else None,
-            value_head_type=combined_config.get("value_head_type", _MHPD["value_head_type"]),
+            value_head_type=_fresh_vht,
         )
     return trainer, board_size
 

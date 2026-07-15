@@ -229,6 +229,47 @@ def test_resolve_anchor_fresh_init_graph_builds_gnn_net(mock_save, mock_load, tm
     mock_save.assert_called_once()
 
 
+@patch("hexo_rl.training.anchor.load_best_model_resilient", return_value=None)
+@patch("hexo_rl.training.anchor.save_best_model_atomic")
+def test_resolve_anchor_fresh_init_graph_without_value_head_type(mock_save, mock_load, tmp_path):
+    """WP-4 review finding 1 (MUST-FIX): graph config that never declares
+    value_head_type AND a caller that omits the value_head_type param
+    (default now None -> representation-aware resolve). Pre-fix the param
+    default was 'scalar' and build_net raised RepresentationMismatch."""
+    from hexo_rl.model.gnn_net import GnnNet
+
+    device = torch.device("cpu")
+    real_model = GnnNet(hidden=16, num_layers=2, policy_hidden=8, value_hidden=4)
+    trainer = MagicMock(spec=["model", "step", "inference_state_dict"])
+    trainer.model = real_model
+    trainer.step = 4
+    trainer.inference_state_dict.return_value = real_model.state_dict()
+
+    graph_config = {
+        "encoding": "gnn_axis_v1",
+        # NO value_head_type key — the realistic operator launch config.
+        "gnn_hidden": 16,
+        "gnn_num_layers": 2,
+        "gnn_policy_hidden": 8,
+        "gnn_value_hidden": 4,
+    }
+
+    state = resolve_anchor(
+        eval_pipeline=object(),
+        eval_ext_config=_ext_cfg(str(tmp_path / "best_model.pt")),
+        inf_model=MagicMock(spec=["in_channels", "load_state_dict"]),
+        trainer=trainer,
+        args=MagicMock(checkpoint_dir=str(tmp_path)),
+        config=graph_config,
+        device=device,
+        board_size=19, res_blocks=1, filters=16,
+        in_channels=8, input_channels=None, se_reduction_ratio=4,
+        # value_head_type deliberately OMITTED (param default None).
+    )
+    assert isinstance(state.best_model, GnnNet)
+    assert state.best_model.value_head.fc2_bins.out_features == 65
+
+
 def test_resolve_anchor_fresh_init_empty_config_still_grid(tmp_path):
     """`config={}` (every pre-WP-4 caller) resolves to the v6 grid default —
     unchanged behavior, no regression from threading `config` into
@@ -256,6 +297,9 @@ def test_resolve_anchor_fresh_init_empty_config_still_grid(tmp_path):
             in_channels=8, input_channels=None, se_reduction_ratio=4,
         )
     assert isinstance(state.best_model, HexTacToeNet)
+    # Omitted value_head_type param on a grid config resolves "scalar" —
+    # byte-identical to the pre-fix `= "scalar"` signature default.
+    assert state.best_model.value_head_type == "scalar"
 
 
 def test_resilient_load_foreign_bootstrap_mismatch_skips_not_raises(

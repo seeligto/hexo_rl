@@ -1,6 +1,10 @@
 # WP-4 — registry-driven model construction + loader family (C4 subset)
 
-**Status: DONE.** Kills the three construction-family SILENT-CORRUPT sites (contract audit
+**Status: DONE (+ review fix pass applied — see §7).** Review verdict was
+REVIEW-FIXES-REQUIRED (`WP4_review.md`, commit `f30cc43`); all four directed fixes landed,
+suite re-verified green.
+
+**Status (original build):** Kills the three construction-family SILENT-CORRUPT sites (contract audit
 rows 11a-c) via one `build_net(spec, config, **kwargs)` authority, and converts the two
 loader-family rows (11d-e) from a confusing deep-strict-load crash / a hard raise into a
 correct RAGGED-OK graph path. Full suite green (details below). Worktree
@@ -189,3 +193,83 @@ pre-existing (unrelated to this change — spot-checked, no WP-4 test is skipped
   confirmed via `git status` throughout; those are the concurrent agent's files (WP-3 seam work,
   already landed dormant at `871ea41`/`fc9d3bb`). This report's scope is Python-side
   construction/loading only, as directed.
+
+---
+
+## 7. Review fix pass (2026-07-15, per `WP4_review.md` @ f30cc43)
+
+### Fix 1 (MUST-FIX, finding 1) — representation-aware `value_head_type` default
+
+ONE shared helper: `hexo_rl/model/build_net.py::resolve_value_head_type(spec, config)` —
+declared config value wins; omitted (or explicitly null) defaults to `"dist65"` for a graph
+spec, `"scalar"` (`MODEL_HPARAM_DEFAULTS`) for grid. Wired into all four merge points (not
+three copies):
+
+- `orchestrator.py` fresh branch — also PERSISTS the resolved value into `combined_config`
+  **graph-only** (so trainer config / checkpoint bakes / downstream rebuilds read the same
+  resolution; grid config contents stay byte-identical, key stays absent when undeclared).
+- `lifecycle.py::build_inference_model` — replaces the `str(config.get(..., "scalar"))` (whose
+  `str()` wrap also turned an explicit `null` into the literal string `"None"` — fixed for
+  free); `build_eval_model` + the `loop.py:159` anchor call inherit via
+  `InfModelArch.value_head_type`.
+- `anchor.py::resolve_anchor` — param default changed `"scalar"` → `None`; `None` resolves
+  through the helper on the fresh-init branch (an explicit caller value is used as-is).
+  Only production caller (`loop.py`) passes explicitly; all test callers verified.
+- `trainer_ckpt_load.py` graph resume branch — its inline `config.get("value_head_type",
+  "dist65")` replaced with the same helper (kills the fourth copy).
+
+Regression tests (the exact case the review noted all 28 original tests avoided): graph config
+that OMITS `value_head_type` through each site — `init_trainer` (+ persisted-config assert),
+`build_inference_model`/`build_eval_model` (arch carries dist65), `resolve_anchor` (param AND
+config key both omitted) — plus grid-omitting-stays-scalar pins at orchestrator + anchor, and 6
+unit tests on the helper itself (incl. explicit-null → dist65, declared-wins, `None` spec).
+
+### Fix 2 (HIGH, finding 2) — unknown STAMP label falls through to detection
+
+`checkpoint_loader.py::load_model_with_encoding`: when `_registry_lookup(label)` fails AND the
+label came from the checkpoint's own stamp (no `declared_encoding`, no `decode_override`), log
+`unknown_ckpt_encoding_stamp_falling_through_to_detection` and re-resolve via
+`detect_encoding_label` (strict shape detection) instead of dying generic. Declared/override
+unknown names stay loud (caller assertions). Verified against the REAL banked
+`checkpoints/probes/gnn_bc/gnn_bc_040000.pt` (stamp `strix_axis_graph`, written by
+`train_bc.py:409`, never registered): now reaches the actionable BC-prefit raise — message
+enriched to point at `hexo_rl.model.gnn_net.load_representation_policy_from_bc` as the
+warm-start path. Tests: real-artifact raise (skipif-guarded), synthetic unknown-stamp full-GnnNet
+round-trip, unknown-DECLARED-name still raises. (Follow-up outside WP-4 scope, flagged for the
+dispatcher: re-stamp `train_bc.py:409` to emit `gnn_axis_v1` + migrate banked probe ckpts.)
+
+### Fix 3 (HIGH, finding 3) — `compat.py` graph-marker check before filename match
+
+`hexo_rl/encoding/compat.py::infer_encoding_from_state_dict` now checks the graph marker FIRST,
+before `_filename_match` — closes the newly-named SILENT-CORRUPT node (bare GNN sd in a file
+named `gnn_v6_bare.pt` grid-resolved to `v6` via substring). Marker single-sourced as
+`hexo_rl/encoding/_probes.py::GNN_GRAPH_MARKER_KEY` and adopted by `resolvers.py` +
+`training/checkpoints.py` (no inlined copies remain). Tests: 3 new in
+`tests/test_encoding_registry.py` (marker beats `v6`/`v8` filename substrings; no-hint case;
+inverse direction — grid sd with `gnn` in path still grid-resolves). `tests/scripts/
+test_t10_manifest.py` re-run green (no regression; the graph-marker fix removes the class of
+flake for graph sds at the root).
+
+### Fix 4 (LOW, finding 5) + finding-4 doc line
+
+- `checkpoint_loader.py`: new `_reject_graph_shaped_state_for_grid_spec` guard at the top of
+  BOTH `_build_min_max_model` and `_build_kata_model` — grid-declared-on-GNN-sd now raises the
+  named `RepresentationMismatch` ("GRAPH-shaped state dict … fix the declared/stamped encoding")
+  instead of a raw `KeyError`; a genuinely-malformed grid sd keeps its original KeyError. Tests:
+  declared-`v6` and declared-`v8` on a bare GNN sd → named raise.
+- Finding 4 (docs-only): scope line added to `load_representation_policy_from_bc`'s docstring
+  and `_build_gnn_model`'s landed-verify comment — the verify proves the LOAD landed what the
+  file said, NOT that the file's contents are sane (shape-preserving corruption passes); by
+  design.
+
+### Fix-pass tally
+
+- New tests: **18 new** `def test_` total (fresh-review recount, `WP4_fixpass_review.md` N1 —
+  the original 6+5+3+3+2=19 breakdown double-counted one); 2 existing tests extended with
+  assertions. Targeted run: 112 passed (all 9 WP-4 files + `test_encoding_registry.py` +
+  `test_t10_manifest.py`).
+- Files touched in the fix pass: `hexo_rl/model/build_net.py`, `hexo_rl/model/gnn_net.py`
+  (docstring), `hexo_rl/encoding/{_probes,compat,resolvers}.py`,
+  `hexo_rl/training/{orchestrator,lifecycle,anchor,trainer_ckpt_load,checkpoints}.py`,
+  `hexo_rl/eval/checkpoint_loader.py`, + 6 test files. No `engine/**` touched (concurrent
+  replay-buffer agent).

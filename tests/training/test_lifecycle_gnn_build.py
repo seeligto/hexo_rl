@@ -21,7 +21,7 @@ from hexo_rl.training.lifecycle import build_eval_model, build_inference_model
 from hexo_rl.training.trainer import Trainer
 
 
-def _make_gnn_trainer() -> Trainer:
+def _make_gnn_trainer(declare_value_head_type: bool = True) -> Trainer:
     device = torch.device("cpu")
     # Probe-284k defaults (GnnNet()'s own ctor defaults) so the trainer's
     # OWN model and the `build_net`-constructed inf_model/eval_model (which
@@ -31,7 +31,6 @@ def _make_gnn_trainer() -> Trainer:
     model = GnnNet()
     cfg: dict = {
         "encoding": "gnn_axis_v1",
-        "value_head_type": "dist65",
         "n_value_bins": 65,
         "lr": 1e-3,
         "weight_decay": 1e-4,
@@ -41,6 +40,8 @@ def _make_gnn_trainer() -> Trainer:
         "fp16": False,
         "grad_clip": 1.0,
     }
+    if declare_value_head_type:
+        cfg["value_head_type"] = "dist65"
     return Trainer(model, cfg, checkpoint_dir="/tmp/hexo_test_wp4_lifecycle_gnn_ckpts", device=device)
 
 
@@ -72,6 +73,24 @@ def test_build_eval_model_graph_reconstructs_identical_architecture():
     assert inf_sd.keys() == eval_sd.keys()
     for k in inf_sd:
         assert inf_sd[k].shape == eval_sd[k].shape, f"shape mismatch at {k}"
+
+
+def test_build_inference_model_graph_without_value_head_type_resolves_dist65():
+    """WP-4 review finding 1 (MUST-FIX): a graph trainer config that never
+    declares value_head_type. Pre-fix, build_inference_model defaulted it to
+    'scalar' (via `str(config.get(..., MODEL_HPARAM_DEFAULTS[...]))`) and
+    build_net raised RepresentationMismatch. Now resolves dist65 via the
+    shared resolve_value_head_type and builds + loads cleanly."""
+    device = torch.device("cpu")
+    trainer = _make_gnn_trainer(declare_value_head_type=False)
+    assert "value_head_type" not in trainer.config
+    inf_model, arch = build_inference_model(trainer, device)
+    assert isinstance(inf_model, GnnNet)
+    assert arch.value_head_type == "dist65"
+    # build_eval_model inherits the resolved value through arch — the anchor
+    # path (loop.py passes _arch.value_head_type) rides the same field.
+    eval_model = build_eval_model(arch, device)
+    assert isinstance(eval_model, GnnNet)
 
 
 def test_arch_gnn_hparams_empty_for_grid_trainer():

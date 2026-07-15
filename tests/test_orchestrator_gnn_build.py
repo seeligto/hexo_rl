@@ -80,3 +80,39 @@ def test_init_trainer_fresh_run_grid_unaffected(tmp_path: Path):
     base = getattr(trainer.model, "_orig_mod", trainer.model)
     assert isinstance(base, HexTacToeNet)
     assert board_size == 19
+
+
+def test_init_trainer_fresh_run_graph_without_value_head_type(tmp_path: Path):
+    """WP-4 review finding 1 (MUST-FIX): the realistic launch config that
+    never declares value_head_type. Pre-fix, init_trainer defaulted it to
+    'scalar' (MODEL_HPARAM_DEFAULTS) and build_net raised
+    RepresentationMismatch — blocking every undeclared graph launch. Now
+    resolves dist65 via resolve_value_head_type and builds cleanly."""
+    cfg = _graph_config()
+    del cfg["value_head_type"]
+    trainer, _ = init_trainer(
+        _fresh_args(tmp_path), cfg, torch.device("cpu"),
+        board_size=19, res_blocks=1, filters=16, log=log,
+    )
+    base = getattr(trainer.model, "_orig_mod", trainer.model)
+    assert isinstance(base, GnnNet)
+    assert base.value_head.fc2_bins.out_features == 65
+    # Resolution persisted into the trainer-owned config (graph-only) so
+    # downstream rebuilds/checkpoint bakes read the SAME value.
+    assert trainer.config["value_head_type"] == "dist65"
+
+
+def test_init_trainer_fresh_run_grid_without_value_head_type_stays_scalar(tmp_path: Path):
+    """Grid byte-identical passthrough: omitting value_head_type on a grid
+    config still resolves scalar, and the key is NOT injected into the
+    config (pre-WP-4 contents preserved)."""
+    cfg = _grid_config()
+    assert "value_head_type" not in cfg
+    trainer, _ = init_trainer(
+        _fresh_args(tmp_path), cfg, torch.device("cpu"),
+        board_size=19, res_blocks=1, filters=16, log=log,
+    )
+    base = getattr(trainer.model, "_orig_mod", trainer.model)
+    assert isinstance(base, HexTacToeNet)
+    assert base.value_head_type == "scalar"
+    assert "value_head_type" not in trainer.config

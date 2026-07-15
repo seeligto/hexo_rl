@@ -16,6 +16,7 @@ from engine import RegistrySpec as EncodingSpec  # type: ignore[attr-defined]
 
 from hexo_rl.encoding import compat
 from hexo_rl.encoding._probes import FIRST_CONV_KEYS as _FIRST_CONV_KEYS
+from hexo_rl.encoding._probes import GNN_GRAPH_MARKER_KEY as _GNN_GRAPH_MARKER_KEY
 from hexo_rl.encoding._probes import POLICY_FC_KEYS as _POLICY_FC_KEYS
 from hexo_rl.encoding.registry import EncodingRegistryError, _load as _load_registry, lookup
 
@@ -465,7 +466,7 @@ def detect_encoding_from_state_dict(
     # encoding needs a real disambiguator here (mirrors the v6_live2 vs
     # v6_live2_ls shape-identical case below — label hint or explicit
     # declaration, never silent shape-guessing).
-    if "representation.input_proj.weight" in state:
+    if _GNN_GRAPH_MARKER_KEY in state:
         return lookup("gnn_axis_v1")
 
     buffer_channels = lookup("v6").n_planes
