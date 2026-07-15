@@ -1,32 +1,30 @@
 # Run3-CNN Pre-Registration — stop rule + verdict defs + baseline pins
 
-**Status:** PRE-REGISTERED, Phase-1 preflight (A+B) COMPLETE, **Phase-1 C launch attempt
-STEP0-FAIL** (2026-07-15). Committed, binding record of the run3-CNN comparison protocol —
-the final Phase 0 gate; NOT yet cleared. The 2026-07-15T09:21Z launch attempt crashed ~53s
-after corpus load on an unhandled `ValueError` (`resolve_anchor` / `anchor_encoding_mismatch`)
-— the box's shared `checkpoints/best_model.pt` was a stale leftover (wrong encoding,
-`v6_live2` not `v6_live2_ls`) from an unrelated prior run, not a defect in run3's own
-config/mint/corpus (all of which resolved and loaded cleanly up to that point). Full
-root-cause + recommended fix: see the Phase-1 launch report
-(`/tmp/claude-1000/-home-timmy-Work-Hexo-hexo-rl/81b84b7c-3cc3-4ff1-a5de-2e2def266709/scratchpad/phase1-launch-report.md`).
-`<LAUNCH_COMMIT_SHA>`/`<LAUNCH_CONFIG_SHA>` below are stamped from this attempt for the
-record — the code/config state itself is believed launch-ready — but **the freeze clause
-does NOT take effect** (STEP-0 did not confirm green); the next launch attempt (after the
-stale anchor/buffer files are cleared) re-triggers §9's freeze check, not a re-verification
-of this doc's content.
+**Status:** **LAUNCHED** (2026-07-15T09:38:22Z, retry attempt, STEP-0 green — all §C2
+criteria confirmed from the live log, first train_steps finite, corpus prefill ran on the
+fresh namespaced buffer path). Committed, binding record of the run3-CNN comparison
+protocol — the final Phase 0 gate, now CLOSED.
+History: the FIRST launch attempt (09:21Z, launch commit `ef93251`) was STEP0-FAIL — stale
+cross-lineage `checkpoints/best_model.pt` (encoding `v6_live2` ≠ `v6_live2_ls`) on the
+shared box checkout tripped `resolve_anchor`'s encoding guard; a stale shared
+`replay_buffer.bin` had also silently auto-restored 250k unknown-lineage positions. Root
+cause + fix: sprint log §RUN3-STEP0; fix commit `e8d3a62` namespaces
+`mixing.buffer_persist_path` → `checkpoints/replay_buffer_run3_dist65.bin` and
+`eval_pipeline.gating.best_model_path` → `checkpoints/best_model_run3_dist65.pt`; stale
+artifacts archived (not deleted) to `/workspace/stale_artifacts_20260715/` on the box.
+The dispatcher-authorized SINGLE retry launched clean.
 **Frozen-after-launch:** every number, estimator, artifact SHA, and verdict boundary in
-§0–§7 below is FROZEN the instant run3's STEP-0 gate confirms green (NOT YET — see Status
-above). Launch commit SHA:
-`ef9325124d374fe0b70a1fc698a6713e7a725b8c` (the Phase-1 A-fixes commit — promotion-gate book
-resolution + dist65 bootstrap mint; the code/config state archived to the vast box for
-launch). Launch config SHA: `fc7b3bfd61a7dc1872eeff87786eb2ce9eb1a57641ffd1dea3091280dd56b0a0`
+§0–§7 below is now FROZEN. Launch commit SHA:
+`e8d3a621bb6de29599ea9f56ae90b36b2f3ded7d` (the namespacing-fix commit — the tracked-file
+state archived to the vast box and launched from; supersedes the first attempt's `ef93251`
+stamp). Launch config SHA: `be01d3ca5115b9d6127e41d32c20af3a68a8d833300eb7c865cd6b3045e52759`
 — sha256 of `json.dumps(combined_config, sort_keys=True, default=str)`, where
 `combined_config` is the fully-resolved (post-merge, post-encoding-propagation) launch config
 returned by `hexo_rl.training.orchestrator.flatten_config_and_resolve_encoding` for
 `--variant run3_dist65` (the same real config-merge entrypoint
-`tests/test_run3_corpus_launch_path.py` drives) — reproducible via the same call, computed
-identically before and after the A-fixes commit (only YAML comments changed, zero functional
-keys touched, so the sha is stable across it).
+`tests/test_run3_corpus_launch_path.py` drives) — recomputed at `e8d3a62` (differs from the
+first attempt's `fc7b3bfd…` exactly by the two namespaced-path keys; verified the live run's
+startup config dump carries both namespaced paths).
 Pre-launch, this doc's §0–§3 hard pins / stop rule / verdict definitions are FROZEN AS OF
 THIS COMMIT (WP0.6 mandate: "stop-rule numbers and verdict definitions are FROZEN as
 drafted incl. its DESIGN ADJUSTMENTS A1–A3"); any change requires a dated addendum, not a
@@ -511,8 +509,11 @@ preregistration at WP0.6 commit time, not deferred to launch.
 
 **Phase-1 launch checklist (closed 2026-07-15):**
 
-1. DONE. `<LAUNCH_COMMIT_SHA>` stamped above (`ef9325124d374fe0b70a1fc698a6713e7a725b8c`).
-2. DONE. `<LAUNCH_CONFIG_SHA>` stamped above (`fc7b3bfd61a7dc1872eeff87786eb2ce9eb1a57641ffd1dea3091280dd56b0a0`).
+1. DONE. `<LAUNCH_COMMIT_SHA>` stamped above — final value `e8d3a621bb6de29599ea9f56ae90b36b2f3ded7d`
+   (retry launch commit; the first attempt's `ef93251` stamp is superseded, see Status).
+2. DONE. `<LAUNCH_CONFIG_SHA>` stamped above — final value
+   `be01d3ca5115b9d6127e41d32c20af3a68a8d833300eb7c865cd6b3045e52759` (recomputed at `e8d3a62`;
+   the first attempt's `fc7b3bfd…` differs exactly by the two namespaced-path keys).
 3. DONE. Confirmed via the real config-merge entrypoint (`flatten_config_and_resolve_encoding`
    over `--variant run3_dist65`): resolved `legal_move_radius_schedule` =
    `[{step:0,radius:4},{step:200000,radius:5},{step:400000,radius:6},{step:600000,radius:8}]`
@@ -531,7 +532,14 @@ preregistration at WP0.6 commit time, not deferred to launch.
    `8dba7c8195e09f464dc4c7149fe57a0c483e241bff2abe6fa8ba652827afaa8a` on both hosts (the mint's
    own source file, §4g).
 
-All five Phase-1 checklist items are closed. Every §0–§8 number, estimator, and artifact SHA
-freezes the instant the Phase-1 STEP-0 gate (see the Phase-1 launch report) confirms green;
-thereafter changes are dated APPEND-only addenda. No silent edits — this is the
-pre-registration of record.
+All five Phase-1 checklist items are closed. **STEP-0 confirmed green 2026-07-15 (retry
+launch 09:38:22Z, tmux `run3`, PID 1143057, vast box 35883053):** config resolved clean
+(dist65/65-bin, both namespaced paths live in the startup dump), encoding gate
+`v6_live2_ls` asserted, corpus sha-pin passed + prefill RAN (610,954 positions, fresh
+buffer — `buffer_size_before_corpus_load=0`, no `buffer_restored`), watchdog armed (1800s),
+anchor fresh-initialized to `best_model_run3_dist65.pt` (no stale pickup), no eval round
+pre-25k, self-play live (sims/s ~3.8k at first read, draw_rate 0.005), first train_steps
+finite (step 10: policy 2.6587 / dist65-CE value 2.1036; step 30: 2.2312 / 0.6639 —
+decreasing, zero NaN/Inf), hard-abort monitors registered (draw ≥0.55×3, grad-norm 10.0).
+Every §0–§8 number, estimator, and artifact SHA is now FROZEN; changes are dated
+APPEND-only addenda. No silent edits — this is the pre-registration of record.
