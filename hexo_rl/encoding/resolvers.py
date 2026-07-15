@@ -170,6 +170,113 @@ def resolve_corpus_sha_pin(spec: Any) -> str | None:
     return _CORPUS_SHA_PINS.get(spec.name)
 
 
+# ---------------------------------------------------------------------------
+# Held-out corpus registry (S5, GNN-integration program, 2026-07-15).
+#
+# `docs/registers/run3_corpus_manifest.md` §2 BURNED the prior held-out set
+# (the 1796-game "R2c" delta) for run3-lineage architecture reads — it was
+# ACCEPTED into the training corpus, so it is no longer out-of-sample. S5
+# minted a FRESH held-out set (`scripts/mint_s5_heldout_corpus.py`,
+# `docs/registers/s5_heldout_manifest.md`): every raw_human game scraped
+# after the canonical NPZ's 2026-07-04 build cutoff, same ingestion filter
+# (rated, six-in-a-row, >=20 moves) + corpus-pipeline window discipline.
+#
+# PURPOSE: future BC/value/architecture reads ONLY (mirrors the R2c
+# precedent — CNN-arm vs GNN-arm comparison on the SAME raw games). This
+# corpus must NEVER enter a training corpus load. Any future entry that
+# wants to move held-out games into a training corpus requires an
+# operator-ratified BURN ruling, exactly like the R2c precedent.
+#
+# Registered as sha256 -> on-disk byte size. The size is a cheap (stat-only,
+# no stream) pre-filter: `assert_not_heldout_sha` only pays for a full
+# sha256 stream when the candidate file's size exactly matches a registered
+# held-out artifact's size — real training corpora (hundreds of MB to
+# multiple GB) can never collide on size with these small held-out NPZs, so
+# this keeps the check effectively free for the launches it doesn't apply to
+# while still being unconditional (not gated on whether the encoding has a
+# `_CORPUS_SHA_PINS` entry).
+_HELDOUT_CORPUS_SHAS: dict[str, tuple[str, int]] = {
+    # label -> (sha256, size_bytes)
+    "s5_post20260704": (
+        "88f99c2b5fea7495484e4e9cc1af831d1e053221dc7e0f9c8f5d3ab6f27aa69e",
+        12872280,
+    ),
+}
+
+
+def held_out_shas() -> frozenset[str]:
+    """All registered held-out corpus sha256 values.
+
+    Any of these loaded through a TRAINING corpus path (e.g.
+    `hexo_rl.training.batch_assembly.load_pretrained_buffer`) is a hard,
+    labeled error — see `assert_not_heldout_sha`.
+    """
+    return frozenset(sha for sha, _size in _HELDOUT_CORPUS_SHAS.values())
+
+
+def assert_not_heldout_sha(actual_sha: str, *, path: Any) -> None:
+    """Raise if *actual_sha* is a registered held-out corpus sha.
+
+    Held-out corpora (`_HELDOUT_CORPUS_SHAS`) exist ONLY for future BC/
+    architecture reads; they must NEVER enter a training corpus load. Call
+    this from any training-path corpus loader BEFORE using the file's
+    contents.
+
+    Args:
+        actual_sha: sha256 of the file actually on disk (not a declared/
+            sidecar value — must be freshly streamed, mirrors the
+            `_CORPUS_SHA_PINS` gate's own discipline).
+        path: the path being loaded (for the error message only).
+
+    Raises:
+        ValueError: if `actual_sha` matches a registered held-out sha.
+    """
+    for label, (sha, _size) in _HELDOUT_CORPUS_SHAS.items():
+        if actual_sha == sha:
+            raise ValueError(
+                f"corpus at {path} is the HELD-OUT set {label!r} "
+                f"(sha {actual_sha[:12]}…) — held-out corpora are "
+                f"reserved for future BC/architecture reads and must NEVER "
+                f"enter a training corpus load. This looks like a "
+                f"misconfigured pretrained_buffer_path pointing at a "
+                f"held-out artifact instead of the training corpus. See "
+                f"docs/registers/s5_heldout_manifest.md."
+            )
+
+
+def heldout_size_bytes() -> frozenset[int]:
+    """On-disk byte sizes of every registered held-out artifact.
+
+    Cheap (stat-only) pre-filter for callers that want to skip the
+    `assert_not_heldout_sha` sha256 stream entirely unless the candidate
+    file's size could possibly match (see `_HELDOUT_CORPUS_SHAS` docstring).
+    """
+    return frozenset(size for _sha, size in _HELDOUT_CORPUS_SHAS.values())
+
+
+def _assert_no_registry_overlap() -> None:
+    """Resolver-level static invariant (dispatcher: "Overlap check: held-out
+    sha != corpus sha asserted at resolver level"): `_CORPUS_SHA_PINS` and
+    `_HELDOUT_CORPUS_SHAS` must never share a sha256 — a held-out set
+    accidentally also registered as a launch corpus pin (or vice versa)
+    would silently defeat both gates. Called once at import time (below) so
+    a bad registry entry fails loudly at the first import, not at some later
+    training launch; also directly callable from tests against a
+    monkeypatched registry.
+    """
+    overlap = set(_CORPUS_SHA_PINS.values()) & held_out_shas()
+    if overlap:
+        raise EncodingRegistryError(
+            f"corpus sha registries overlap: {sorted(overlap)!r} present in "
+            f"BOTH _CORPUS_SHA_PINS and _HELDOUT_CORPUS_SHAS — a held-out "
+            f"set and a launch-pinned training corpus cannot share a "
+            f"sha256."
+        )
+
+
+_assert_no_registry_overlap()
+
+
 _ANCHOR_PATHS: dict[str, str] = {
     "v6":                 "checkpoints/bootstrap_model_v6.pt",
     "v6tp":               "checkpoints/bootstrap_model_v6tp.pt",  # §P5-CT CF-2 self-anchor

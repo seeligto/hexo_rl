@@ -25,7 +25,13 @@ import structlog
 
 from hexo_rl.bootstrap.corpus_io import compute_npz_sha256, validate_corpus_sidecar
 from hexo_rl.encoding import lookup as _lookup_encoding, normalize_encoding_name as _normalize_encoding_name
-from hexo_rl.encoding.resolvers import cur_stone_slot, opp_stone_slot, resolve_corpus_sha_pin
+from hexo_rl.encoding.resolvers import (
+    assert_not_heldout_sha,
+    cur_stone_slot,
+    heldout_size_bytes,
+    opp_stone_slot,
+    resolve_corpus_sha_pin,
+)
 
 # Module-level hoist (registry lookup at import time, not per-batch).
 _V6 = _lookup_encoding("v6")
@@ -215,6 +221,20 @@ def load_pretrained_buffer(
         )
         return None
 
+    # S5 (GNN-integration program): held-out-corpus contamination gate —
+    # UNCONDITIONAL (not gated on `_pin is not None`; a held-out set could be
+    # pointed at ANY encoding's `mixing.pretrained_buffer_path`, pinned or
+    # not). Cheap: `Path.stat()` is a metadata-only syscall, so this costs
+    # nothing on the overwhelming majority of launches whose corpus file
+    # size doesn't match a registered held-out artifact's size; the sha256
+    # stream (below, shared with the pin check) only happens when it does.
+    # See docs/registers/s5_heldout_manifest.md.
+    if os.path.getsize(pretrained_path) in heldout_size_bytes():
+        _heldout_check_sha = compute_npz_sha256(pretrained_path)
+        assert_not_heldout_sha(_heldout_check_sha, path=pretrained_path)
+    else:
+        _heldout_check_sha = None
+
     # WP0.4: launch-pinned corpus sha — hard gate BEFORE any load work. A
     # stale/re-exported NPZ at the same path (same shape, same plane count)
     # would otherwise pass the plane-count check below silently; this catches
@@ -222,7 +242,9 @@ def load_pretrained_buffer(
     # Encodings without a registered pin (most of them — see
     # `_CORPUS_SHA_PINS`) are unaffected. See docs/registers/run3_corpus_manifest.md.
     if _pin is not None:
-        _actual_sha = compute_npz_sha256(pretrained_path)
+        # FIX-1 discipline: reuse the held-out-gate's sha if it already
+        # streamed the file (same file, same bytes) — never hash twice.
+        _actual_sha = _heldout_check_sha if _heldout_check_sha is not None else compute_npz_sha256(pretrained_path)
         if _actual_sha != _pin:
             raise ValueError(
                 f"corpus sha mismatch: {pretrained_path} is {_actual_sha[:12]}…, "
