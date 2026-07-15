@@ -23,21 +23,24 @@ drained rows is itself a structural proof that R1+R4 are wired, not just that
 the pure `record_position_graph`/`finalize_graph_outcome` fns work (WP-5a
 already proved those in isolation).
 
-KNOWN PRE-EXISTING GAP (not in this commit's scope, discovered while building
-this test): `hexo_graph::legal_moves_from_stones` (WP-1's native builder) has
-no empty-board fallback — an actual game-0 (0-stone) position yields ZERO
-legal graph nodes, so an MCTS search rooted at a fresh board raises
-`EmptyLegalSet` inside `collate_graph_batch` on the very first leaf-batch and
-the game can never progress (`RootExpansionFailed` on every attempt, game
-finalizes at `ply==0`). `Board::legal_moves_set()` (dense engine, `board/
-moves.rs:95-101`) DOES special-case the empty board (a 5x5 opening region);
-`hexo-graph`'s `legal_moves_from_stones` does not mirror it. This test routes
-around the gap with `random_opening_plies=2` (uniformly-random Board-level
-opening moves that bypass MCTS/graph-inference entirely, seeding a couple of
-stones before the first graph search) — the SAME mechanism dense self-play
-uses for opening diversity. The gap itself is a WP-1/WP-3 native-builder
-issue, out of WP-5b commit A's touch list (`hexo-graph/src/lib.rs`,
-`infer_and_expand_graph`); flagged here for the record/follow-up.
+FORMERLY (WP-5b commit A): `hexo_graph::legal_moves_from_stones` (WP-1's
+native builder) had no empty-board fallback — an actual game-0 (0-stone)
+position yielded ZERO legal graph nodes, so an MCTS search rooted at a fresh
+board raised `EmptyLegalSet` inside `collate_graph_batch` on the very first
+leaf-batch and the game could never progress (`RootExpansionFailed` on every
+attempt, game finalized at `ply==0`). This test originally routed around the
+gap with `random_opening_plies=2` (Board-level opening moves that bypass
+MCTS/graph-inference entirely, seeding stones before the first graph search).
+
+FIXED (WP-1 launch-blocker fix): `legal_moves_from_stones` now special-cases
+`n_stones == 0` with a fixed 5x5 region mirroring the dense engine's own
+empty-board rule EXACTLY (`Board::legal_moves_set()`, `engine/src/board/
+moves.rs:95-101`) — see that fn's Rust doc comment for the full rationale.
+This test is now PARAMETRIZED over `random_opening_plies in {0, 2}`: `0`
+proves organic graph self-play starts a game from an actual empty board
+(the regression pin for this fix — EmptyLegalSet must not fire at ply 0);
+`2` is retained as the original workaround-path coverage (both must record,
+drain, and train-step-finite identically).
 """
 from __future__ import annotations
 
@@ -94,7 +97,9 @@ def _load_net(device: torch.device) -> GnnNet:
     return net.to(device).eval()
 
 
-def _run_selfplay_to_n_games(net: GnnNet, device: torch.device, *, n_games: int, timeout_s: float):
+def _run_selfplay_to_n_games(
+    net: GnnNet, device: torch.device, *, n_games: int, timeout_s: float, random_opening_plies: int
+):
     """Drives real self-play (`.start()`/`.stop()`) until `n_games` complete
     (or `timeout_s` elapses), then stops and returns
     `(games_batch, graph_rows)` — both drained ONCE, after `stop()`, so the
@@ -108,11 +113,12 @@ def _run_selfplay_to_n_games(net: GnnNet, device: torch.device, *, n_games: int,
             leaf_batch_size=4,
             standard_sims=6,
             max_moves_per_game=24,
-            # Routes around the pre-existing empty-board EmptyLegalSet gap
-            # (module docstring) — a couple of Board-level random opening
-            # moves (bypass MCTS/graph-inference) seed stones before the
-            # first graph search.
-            random_opening_plies=2,
+            # random_opening_plies=0 drives the game to start ORGANICALLY
+            # from an actual empty board — the WP-1 empty-board fix's
+            # regression pin (module docstring). random_opening_plies=2
+            # (Board-level opening moves that bypass MCTS/graph-inference)
+            # is retained as the original workaround-path coverage.
+            random_opening_plies=random_opening_plies,
             selfplay_rotation_enabled=False,
         )
     )
@@ -132,8 +138,8 @@ def _run_selfplay_to_n_games(net: GnnNet, device: torch.device, *, n_games: int,
         server.stop()
     assert runner.games_completed >= n_games, (
         f"self-play did not complete {n_games} games within {timeout_s}s "
-        f"(got {runner.games_completed}) — see module docstring for the "
-        f"known empty-board gap if this regresses to 0"
+        f"(got {runner.games_completed}) — see module docstring; a regression "
+        f"to 0 at random_opening_plies=0 means the WP-1 empty-board fix broke"
     )
     games_batch = runner.drain_game_results()
     graph_rows = runner.collect_graph_data()
@@ -141,18 +147,24 @@ def _run_selfplay_to_n_games(net: GnnNet, device: torch.device, *, n_games: int,
 
 
 @pytest.mark.skipif(not os.path.exists(_BC_CKPT), reason="banked GNN-BC checkpoint absent")
-def test_graph_selfplay_records_drain_and_train_step_is_finite(tmp_path: Path):
+@pytest.mark.parametrize("random_opening_plies", [0, 2], ids=["organic-ply0", "workaround-ply2"])
+def test_graph_selfplay_records_drain_and_train_step_is_finite(tmp_path: Path, random_opening_plies: int):
     device = torch.device("cpu")
     net = _load_net(device)
 
-    games_batch, rows = _run_selfplay_to_n_games(net, device, n_games=3, timeout_s=90.0)
+    games_batch, rows = _run_selfplay_to_n_games(
+        net, device, n_games=3, timeout_s=90.0, random_opening_plies=random_opening_plies
+    )
 
     # ── R7 drain correctness: row count == positions actually recorded ──
-    # random_opening_plies=2 moves per game are Board-level (no MCTS/record);
+    # `random_opening_plies` moves per game are Board-level (no MCTS/record);
     # every OTHER move records exactly one GraphRecord (R4), so the total
     # drained row count must equal sum(plies - random_opening_plies) across
-    # every COMPLETED game this run drained.
-    expected_rows = sum(max(0, plies - 2) for (plies, *_rest) in games_batch)
+    # every COMPLETED game this run drained. At random_opening_plies=0 this
+    # also proves the game started ORGANICALLY from an empty board (WP-1 fix
+    # regression pin) — no workaround stones were seeded before ply 1's real
+    # graph-MCTS root expansion.
+    expected_rows = sum(max(0, plies - random_opening_plies) for (plies, *_rest) in games_batch)
     assert len(rows) == expected_rows, (
         f"collect_graph_data() drained {len(rows)} rows, expected {expected_rows} "
         f"from {len(games_batch)} completed games (plies={[g[0] for g in games_batch]})"

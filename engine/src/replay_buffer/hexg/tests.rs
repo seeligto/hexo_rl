@@ -465,6 +465,41 @@ fn legit_push_sample_roundtrip_does_not_trip_mass_drop_guard() {
     }
 }
 
+/// WP-1 empty-board fix follow-on: an n_stones==0 record's visit mass must
+/// survive D6-augmented sample-align across many draws. `sample.rs` forces
+/// `sym = 0` (identity) whenever `rec.stones.is_empty()` — the dense-mirrored
+/// 5x5 RECTANGLE fallback (`hexo_graph::legal_moves_from_stones`) is a set
+/// closed under only 4 of the 12 `rotate_axial` D6 elements (identity +
+/// 180°-family; verified separately), and `stones` being empty means the
+/// rebuilt graph can never itself "rotate" to follow a non-closed sym. Uses
+/// a "corner" visit cell, (2, 2), that WOULD be displaced by 8 of the 12
+/// syms if the identity-forcing guard regressed — the tightest repro of the
+/// real self-play failure (WP1_emptyboard_fix.md). 48 draws (mixing the RNG
+/// stream that also drives `sample_indices`/`weighted_sample_one`) is a
+/// robustness margin, not a per-sym enumeration — the guard is
+/// unconditional, not probabilistic, so one draw already proves it, but many
+/// draws catch any accidental RNG-order coupling.
+#[test]
+fn empty_board_record_survives_d6_augmented_sample_align() {
+    let mut buf = HexgBuffer::new(4, ENC).unwrap();
+    let rec = GraphRecord {
+        stones: vec![],
+        visits: vec![(2, 2, 0.6), (-2, -2, 0.3), (0, 0, 0.1)],
+        current_player: 1,
+        moves_remaining: 2,
+        ply_index: 0,
+        is_full_search: true,
+        outcome: 0.0,
+        value_valid: false,
+        game_length: 10,
+    };
+    buf.push_record_impl(&rec, 0).unwrap();
+    for _ in 0..48 {
+        buf.sample_graph_batch_impl(1, true)
+            .expect("empty-board record must survive D6-augmented sample-align (sym forced to identity)");
+    }
+}
+
 /// game_id re-base fix: after a successful load, `next_game_id` must continue
 /// past the max loaded game_id, not reset to 0 (which would let a fresh
 /// self-play game collide with a just-loaded record and mis-fire the

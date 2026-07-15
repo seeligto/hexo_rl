@@ -27,15 +27,25 @@ If the binary is absent the test SKIPS with this command in the message.
 
 Position coverage: the frozen WP-A self-play set (320 real positions,
 `reports/probes/gnn_integration/wpa_positions.json`) augmented to >=1000 by (a)
-degenerate boards checked against the REAL oracle — the empty board (game
-start, ply 0) and 1-stone boards (review MUST-FIX #2); (b) a current-player /
-moves-remaining sweep; (c) prefix-truncations of the real stone lists (the
-replay JSONLs under logs/replays/ hold only empty draw games, so per-ply
-sweeping them yields nothing — see WP1_builder.md); (d) a SECOND GEOMETRY
-sweep (review #12): ~100 base positions rebuilt at win_length=5 / radius=4 so
-the non-default parameterization of the threat windows, walk depth, and legal
-ring is oracle-tested, not just compiled. Every geometry is a real self-play
-board, a real-board prefix, or a canonical degenerate board.
+degenerate boards — the empty board (game start, ply 0) and 1-stone boards
+(review MUST-FIX #2); (b) a current-player / moves-remaining sweep; (c)
+prefix-truncations of the real stone lists (the replay JSONLs under
+logs/replays/ hold only empty draw games, so per-ply sweeping them yields
+nothing — see WP1_builder.md); (d) a SECOND GEOMETRY sweep (review #12): ~100
+base positions rebuilt at win_length=5 / radius=4 so the non-default
+parameterization of the threat windows, walk depth, and legal ring is
+oracle-tested, not just compiled. Every geometry is a real self-play board, a
+real-board prefix, or a canonical degenerate board.
+
+WP-1 empty-board fix (launch blocker): the n_stones==1 degenerate boards
+STILL assert byte-exact against the REAL Python oracle (that code path is
+untouched). The n_stones==0 (empty board) degenerate boards do NOT — the
+Rust builder's empty-board legal-move derivation now DELIBERATELY diverges
+from the oracle's untested vacuous `[]` to instead mirror the dense engine's
+own empty-board rule (`Board::legal_moves_set()`, 5x5 fallback,
+`engine/src/board/moves.rs:95-101`); see the in-loop comment at the n_stones
+== 0 branch below for the full rationale and the dense-shape assertions that
+replace oracle equality for that case.
 """
 from __future__ import annotations
 
@@ -173,12 +183,52 @@ def test_hexo_graph_rust_matches_python_oracle():
         sm = {(q, r): pl for q, r, pl in spec["stones"]}
         cp = spec["current_player"]
         mr = spec["moves_remaining"]
+        n_stones = len(sm)
+
+        if n_stones == 0:
+            # WP-1 launch-blocker fix: n_stones == 0 is a DELIBERATE,
+            # DOCUMENTED divergence from the Python graph oracle, not a
+            # regression to catch via byte-exact oracle equality. The oracle
+            # (`legal_moves_from_stones`) returns a vacuous `[]` for an empty
+            # `stone_map` because its only real caller, `strix_v1_bot.py`,
+            # always short-circuits its own opening move before reaching the
+            # graph builder — the empty board is untested, out-of-domain
+            # input for that "port", not an authoritative oracle answer.
+            # Live graph self-play has no such short-circuit: MCTS roots a
+            # search at ply 0 straight into this builder, and a vacuous
+            # legal set raised `EmptyLegalSet` before the game could start
+            # (`reports/probes/gnn_integration/WP5b_commitA_impl.md`
+            # "Concerns / findings"). The authority for a 0-stone board's
+            # legal set is the DENSE engine's own empty-board rule
+            # (`Board::legal_moves_set()`, `engine/src/board/moves.rs:95-101`):
+            # a fixed 5x5 region (25 cells) around the origin, independent of
+            # `radius`. Assert that shape directly — this keeps the
+            # regression class caught (a reintroduced vacuous path fails
+            # these asserts) without asserting a Python-oracle equality that
+            # is no longer the correct answer for this input.
+            assert R["n_stones"] == 0
+            assert R["num_nodes"] == 26, "25 dense-5x5 legal cells + 1 dummy"
+            assert R["n_nodes_checksum"] == 26
+            assert R["builder_impl"] == 1
+            assert R["current_player"] == (1 if cp == 1 else -1)
+            assert tuple(R["window_center"]) == (0, 0)
+            expected_cells = sorted((dq, dr) for dq in range(-2, 3) for dr in range(-2, 3))
+            # node layout is [stones(0) | legal(25) | dummy(1)] -> the last
+            # coord pair is the dummy row; strip it POSITIONALLY (dummy's
+            # (0,0) coord collides with a real legal cell's value, so a
+            # value-based dedup would silently under-count).
+            all_cells = list(zip(R["node_coords"][0::2], R["node_coords"][1::2]))
+            legal_cells = all_cells[:-1]
+            assert sorted(legal_cells) == expected_cells
+            assert R["legal_node_gather"] == list(range(25))
+            n_edges_total += len(R["edge_src"])
+            continue
+
         g = build_axis_graph_raw(
             sm, cp, mr,
             win_length=spec["win_length"], radius=spec["radius"],
             relative_stones=True, threat_features=True, prune_empty_edges=False,
         )
-        n_stones = len(sm)
         n_edges_total += len(g["edge_src"])
 
         # --- INTEGER byte-exact (hard equality; mismatch fails immediately) ---

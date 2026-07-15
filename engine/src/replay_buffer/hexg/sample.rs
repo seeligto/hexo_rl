@@ -144,14 +144,35 @@ impl HexgBuffer {
         };
 
         for &idx in &indices {
-            // D6 element for this sample (uniform per-sample; matches run2's
-            // dense `augment` semantics — one random sym per row, NOT 12-fold
-            // enumeration). sym 0 = identity when augmentation is OFF.
-            let sym = if augment { self.rng.random_range(0..N_SYMS) } else { 0 };
-
             let rec = self.record_at(idx);
             let game_id = self.game_ids[idx];
             let ply_idx = rec.ply_index;
+
+            // D6 element for this sample (uniform per-sample; matches run2's
+            // dense `augment` semantics — one random sym per row, NOT 12-fold
+            // enumeration). sym 0 = identity when augmentation is OFF.
+            //
+            // WP-1 empty-board fix follow-on: force identity for a 0-stone
+            // record. `build_axis_graph`'s empty-board fallback (WP-1) mirrors
+            // the DENSE engine's own empty-board rule EXACTLY — a fixed 5x5
+            // *rectangle* `(dq,dr) in [-2,2]x[-2,2]` (25 cells) — which, unlike
+            // a hex-ball, is NOT closed under 8 of the 12 `rotate_axial` D6
+            // elements (verified: only the identity + 180°-rotation family,
+            // sym in {0,3,6,9}, preserve the set; the other 8 map it to a
+            // DIFFERENT 25-cell rectangle). `stones` is empty here so it can
+            // never itself be "rotated" (rotating nothing is a no-op) — the
+            // rebuilt graph is therefore ALWAYS the same un-rotated fallback
+            // rectangle regardless of `sym`. Rotating the VISIT-MAP keys by a
+            // non-closed sym while the rebuilt legal set stays fixed sends
+            // visited cells outside that set, tripping `mass_drop_check`
+            // below (real self-play repro: WP1_emptyboard_fix.md). There is
+            // also no augmentation VALUE lost: an empty board carries no
+            // orientation information for the net to learn from either way.
+            let sym = if augment && !rec.stones.is_empty() {
+                self.rng.random_range(0..N_SYMS)
+            } else {
+                0
+            };
 
             // Rotate stones by the element (axial lattice automorphism).
             let mut stones: Vec<(i32, i32, i8)> = Vec::with_capacity(rec.stones.len());
