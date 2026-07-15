@@ -1,12 +1,23 @@
 # Run3-CNN Pre-Registration — stop rule + verdict defs + baseline pins
 
-**Status:** PRE-REGISTERED (WP0.6, 2026-07-15). Committed, binding record of the run3-CNN
-comparison protocol — the final Phase 0 gate. Not yet launched.
+**Status:** PRE-REGISTERED, Phase-1 preflight (A+B) COMPLETE, launch (Phase-1 C) IN PROGRESS
+(2026-07-15). Committed, binding record of the run3-CNN comparison protocol — the final
+Phase 0 gate. `<LAUNCH_COMMIT_SHA>`/`<LAUNCH_CONFIG_SHA>` are stamped below at their final
+values now (the Phase-1 A-fixes commit is done and will not change), ahead of the STEP-0
+launch confirmation itself — this is NOT yet a "LAUNCHED" status flip; see the Phase-1 launch
+report for the STEP-0 verdict.
 **Frozen-after-launch:** every number, estimator, artifact SHA, and verdict boundary in
-§0–§7 below is FROZEN the instant run3 launches. Launch commit SHA: `<LAUNCH_COMMIT_SHA>`
-(placeholder; the Phase 1 launch step stamps the actual launch commit here and never edits
-thereafter). Launch config SHA: `<LAUNCH_CONFIG_SHA>` (placeholder; sha256 of the resolved
-launch YAML — `configs/variants/run3_dist65.yaml` post-merge — stamped at the same time).
+§0–§7 below is FROZEN the instant run3's STEP-0 gate confirms green. Launch commit SHA:
+`ef9325124d374fe0b70a1fc698a6713e7a725b8c` (the Phase-1 A-fixes commit — promotion-gate book
+resolution + dist65 bootstrap mint; the code/config state archived to the vast box for
+launch). Launch config SHA: `fc7b3bfd61a7dc1872eeff87786eb2ce9eb1a57641ffd1dea3091280dd56b0a0`
+— sha256 of `json.dumps(combined_config, sort_keys=True, default=str)`, where
+`combined_config` is the fully-resolved (post-merge, post-encoding-propagation) launch config
+returned by `hexo_rl.training.orchestrator.flatten_config_and_resolve_encoding` for
+`--variant run3_dist65` (the same real config-merge entrypoint
+`tests/test_run3_corpus_launch_path.py` drives) — reproducible via the same call, computed
+identically before and after the A-fixes commit (only YAML comments changed, zero functional
+keys touched, so the sha is stable across it).
 Pre-launch, this doc's §0–§3 hard pins / stop rule / verdict definitions are FROZEN AS OF
 THIS COMMIT (WP0.6 mandate: "stop-rule numbers and verdict definitions are FROZEN as
 drafted incl. its DESIGN ADJUSTMENTS A1–A3"); any change requires a dated addendum, not a
@@ -485,20 +496,33 @@ draw abort, entropy 1.5/1.0, slope-CI-includes-0, Δ-CI-includes-0) all retained
 
 ## 9. Frozen-after-launch clause
 
-**WP0.6 status (this commit, 2026-07-15):** the book/corpus SHA-pinning originally
-planned as a launch-time step is DONE NOW (§4b/§4f) — the fresh books and corpus pin are
-folded into this preregistration at WP0.6 commit time, not deferred to launch. What
-remains for the actual Phase 1 launch step:
+**WP0.6 status:** the book/corpus SHA-pinning originally planned as a launch-time step was
+DONE at WP0.6 (§4b/§4f) — the fresh books and corpus pin were folded into this
+preregistration at WP0.6 commit time, not deferred to launch.
 
-1. Stamp `<LAUNCH_COMMIT_SHA>` above with the launch commit.
-2. Stamp `<LAUNCH_CONFIG_SHA>` above with sha256 of the resolved launch YAML.
-3. Confirm run3's declared `legal_move_radius_schedule` matches the schedule assumed by
-   §4b's r6/r8-unreachable proof (`{0:r4, 200000:r5, 400000:r6, 600000:r8}`) — if the
-   launch config changes this schedule, the r6/r8-unreachable claim and the
-   book-radius-match (§6-A3) must be re-verified before launch, not assumed.
-4. Close open risk 6 (§8) if wall-clock allows, or explicitly accept it open.
-5. Confirm cross-host corpus parity (manifest §4 one-liner) on the vast box if a box run
-   is planned.
+**Phase-1 launch checklist (closed 2026-07-15):**
 
-Thereafter every §0–§8 number, estimator, and artifact SHA is FROZEN; changes are dated
-APPEND-only addenda. No silent edits — this is the pre-registration of record.
+1. DONE. `<LAUNCH_COMMIT_SHA>` stamped above (`ef9325124d374fe0b70a1fc698a6713e7a725b8c`).
+2. DONE. `<LAUNCH_CONFIG_SHA>` stamped above (`fc7b3bfd61a7dc1872eeff87786eb2ce9eb1a57641ffd1dea3091280dd56b0a0`).
+3. DONE. Confirmed via the real config-merge entrypoint (`flatten_config_and_resolve_encoding`
+   over `--variant run3_dist65`): resolved `legal_move_radius_schedule` =
+   `[{step:0,radius:4},{step:200000,radius:5},{step:400000,radius:6},{step:600000,radius:8}]`
+   — matches §4b's r6/r8-unreachable proof exactly. No re-verification needed.
+4. ACCEPTED OPEN (explicit operator-visible acceptance, not silently dropped). Risk 6
+   (200k/250k/261500 run2 wr_d5 reads on fresh v3 books) is NOT closed by Phase-1 launch —
+   out of scope for the launch gate itself (a ~40–60min offline EVALFAIR backfill, not a
+   launch precondition; §2/§3's early-stop rule only needs 50k+150k, already banked at §4e).
+   Recommend closing before run3 crosses 150k wall-clock, per §8 risk 6's own guidance.
+5. DONE. Cross-host corpus parity re-confirmed at Phase-1 launch (independent of the WP0.4
+   design-time read): laptop and vast box (35883053, `/workspace/hexo_rl`)
+   `sha256sum data/bootstrap_corpus_v6_live2_ls.npz` both equal
+   `3813edc2fb10a7c5ab976a0293e38cbba0fd6b84e5295630f339ca421b345c97`; sidecar `sha256` field
+   matches on both hosts. Adjacent anchor-checkpoint parity (manifest §5) also confirmed:
+   `checkpoints/run2_bootstrap_v6_live2_ls.pt` sha256
+   `8dba7c8195e09f464dc4c7149fe57a0c483e241bff2abe6fa8ba652827afaa8a` on both hosts (the mint's
+   own source file, §4g).
+
+All five Phase-1 checklist items are closed. Every §0–§8 number, estimator, and artifact SHA
+freezes the instant the Phase-1 STEP-0 gate (see the Phase-1 launch report) confirms green;
+thereafter changes are dated APPEND-only addenda. No silent edits — this is the
+pre-registration of record.
