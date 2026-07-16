@@ -1,13 +1,16 @@
 # RUN4 — GNN production run design (GNN-integration program, R4 ratified b+)
 
-**STATUS: DRAFT — finalizes after the 3-part integration smoke gate passes; contract
-details subject to WP-B red-team amendments (`reports/probes/gnn_integration/WPB_redteam.md`,
-in flight).** This doc PRE-REGISTERS the run4 launch decisions with numbers so a monitor can
-fire mechanically. Numbers that reference run2/run3 trajectories are stamped as ratios-to-a-named-
-baseline; the concrete baseline value is pulled at launch (named at each use). Nothing here is
-launched — box is off-limits to this program until run3-CNN completes (operator 2026-07-14).
+**STATUS: FINAL (2026-07-16) — the 3-part S7 integration smoke gate PASSED**
+(`reports/probes/gnn_integration/S7_smoke_gate.md` "S7 GATE — FINAL OVERALL VERDICT: PASS",
+five runs, nine blockers closed en route). Every pre-registered launch decision is now RESOLVED
+**except the throughput floor** (§0 row 4 / §4.1), which stays OPEN pending the 5080 rider (OQ-2).
+Finalization is consolidated in **§9** (INIT adjudication, bf16 numeric LAW, launch-config as-built
+pins, eval instrument, gate record, consolidated OPEN list, handoff). Sections §0–§8 are the
+pre-registered body, kept verbatim with per-row status stamps in §0 + an OQ disposition table in §9.
+Nothing here is launched — box remains off-limits until run3-CNN completes (operator 2026-07-14);
+this doc gates the launch, it is not the launch act.
 
-**Date:** 2026-07-14 · **Program:** GNN-integration · **Worktree:** `worktree-gnn-integration`
+**Date:** 2026-07-14 (draft) · **Finalized:** 2026-07-16 · **Program:** GNN-integration · **Worktree:** `worktree-gnn-integration`
 
 **Inputs consumed (verbatim citations at point of use):**
 `reports/probes/gnn_integration/WPA_cuda_bench.md` (throughput, torch-vs-ORT, BUILD-HOT),
@@ -31,14 +34,16 @@ no custom CUDA kernel (§D-STRIX kernel REJECT — see §7 transfer test); one r
 
 ## 0. Ruling summary (the pre-registered decisions, one table)
 
-| # | Decision | Ruling | Falsifier / gate |
-|---|---|---|---|
-| 1 | INIT | **BC-prefit** (`gnn_bc_040000.pt`) as init, **corpus-mix OFF**. Fallback = fresh+mixing (option B). | Divergence signature DS-1/2/3 by ≤50k → restart fresh+mixing (§1.3) |
-| 2 | Schema | **legacy-v1** axis-graph (WP-C LEGACY-V1-CONFIRMED). Lean-D6 = run5 card. **D6 graph-space aug IN scope** (free via option-c coord pre-rotation, WP-B). | lean-D6 promotion rule = `lean_d6_adopt_vs_avoid.md` §3 |
-| 3 | Net scale | **probe-scale ~284k** (the net that measured +414). | NET-CAPACITY plateau falsifier (§4.2) → scale to prod (run4-v2) |
-| 4 | Throughput floor | **≥ 1.0k steps/hr at STEP-0** (5080, probe-scale, Rust builder, prod distribution). | below floor = NO LAUNCH → BUILD-HOT perf sub-package first (§4.1) |
-| 5 | Eval | EVALFAIR deploy battery + strix-raw external bar + value-health 234-probe; eff_n = distinct games. | stop rule §3.3 |
-| 6 | Box | run4 takes box when run3-CNN stops per run3's rule; smoke gate NOT PASS by then → box STOPS (§5). | operator order: off-limits until run3 completes |
+| # | Decision | Ruling | Falsifier / gate | Status (2026-07-16) |
+|---|---|---|---|---|
+| 1 | INIT | **BC-prefit** (`gnn_bc_040000.pt`) as init, **corpus-mix OFF**. Fallback = fresh+mixing (option B). | Divergence signature DS-1/2/3 by ≤50k → restart fresh+mixing (§1.3) | **FINAL** — warm-start seam wired + landed-verified **46/46** tensors (OQ-5 live-fire); fresh-init fallback proven bootable by the gate. §9.1 |
+| 2 | Schema | **legacy-v1** axis-graph (WP-C LEGACY-V1-CONFIRMED). Lean-D6 = run5 card. **D6 graph-space aug IN scope** (free via option-c coord pre-rotation, WP-B). | lean-D6 promotion rule = `lean_d6_adopt_vs_avoid.md` §3 | **FINAL** — `gnn_axis_v1` is the only `representation="graph"` encoding; byte-parity oracle green (Part-3). |
+| 3 | Net scale | **probe-scale ~284k** (the net that measured +414). | NET-CAPACITY plateau falsifier (§4.2) → scale to prod (run4-v2) | **FINAL** — as-built `GnnNet`+dist65 = **286,082** params (BC 283,970 + fresh dist65 head, §9.3). |
+| 4 | Throughput floor | **≥ 1.0k steps/hr at STEP-0** (5080, probe-scale, Rust builder, prod distribution). | below floor = NO LAUNCH → BUILD-HOT perf sub-package first (§4.1) | **OPEN** — 5080 rider (OQ-2); the ONE decision finalize leaves open (§9.7 handoff). |
+| 4b | Numeric regime | **bf16 graph autocast** — `amp_dtype_for("graph")` returns bf16 unconditionally in code (§9.2). | fp16 GINE sum-agg overflow on prod-scale graphs (F9) | **FINAL/LAW** — S7 run-3 F9 → run-4/5 bf16 zero-non-finite over ~200 min live self-play. |
+| 5 | Eval | EVALFAIR deploy battery + strix-raw external bar + value-health 234-probe; eff_n = distinct games. Graph book = EVALFAIR d5 **r=5** + `--graph-eval-book-radius` override (§9.4). | stop rule §3.3 | **FINAL (instrument)** — Part-2 ran end-to-end vs SealBot d5, eff_n honest (raw=8/deduped=8); in-loop eval loud-skips graph rounds (OQ-8 rider). |
+| 6 | Box | run4 takes box when run3-CNN stops per run3's rule; smoke gate NOT PASS by then → box STOPS (§5). | operator order: off-limits until run3 completes | **FINAL** — smoke gate is PASS, so the box-STOPS precondition (§5) is cleared; timing still gated on run3-CNN stop. |
+| 7 | Launch artifact | **`configs/variants/run4_gnn.yaml`** (production, bs=256 open) + **`run4_gnn_smoke.yaml`** (S7 gate vehicle, bs=16). Pins in §9.3. | launch-path parity test (`test_run4_gnn_launch_path.py`) | **FINAL** — both landed + committed (`d4c620c`); resolved-config parity + path-disjointness test-pinned. |
 
 ---
 
@@ -371,6 +376,10 @@ WP-B Part 2.6) is required regardless of the manifest's state.
 
 ## 8. OPEN QUESTIONS — the 3-part integration smoke gate MUST answer these before finalize
 
+**> DISPOSITION (2026-07-16, gate PASS): resolved in §9.6. OQ-3/4/5/6/7 RESOLVED by the gate;
+OQ-1/2/8/9 remain OPEN (OQ-2 is the sole LAUNCH-gating open — the throughput floor). Original
+text kept below for provenance.**
+
 1. **OQ-1 — run2 reference values for DS-1/2/3.** Stamp `run2_mw_fresh`'s policy-entropy@50k,
    E-W axis-share trajectory, and SealBot-WR trajectory from run2 logs; and measure
    `gnn_bc_040000.pt`'s frozen step-0 SealBot WR (DS-1 anchor). Thresholds are un-fireable until
@@ -409,4 +418,174 @@ WP-B Part 2.6) is required regardless of the manifest's state.
    INV-R4-2 external ceiling read.
 
 **Open questions count: 9.** All 9 gate finalize; OQ-2/OQ-5/OQ-7 additionally gate LAUNCH.
-```
+
+---
+
+## 9. FINALIZATION (2026-07-16 — S7 gate PASS)
+
+Per the program endpoint clause ("PASS all three → run4 design doc finalizes: init decision +
+everything except the throughput floor, which remains OPEN pending the 5080 rider"). Source of
+record: `reports/probes/gnn_integration/S7_smoke_gate.md` (5 runs) + `S7_f9_bf16_fix.md` (F9) +
+the committed launch pins (`d4c620c`). **No decision below is invented — each is the draft's own
+pre-registered option adjudicated against what LANDED, or a gate finding recorded as LAW.**
+
+### 9.1 INIT — DECISION: BC-prefit warm-start (the pre-registered pick, CONFIRMED)
+
+**Decision:** run4 launches from the **BC-prefit init** (`checkpoints/probes/gnn_bc/gnn_bc_040000.pt`),
+transferred via the `gnn_warm_start` YAML seam (`hexo_rl.training.gnn_warmstart`), **NOT** `--checkpoint`
+(WP-4's `assert_full_gnn_checkpoint_or_raise` correctly refuses a BC-prefit-only state dict on the
+resume path; the seam exists to route around that guard on purpose). Corpus-mix **OFF**. This is
+§0-row-1 / §1's pick, unchanged.
+
+**Adjudication vs the pre-registered options (draft §1.1 / §1.2):**
+- **Option A (BC-prefit) — what LANDED and is verified.** The warm-start seam is wired and fired live
+  in the gate: `gnn_warmstart_loaded loaded_keys=46 verified_tensors=46` — the `torch.allclose`
+  landed-verify over representation + policy tensors PASSED (OQ-5 closed, F1-guard live). The banked
+  `gnn_bc_040000.pt` artifact carries the +414 architecture signature that is run4's entire evidence
+  base; fresh init would forfeit it at step 0, and under the ~4-5× throughput penalty re-learning the
+  representation through slow RL is the most expensive possible use of the budget (§1.1 FOR-prefit).
+  The dist65 value head stays **FRESH** over the prefit (E1 REVIVE — dist65 warm-starts fine from an
+  absent value head; OQ-6 confirmed whole-board GNN → plain single-window dist65 CE, no K-cluster
+  argmin routing).
+- **Option B (fresh + corpus-mix) — the pre-registered fallback, now proven bootable.** The gate ran
+  **fresh-init** for the training smoke throughout (warm-start decoupled from the train-step smoke by
+  design) and it launched, self-played, trained, and checkpointed clean — so the fallback recipe is
+  a proven-bootable restart target, not a paper option.
+
+**Falsifiable rationale (applied verbatim from §1.3):** the pick is falsified iff the prefit anchored
+into the BC imitation basin and self-play cannot escape. The **DS-1/2/3 divergence signature** remains
+the mechanical falsifier — ANY of DS-1 (SealBot WR at 50k < the prefit's own frozen step-0 WR) /
+DS-2 (entropy basin-lock) / DS-3 (E-W axis bias) fires by ≤50k → prefit REJECTED → restart from
+fresh+mixing (option B). **Caveat (OPEN, gates the monitor not the launch):** DS-1/2/3 thresholds are
+un-fireable until OQ-1 stamps `run2_mw_fresh`'s entropy@50k / axis-share / SealBot-WR trajectory and
+the prefit's frozen step-0 SealBot WR (§9.6). The launch decision is final; the monitor arming is a
+launch-window OQ-1 task.
+
+### 9.2 Numeric regime — LAW: bf16 graph autocast (F9)
+
+**LAW for run4:** the GRAPH path trains and infers under **bfloat16** autocast, pinned in CODE via
+`hexo_rl/model/build_net.py::amp_dtype_for(representation, config)` — `representation=="graph"`
+returns `torch.bfloat16` **unconditionally** (it does NOT consult the `amp_dtype` config key, even if
+declared; the dense/`"grid"` path is byte-identical fp16 via the pre-existing knob). GradScaler is
+auto-disabled on bf16 (`scaler_enabled = fp16 and amp_dtype == float16` → False).
+
+**Mechanism one-liner:** `_GINEConv` sum-aggregation accumulates one ReLU'd message per incoming edge
+onto an un-damped residual stream; on production-scale ply-cap-deep self-play graphs (~500-node
+late-game positions, conv-stack absmax reaching 5.56e4 vs fp16's 6.55e4 ceiling) select batches
+overflow → `inf` → LayerNorm → NaN through the value/embedding head — bf16's full fp32 exponent range
+removes the ceiling at identical 2-byte cost, native on both the dev 4060 (sm_89) and the launch 5080
+(sm_120). Evidence: fp16 produced 136 non-finite events in <2 min (S7 run-3); bf16 produced **zero**
+across ~200+ min of cumulative live self-play (runs 4-5), throughput parity proven (bf16 701 vs fp16
+715 evals/s, live-seam A/B). Why the pin is in code, not YAML: `configs/training.yaml`'s root
+`amp_dtype: "fp16"` default is inherited by every non-overriding variant — pinning in code means F9
+cannot regress via a dropped/stale variant override (the F1/F5a declared-vs-inherited lesson).
+
+### 9.3 Launch config — `run4_gnn.yaml` (committed `d4c620c`)
+
+The launch artifact is **`configs/variants/run4_gnn.yaml`** (production) with **`run4_gnn_smoke.yaml`**
+as the S7 gate vehicle (a full labeled duplicate; no variant-of-variant inheritance exists — parity is
+test-pinned). Production pins, all verified resolving clean through the base+variant merge chain:
+
+| Pin | Value | Why |
+|---|---|---|
+| `encoding` | `gnn_axis_v1` | only `representation="graph"` encoding (registry.toml). |
+| `value_head_type` | `dist65` **explicit** | `configs/model.yaml` unconditionally merges `scalar` → the key is NEVER absent, so the representation-aware default never fires; omitting raises `RepresentationMismatch`. Declared (inert/correct — GnnNet ships only `GnnDist65ValueHead`). |
+| `in_channels` | `0` **explicit** | base `in_channels: 8` disagrees with `gnn_axis_v1`'s `n_planes=0` → scattered-key consistency gate raises; graph path never reads it. |
+| `mixing.buffer_persist_path` | `checkpoints/replay_buffer_run4_gnn.hexg` **namespaced** | §RUN3-STEP0 law — a shared un-namespaced path auto-restored a stale cross-lineage buffer in run3 (STEP0-FAIL). |
+| `eval_pipeline.gating.best_model_path` | `checkpoints/best_model_run4_gnn.pt` **namespaced** | §RUN3-STEP0 / S7 F5a — the shared `checkpoints/best_model.pt` planted an anchor-resolve trap; per-lineage path (run3 template). |
+| `mixing.pretrained_buffer_path` | `null` **explicit** | corpus-mix OFF (Decision 1). `null` (not `"<auto>"`) skips `expand_auto_paths` → `load_pretrained_buffer` no-ops; `"<auto>"` hard-fails on the unminted `gnn_axis_v1` sha pin (S7 F1). |
+| `bot_batch_share` | `0` **explicit** | operator bot-mix retirement; F1 preserve-ckpt-baked (declare, don't inherit). |
+| aux loss weights | `aux_opp_reply_weight / uncertainty_weight / ownership_weight / threat_weight / aux_chain_weight / ply_index_weight / entropy_reg_weight` all `0.0` **explicit** | GnnNet ships policy + dist65 only; nonzero inherited defaults trip `_train_on_graph_batch`'s `GRAPH_FORBIDDEN_NONZERO_WEIGHTS` loud-raise at step 1. Guard constant is the enforcement. |
+| `draw_value` / `ply_cap_value` | `-0.5` / `0.0` **explicit** | §178 outcome levers, values = current base defaults, pinned per F1 (run4 introduces no new outcome tuning). Feed `finalize_graph_outcome` INV26-verbatim. |
+| `recency_weight` | `0.75` **real** | commit B landed the `HexgBuffer.sample_graph_batch(recent_frac=…)` sampler — commit-A's "declare 0 until the sampler lands" flag is CLEARED. |
+| `selfplay.random_opening_plies` | `0` **valid** | WP-1 empty-board fix (`8dacf6f`) landed — organic ply-0 graph self-play starts; no longer forced to ≥1. |
+| `selfplay_stall_timeout_sec` | `1800.0` | run3 watchdog rides verbatim (5080-sized; the 4060 smoke vehicle raises to 5400 — a labeled capacity override, OQ-2 rider). |
+| `promotion_gate_subprocess_isolation` | `true` | run2 livelock ROOT fix, ON as run3 does. |
+| `amp_dtype` | **undeclared** | graph path is bf16 in code (§9.2); a key here would be a harmless no-op — left undeclared so a reader doesn't mistake it for a tunable. |
+| `gnn_warm_start` | `enabled: true`, `checkpoint: checkpoints/probes/gnn_bc/gnn_bc_040000.pt` | BC-prefit seam (§9.1). |
+
+**As-built net:** the built `GnnNet` with the dist65 head = **286,082 params** (the BC prefit is 283,970;
+the fresh dist65 head adds the delta). This is the §3/§4.2 "probe-scale ~284k" net as-shipped —
+consistent, not a contradiction (the +414 was measured on the BC rep+policy; the value head is fresh
+by construction). **`batch_size` stays inherited (256) in production, OPEN pending OQ-2** — the smoke
+vehicle pins bs=16 (F6 capacity ladder 256→64→32→16, final rung sized against GENUINE bf16-game graphs
+~1494 legal-nodes/graph; `inference_batch_size: 16`, `min_buffer_size: 64`, `buffer_capacity: 4096`,
+`selfplay_stall_timeout_sec: 5400`, all labeled + allowlisted in the parity test). **Do NOT copy the
+smoke capacity knobs back into production** — the 5080 rider owns the real capacity knee.
+
+### 9.4 Eval instrument — graph EVALFAIR d5, r=5 book (F3 ruling), in-loop loud-skip
+
+- **Book-radius ruling (S7 F3, pinned controller ruling, operator-overridable):** a whole-board graph
+  checkpoint carries no `legal_move_radius_schedule`, so `radius_from_checkpoint` resolved `None` and
+  the EVALFAIR d5 book selection raised. Ruling: a graph ckpt maps to the **standard EVALFAIR d5 book
+  at r=5** (D-LADDER instrument convention — for a whole-board net the book radius is opening-diversity
+  only, not a curriculum stage). Implemented with an explicit logged event
+  (`graph_ckpt_evalfair_book_r5 radius=5 overridden=False`, fired at BOTH resolution sites) and a
+  validated override knob **`--graph-eval-book-radius`** (threaded `mantis_pull_eval.py` CLI →
+  `stage2_d5_eval` → `run_arm` as `graph_eval_book_radius_override`). Verified live: Part-2 ran
+  end-to-end 4/4 pairs, 8/8 games vs SealBot d5, **eff_n honest raw=8 / deduped=8, `suffix_collisions=[]`**
+  (the §D-ARGMAX dedupe instrument ran and measured distinct games, not assumed).
+- **In-loop eval loud-skip semantics (F7):** the in-loop promotion-gate arena is dense-only; for a graph
+  candidate it now emits ONE structured `eval_round_skipped_graph_representation` warning and sets
+  `EvalRoundResult.eval_opponents_skipped = len(OPPONENTS)` (`evaluation_round_complete eval_games=0
+  eval_opponents_skipped=8`) instead of N silent per-opponent crashes. **Consequence, binding:** in-loop
+  eval rounds complete with 0 games for graph runs by design — the `eval_opponents_skipped` counter is
+  the visibility hook. Promotion + true-north strength come from the OFFLINE EVALFAIR d5 battery
+  (Part-2 path), not the in-loop round. This is the **OQ-8 rider**: the deploy-regime Gumbel promotion
+  gate through a searched GNN (net-vs-net in the isolated subprocess, INV-R4-1 dependency) is NOT closed
+  by the gate — the building blocks exist (offline searched-eval `infer_batch` graph branch landed, F8
+  fixed) but the in-loop promotion arena is out of scope (`gnn_integration_scope.md` §C5, needs C3
+  mixed-representation in-loop anchor). Kept OPEN (§9.6).
+
+### 9.5 S7 gate record + fp16-artifact re-adjudication
+
+**Gate: PASS** — Part-1 (production entrypoint, as-pinned `run4_gnn_smoke`, run 5): finite bf16 steps,
+watchdog armed+live, ckpt@3 write + clean reload (gated loader, `gnn_axis_v1`/schema-1, allclose,
+all finite), zero non-finite, zero OOM, clean single-PID shutdown, no env-var dependency. Part-2:
+offline EVALFAIR d5 end-to-end, honest eff_n (run 4). Part-3: formal ragged/adversarial/parity suites
+250/250 across 14 suites (run 4) + 13/13 launch-path re-run post-amendment (run 5).
+
+**Re-adjudication of RECORD (load-bearing, accepted): fp16-era self-play game-length data was
+ARTIFACTUAL.** The fast 26-29-ply games in gate runs 1-3 were fp16-NaN artifacts — saturated/NaN
+values terminated games early (organic-draw class, `terminal_reason=3`), NOT genuine play. Under the
+bf16 fix genuine games run toward the 150-ply cap (witnessed: 88/107/140/150-ply games at ~30+ min/wave
+on the 4060). **Anything downstream that treated those fp16-era buffers / "N games" / eval-strength
+reads as representative must be re-read against this** (`S7_f9_bf16_fix.md` "Disposition"). The
+practical run4 consequences are the two OQ-2 riders below (memory + wall-time must be measured on
+GENUINE bf16 data, not the fp16-artifact distribution every prior sizing used).
+
+### 9.6 OPEN items (explicit — kept OPEN, none block finalize except OQ-2 which gates LAUNCH)
+
+| OQ / item | Status | Blocking reason / what closes it |
+|---|---|---|
+| **Throughput floor** (§0-4 / §4.1) | **OPEN — LAUNCH gate** | 5080 rider (OQ-2). Absolute ms don't transfer from the 4060; re-derive per-leaf ms → re-check ≥1.0k steps/hr STEP-0 floor. Below floor = NO LAUNCH → BUILD-HOT first. |
+| **OQ-2 — 5080 rider** | **OPEN — LAUNCH gate** | (a) rerun `gnn_infer_bench.py` on `wpa_positions.json` → floor; (b) **train-step memory envelope on GENUINE bf16 game data** (the bs=256 production knob is unmeasured for concurrent self-play + backward — F6 ladder shows genuine graphs ~1494 nodes/graph, 3× the fp16-artifact basis); (c) confirm **5080 first-wave wall < the production 1800s watchdog** (the 4060 needs 5400s). |
+| **OQ-1 — DS-1/2/3 reference stamps** | **OPEN — monitor-arming** | stamp `run2_mw_fresh` entropy@50k / E-W axis-share / SealBot-WR trajectory + the prefit's frozen step-0 SealBot WR. Thresholds un-fireable until stamped (§1.3); does NOT block the INIT decision. |
+| **OQ-8 — promotion gate through the GNN** | **OPEN** | deploy-regime Gumbel net-vs-net through a searched GNN in the isolated subprocess (INV-R4-1 dependency). In-loop eval loud-skips by design (§9.4 F7); offline EVALFAIR d5 is the working strength path. Needs C3 in-loop mixed-representation anchor. |
+| **OQ-9 — strix-raw offline opponent** | **OPEN** | strix-raw delegates to strix's own engine/venv (`strix_g128_child.py`); confirm it runs as an EVALFAIR offline opponent for the INV-R4-2 external-ceiling read. Gate used SealBot d5, not strix-raw. |
+| **value_spread_canary bare-`forward()`** | **OPEN — flagged, non-fatal** | `hexo_rl/monitoring/value_spread_canary.py` calls a bare dense tensor `forward()` (F2's bug CLASS, not `.in_channels`) → `value_spread_canary_failed` on every graph train step. Caught, warning-only. Future triage; does not block launch. |
+| **Corpus games-manifest sha mint** | **OPEN — deferred (fallback path only)** | no canonical `gnn_corpus_v1.hexg` / games-manifest sha exists in-repo; the export takes the sha as a required CLI arg — **mint at FIRST corpus export**. Only needed if the option-B corpus-mix fallback fires (mixing-batch wiring itself stays deferred per `gnn_training_path_design.md` §7.2). |
+| **Monitoring panel build-out** | **OPEN — deferred** | no NEW dashboard panel for v1 (the graph `train_step`/`training` events supply the 3 direct-indexed loss keys, existing panels render). Any graph-specific panel MUST land its producer field + extend the contract test FIRST (**producer-manifest law**). |
+| OQ-3 unified manifest | **RESOLVED** | WP0.4 landed (`1d4a206`+`42e4e90`, `_CORPUS_SHA_PINS` resolver); graph corpus re-export ships in WP-5. |
+| OQ-4 corpus re-export parity | **RESOLVED** | byte-parity oracle green in gate Part-3 (`test_gnn_hexg_corpus_export.py`, `test_hexo_graph_parity.py`). |
+| OQ-5 loader landed-verify | **RESOLVED** | 46/46 tensors verified live (§9.1). |
+| OQ-6 dist65 head geometry | **RESOLVED** | whole-board GNN → ONE pooled (65) → plain single-window CE, no K-cluster routing; dist65 warm-starts fresh over the prefit (E1 REVIVE). |
+| OQ-7 smoke-gate PASS criteria | **RESOLVED** | gate defined + PASSED (5 runs). |
+
+### 9.7 Handoff — the 5080 rider window (BEFORE launch)
+
+The rider is the ONLY on-box GNN work before launch; it does not touch a live run. When run3-CNN stops
+per its own rule and the box frees, the rider window MUST, in order:
+
+1. **Throughput-floor freeze (OQ-2a).** Rerun `scripts/research/gnn_infer_bench.py` UNCHANGED on the
+   frozen `reports/probes/gnn_integration/wpa_positions.json` on the 5080; re-derive per-leaf ms;
+   confirm STEP-0 **≥ 1.0k steps/hr** (§4.1). Below floor → **NO LAUNCH → BUILD-HOT perf sub-package
+   first.** Freeze the measured floor number into §0-row-4.
+2. **OQ-2b train-step memory envelope on GENUINE bf16 data.** Measure the bs=256 production train step
+   CONCURRENT with the live inference server on genuinely-played (bf16, ply-cap-deep ~1494-node) game
+   graphs — NOT the fp16-artifact distribution. If bs=256 exceeds the 16 GiB 5080 envelope, pin the
+   largest bf16-genuine-data batch that fits (the F6 ladder is the precedent) and record it.
+3. **As-pinned bs=256 witness.** Run S7 Part-1 as-pinned (production `run4_gnn.yaml`, bs=256, watchdog
+   1800s) on the 5080 — minutes there vs ~70 min on the 4060 — to witness the production capacity knob
+   end-to-end and confirm **first-wave wall < 1800s** (OQ-2c). This doubles as the OQ-2 memory rider.
+4. **Then, and only then**, arm the OQ-1 DS-1/2/3 monitor (stamp run2 reference values) and launch.

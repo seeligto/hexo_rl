@@ -253,14 +253,17 @@ impl HexgBuffer {
     /// value_valid / is_full_search + per-graph target-argmax cells (the
     /// AugRoundTrip runtime canary). `augment` draws one uniform D6 element per
     /// sampled record and coord-rotates stones + visit-keys before rebuild
-    /// (design §5, realization (ii)).
-    #[pyo3(signature = (batch_size, augment = false))]
+    /// (design §5, realization (ii)). `recent_frac` (WP-5b §4, default `0.0`)
+    /// draws that fraction of the batch from the newest ring slots instead of
+    /// the full-ring weighted sample; `0.0` is byte-identical to pre-commit-B.
+    #[pyo3(signature = (batch_size, augment = false, recent_frac = 0.0))]
     pub fn sample_graph_batch(
         &mut self,
         batch_size: usize,
         augment: bool,
+        recent_frac: f32,
     ) -> PyResult<(crate::inference_bridge::GraphWire, GraphTargets)> {
-        self.sample_graph_batch_impl(batch_size, augment)
+        self.sample_graph_batch_impl(batch_size, augment, recent_frac)
     }
 
     /// Grow to `new_capacity`, preserving all records (linearise + extend).

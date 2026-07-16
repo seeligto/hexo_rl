@@ -19,6 +19,7 @@ import structlog
 from engine import InferenceBatcher  # type: ignore[attr-defined]
 from hexo_rl.encoding import EncodingSpec as RegistrySpec
 from hexo_rl.encoding import resolve_from_config as registry_resolve_from_config
+from hexo_rl.model.build_net import amp_dtype_for
 from hexo_rl.model.network import HexTacToeNet, WIRE_CHANNELS
 
 # Perf probes log via structlog so they persist to JSONL independent of dashboards.
@@ -142,17 +143,18 @@ class InferenceServer(threading.Thread):
                 remedy="unset_diagnostics.perf_sync_cuda_in_production_config",
             )
 
-        # Autocast dtype — must match trainer for weight-sync consistency.
-        # Config: "fp16" (default) or "bf16". bf16 on Ampere+/Ada avoids the
-        # GradScaler overhead on the training side; inference-side just
-        # enables the same autocast target.
-        _amp_raw = str(config.get("amp_dtype", "fp16")).lower()
-        if _amp_raw in ("fp16", "float16", "half"):
-            self._amp_dtype = torch.float16
-        elif _amp_raw in ("bf16", "bfloat16"):
-            self._amp_dtype = torch.bfloat16
-        else:
-            raise ValueError(f"amp_dtype must be 'fp16' or 'bf16', got {_amp_raw!r}")
+        # Autocast dtype — representation-aware (S7 F9 fix, see
+        # `amp_dtype_for` docstring in `hexo_rl/model/build_net.py`): the
+        # graph loop (`_run_graph_loop`, the WP-3 seam — this is also the
+        # seam `LocalInferenceEngine`'s offline EVALFAIR/deploy-eval graph
+        # leg rides via its own internally-constructed `InferenceServer`)
+        # is pinned to bf16 unconditionally — fp16 GINE sum-aggregation
+        # overflows on production-scale self-play/deep-eval graphs. The
+        # dense path is UNCHANGED: reads the `amp_dtype` config knob
+        # (default fp16) — must match the trainer's choice for weight-sync
+        # consistency, exactly as before.
+        _representation = "graph" if self._is_graph else "grid"
+        self._amp_dtype = amp_dtype_for(_representation, config)
 
     def _setup_inference_path(self, sp: dict, board_size: int) -> None:
         """Configure trace OR compile path for the inference model (§176 P22).
@@ -403,9 +405,11 @@ class InferenceServer(threading.Thread):
         """WP-3 step 6 — ragged axis-graph inference loop (seam design §4.3).
 
         Pull a block-diagonal `GraphWire` from Rust, run the single
-        `collate_graph_batch` resolver, forward the `GnnNet` (fp16 autocast on
-        CUDA), segment-softmax per graph's legal nodes, and submit the flat
-        ragged probs back — the Rust side assembles each leaf's `LegalSetPolicy`
+        `collate_graph_batch` resolver, forward the `GnnNet` (bf16 autocast on
+        CUDA — S7 F9 fix, fp16 overflowed GINE sum-aggregation on
+        production-scale graphs; see `amp_dtype_for`), segment-softmax per
+        graph's legal nodes, and submit the flat ragged probs back — the Rust
+        side assembles each leaf's `LegalSetPolicy`
         (`assemble_ls_from_gnn_probs`), NEVER a dense-362 scatter (option (b)).
         Any resolver/forward exception dies loud via
         `submit_graph_inference_failure` (no silent fallback — the graph queue

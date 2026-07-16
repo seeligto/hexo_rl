@@ -53,6 +53,24 @@ pub(crate) type WorkerResultRow = (Vec<f32>, Vec<f32>, Vec<f32>, f32, usize, Vec
 /// are metadata-only (drained via `recent_game_results`, NOT the replay buffer).
 pub(crate) type GameResultRow = (usize, u8, Vec<(i32, i32)>, usize, u8, u64, u64, u32, u8, u32);
 
+/// GNN-integration WP-5b commit A (R7) — per-row tuple returned by
+/// `collect_graph_data`, field order matching `HexgBuffer::push_graph_position`'s
+/// positional signature exactly (`game_id` is a separate push-time argument,
+/// defaulted −1 / untagged — see delta doc §4.2 / §6):
+/// `(stones, visits, current_player, moves_remaining, ply_index, is_full_search,
+/// outcome, value_valid, game_length)`.
+pub(crate) type GraphRecordRow = (
+    Vec<(i16, i16, i8)>,  // stones
+    Vec<(i16, i16, f32)>, // visits
+    i8,                   // current_player
+    u8,                   // moves_remaining
+    u16,                  // ply_index
+    bool,                 // is_full_search
+    f32,                  // outcome
+    bool,                 // value_valid
+    u16,                  // game_length
+);
+
 /// Return tuple of `collect_data` — ten NumPy arrays bound to the GIL
 /// lifetime. Fields: `(feat, chain, policy, value, plies, ownership,
 /// winning_line, is_full_search, position_index, value_valid)`. `position_index`
@@ -204,6 +222,13 @@ pub struct SelfPlayRunner {
     ///     aux target frame aligns with the state frame under later symmetry
     ///     augmentation in the replay buffer.
     pub(crate) results: Arc<Mutex<VecDeque<WorkerResultRow>>>,
+    /// GNN-integration WP-5b commit A (R6) — parallel graph-position results
+    /// queue. Constructed unconditionally (idle `Mutex<VecDeque>`, not on the
+    /// dense hot path — an empty VecDeque behind an uncontended Mutex costs
+    /// nothing on the grid path); only ever pushed-to by the `is_graph`
+    /// finalize branch (`finalize_game_graph`, `worker_loop/inner.rs`) and
+    /// drained by `collect_graph_data`.
+    pub(crate) graph_results: Arc<Mutex<VecDeque<crate::replay_buffer::hexg::GraphRecord>>>,
     /// Ring-buffer of recent game results for Python logging.
     /// Tuple: (plies, winner_code, move_history, worker_id, terminal_reason,
     ///         model_version_min, model_version_max, model_version_distinct).
@@ -488,6 +513,7 @@ impl SelfPlayRunner {
             draws: Arc::new(AtomicU64::new(0)),
             positions_dropped: Arc::new(AtomicU64::new(0)),
             results: Arc::new(Mutex::new(VecDeque::new())),
+            graph_results: Arc::new(Mutex::new(VecDeque::new())),
             recent_game_results: Arc::new(Mutex::new(VecDeque::new())),
             handles: Arc::new(Mutex::new(Vec::new())),
             mcts_depth_accum: Arc::new(AtomicU64::new(0)),
@@ -595,6 +621,36 @@ impl SelfPlayRunner {
         let vv_np     = value_valid_v.into_pyarray(py);
 
         Ok((feats_np, chain_np, pols_np, vals_np, gids_np, own_np, wl_np, ifs_np, pidx_np, vv_np))
+    }
+
+    /// GNN-integration WP-5b commit A (R7) — drain all buffered graph-position
+    /// records and return them as a Python list of `GraphRecordRow` tuples,
+    /// field order matching `HexgBuffer.push_graph_position`'s positional
+    /// signature (`game_id` excluded — the graph self-play drain pushes
+    /// untagged / `game_id=-1`, delta doc §4.2). `GraphRecord` carries no fixed
+    /// stride (variable-length `stones`/`visits`), so — unlike `collect_data`
+    /// — this is NOT a fixed-shape numpy reshape; the volume is bounded by the
+    /// self-play floor (delta doc §6), so a plain Vec-of-tuples move-out (no
+    /// numpy boundary) is the documented v1 choice. Sibling to `collect_data`;
+    /// grid runners never call it (their `graph_results` queue stays
+    /// permanently empty).
+    pub fn collect_graph_data(&self) -> Vec<GraphRecordRow> {
+        let mut q = self.graph_results.lock().expect("graph_results lock poisoned");
+        q.drain(..)
+            .map(|r| {
+                (
+                    r.stones,
+                    r.visits,
+                    r.current_player,
+                    r.moves_remaining,
+                    r.ply_index,
+                    r.is_full_search,
+                    r.outcome,
+                    r.value_valid,
+                    r.game_length,
+                )
+            })
+            .collect()
     }
 
     pub fn stop(&self) {

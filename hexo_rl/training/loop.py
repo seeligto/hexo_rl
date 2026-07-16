@@ -126,7 +126,7 @@ def run_training_loop(
     input_channels = _arch.input_channels
     _ckpt_interval = int(trainer.config.get("checkpoint_interval", 500))
 
-    cuda_warmup(inf_model, device, board_size)
+    cuda_warmup(inf_model, device, board_size, spec=_arch.spec)
     cuda_stream_audit(config, device)
 
     # ── Worker pool ───────────────────────────────────────────────────────────

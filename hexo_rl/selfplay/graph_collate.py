@@ -32,7 +32,10 @@ from typing import Any, Optional, Sequence
 import numpy as np
 
 # The 3 win axes in axial coords (mirrors hexo_graph::WIN_AXES /
-# strix_v1_graph.WIN_AXES). Load-bearing for the edge-geometry recompute.
+# strix_v1_graph.WIN_AXES). Public constant (part of `__all__`) for external
+# callers; the check-14 edge-geometry recompute itself now runs in Rust
+# (`engine.verify_edge_geometry`, S4 PERF item #1) against its own copy of
+# `hexo_graph::WIN_AXES` — this Python tuple is no longer read internally.
 WIN_AXES: tuple[tuple[int, int], ...] = ((1, 0), (0, 1), (1, -1))
 
 # Contract-fixed schema widths (single-sourced against hexo_graph constants;
@@ -481,53 +484,34 @@ def _check_semantic(
     N = node_feat.size // node_feat_dim
     E = edge_attr.size // edge_feat_dim
     Lg = legal_node_gather.size
+    # `coords` feeds checks 16/17 below (canonical-slot / aug-round-trip);
+    # `nf`/`node_graph`/`node_is_dummy`/`cp` — check 14's old own-Python prep
+    # — are gone: `verify_edge_geometry` (Rust, below) reads the RAW flat
+    # `node_feat`/`node_offsets`/`current_player` arrays directly, zero-copy.
     coords = node_coords.reshape(N, 2).astype(np.int64)
-    nf = node_feat.reshape(N, node_feat_dim)
-    node_graph = _graph_of(node_offsets, N)
-    # dummy node of each graph = last row of the graph.
-    dummy_of_graph = node_offsets[1:] - 1
-    node_is_dummy = np.zeros(N, dtype=bool)
-    node_is_dummy[dummy_of_graph] = True
-    cp = current_player.astype(np.int64)  # per-graph +1/-1
 
     # 14. EdgeAttrGeometryMismatch — recompute attrs from coords + player id.
+    # Compiled Rust re-derivation (S4 PERF item #1, `engine.verify_edge_geometry`)
+    # — reads the SAME post-marshal flat numpy arrays this function already
+    # holds as zero-copy readonly views (no reshape/astype copies, no
+    # boolean-mask gather). Eliminates the `coords[d]-coords[s]` gather, the
+    # `np.argmax` onehot, and the `ea[real]` boolean-mask copy the profiler
+    # named as 163.1 ms/step (22.2% of the bs=128 step). Mechanism/PREREG:
+    # reports/probes/gnn_perf/PREREG.md HOTSPOT #1. Every sub-assertion moves
+    # verbatim; the Rust fn raises a plain ValueError on mismatch, caught and
+    # re-raised here as the SAME named `EdgeAttrGeometryMismatch` so every
+    # existing die-loud catch site (incl. ADV-8, injected into this exact
+    # post-marshal payload) is unaffected.
     if E > 0:
-        ei2 = edge_index.reshape(2, E)
-        ea = edge_attr.reshape(E, edge_feat_dim)
-        src = ei2[0]
-        dst = ei2[1]
-        touches_dummy = node_is_dummy[src] | node_is_dummy[dst]
-        # dummy edges must be all-zero.
-        if np.any(np.abs(ea[touches_dummy]) > 1e-6):
-            raise EdgeAttrGeometryMismatch("a dummy edge has non-zero attrs")
-        real = ~touches_dummy
-        if np.any(real):
-            eas = ea[real]
-            s = src[real]
-            d = dst[real]
-            onehot = eas[:, :3]
-            # exactly one of the 3 axis one-hots is 1.0, rest 0.0.
-            axis = np.argmax(onehot, axis=1)
-            onehot_ok = np.all((onehot == (np.arange(3)[None, :] == axis[:, None]).astype(np.float32)), axis=1)
-            if not np.all(onehot_ok):
-                raise EdgeAttrGeometryMismatch("edge axis one-hot is not a clean one-hot")
-            dist = eas[:, 3]  # plane-literal-ok: edge_attr col 3 = signed_dist (contract §2.1, not a state plane)
-            di = np.rint(dist).astype(np.int64)
-            if np.any(dist != di.astype(dist.dtype)):
-                raise EdgeAttrGeometryMismatch("signed_dist is non-integral")
-            axis_vec = np.array(WIN_AXES, dtype=np.int64)  # (3,2)
-            av = axis_vec[axis]  # (M,2)
-            delta = coords[d] - coords[s]
-            expect = di[:, None] * av
-            if np.any(delta != expect) or np.any(di == 0) or np.any(np.abs(di) > (win_length - 1)):
-                raise EdgeAttrGeometryMismatch("edge delta != signed_dist * axis_vec (rows misaligned/scrambled)")
-            # src_player: relative own/opp cols × current_player[g], 0 for empty.
-            g_of = node_graph[s]
-            own = nf[s, 0]
-            opp = nf[s, 1]
-            expect_sp = (own - opp) * cp[g_of].astype(np.float32)
-            if np.any(np.abs(eas[:, 4] - expect_sp) > 1e-6):  # plane-literal-ok: edge_attr col 4 = src_player (contract §2.1)
-                raise EdgeAttrGeometryMismatch("edge src_player != node stone identity")
+        from engine import verify_edge_geometry  # deferred: matches the `import torch` pattern above
+
+        try:
+            verify_edge_geometry(
+                node_feat, node_coords, edge_index, edge_attr, node_offsets,
+                current_player, node_feat_dim, edge_feat_dim, win_length,
+            )
+        except ValueError as exc:
+            raise EdgeAttrGeometryMismatch(str(exc)) from exc
 
     # 15. GatherNotLegalNode — gather in the legal subrange (not stone/dummy).
     if Lg > 0:

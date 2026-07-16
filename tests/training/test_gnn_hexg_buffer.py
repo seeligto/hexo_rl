@@ -206,3 +206,82 @@ def test_hexg_file_rejected_by_dense_loader():
 def test_grid_encoding_rejected():
     with pytest.raises(Exception):
         HexgBuffer(16, "v6")
+
+
+# ── WP5b commit-A red-team fix-pass (ADV-A / ADV-B / ADV-D) ─────────────────
+# graduated from `reports/probes/gnn_integration/WP5b_commitA_redteam.md`
+# #1 (RAGGED-PAYLOAD end-to-end) — the two write-seam gaps + the one HELD
+# structural guard, all driven via the real PyO3 `push_graph_position` entry
+# point (not the pure Rust helper).
+
+
+@pytest.mark.parametrize("bad_outcome", [float("nan"), float("inf"), float("-inf")])
+def test_adv_a_push_rejects_non_finite_outcome(bad_outcome):
+    """ADV-A: a non-finite `outcome` must be rejected LOUD at push time — before
+    the fix, this sailed through untouched (outcome lives in a separate
+    `GraphTargets` object the 18-assertion collate contract never inspects) and
+    poisoned `binned_value_loss` with NaN on any value_valid=1 row."""
+    buf = HexgBuffer(16, ENC)
+    positions = _load_positions(1)
+    stones = [(int(q), int(r), int(pl)) for q, r, pl in positions[0]["stones"]]
+    nq, nr = _empty_neighbor(stones)
+    with pytest.raises(Exception):
+        buf.push_graph_position(
+            stones,
+            [(int(nq), int(nr), 1.0)],
+            int(positions[0]["current_player"]),
+            int(positions[0]["moves_remaining"]),
+            0,
+            True,
+            bad_outcome,  # outcome
+            True,
+            30,
+            0,
+        )
+    assert buf.size == 0, "a rejected push must not mutate the buffer"
+
+
+@pytest.mark.parametrize("bad_player", [0, 2, 5, -3])
+def test_adv_b_push_rejects_stone_player_out_of_range(bad_player):
+    """ADV-B: a stone-list player field outside {+1, -1} must be rejected LOUD
+    at push time — before the fix, `sample_graph_batch` silently rebuilt a
+    structurally-valid-but-wrong-feature graph (collate check #14 recomputes
+    `src_player` from the corrupt node identity, so it passed silently)."""
+    buf = HexgBuffer(16, ENC)
+    positions = _load_positions(1)
+    stones = [(int(q), int(r), int(pl)) for q, r, pl in positions[0]["stones"]]
+    nq, nr = _empty_neighbor(stones)  # occupied-cell set unaffected by the player tamper below
+    stones[0] = (stones[0][0], stones[0][1], bad_player)
+    with pytest.raises(Exception):
+        buf.push_graph_position(
+            stones,
+            [(int(nq), int(nr), 1.0)],
+            int(positions[0]["current_player"]),
+            int(positions[0]["moves_remaining"]),
+            0,
+            True,
+            1.0,
+            True,
+            30,
+            0,
+        )
+    assert buf.size == 0, "a rejected push must not mutate the buffer"
+
+
+def test_adv_d_illegal_visit_coord_raises_through_push_sample_roundtrip():
+    """ADV-D (HELD in the red-team, pinned here through the REAL push→sample
+    chain via PyO3): a visit mass poisoned onto an OCCUPIED (illegal) cell must
+    raise a loud mass-drop error at `sample_graph_batch`, not silently
+    under-weight the CE target. WP-5a already unit-tests the pure
+    `mass_drop_check` helper and the Rust-internal `push_record_impl` →
+    `sample_graph_batch_impl` chain (`hexg/tests.rs::
+    sample_rejects_illegal_cell_visit_mass_drop`); this pins the same
+    behavior through the actual Python entry points self-play/training use."""
+    buf = HexgBuffer(16, ENC)
+    stones = [(0, 0, 1), (1, 0, -1), (0, 1, 1)]
+    # 0.9 mass on the OCCUPIED (0,0) cell (illegal), 0.1 on a legal neighbor.
+    visits = [(0, 0, 0.9), (2, 0, 0.1)]
+    buf.push_graph_position(stones, visits, 1, 2, 5, True, 1.0, True, 30, 7)
+    assert buf.size == 1
+    with pytest.raises(Exception):
+        buf.sample_graph_batch(1, False)

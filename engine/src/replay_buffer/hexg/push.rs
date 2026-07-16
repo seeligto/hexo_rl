@@ -32,6 +32,44 @@ pub(crate) fn validate_visit_prob(q: i16, r: i16, prob: f32) -> Result<(), Strin
     }
 }
 
+/// Commit-A red-team ADV-A fix (`WP5b_commitA_redteam.md` #1) — same rationale
+/// as `validate_visit_prob`: `outcome` lives in a separate `GraphTargets`
+/// object the 18-assertion collate contract never inspects, so a NaN/inf
+/// value target sails through untouched and poisons `binned_value_loss` on
+/// any `value_valid=1` row. Reject at push time, naming the offending value.
+/// Hostile-push-only: the live producer's `finalize_graph_outcome` always
+/// returns one of {+1, −1, draw_reward, ply_cap_value}, all finite by config
+/// contract.
+pub(crate) fn validate_outcome(outcome: f32) -> Result<(), String> {
+    if outcome.is_finite() {
+        Ok(())
+    } else {
+        Err(format!(
+            "push_graph_position: outcome {outcome} is not finite (must be a finite f32 \
+             value target)"
+        ))
+    }
+}
+
+/// Commit-A red-team ADV-B fix (`WP5b_commitA_redteam.md` #1) — mirrors the
+/// existing `current_player` range check but applied per-stone: an
+/// out-of-range stone player (e.g. `0`, `5`, `-3`) is accepted today and
+/// silently rebuilds a structurally-valid-but-wrong-feature graph (collate
+/// check #14 recomputes `src_player` from the corrupt node identity, so it
+/// passes). Reject at push time, naming the offending coord + value.
+/// Hostile-push-only: the live producer reads `Cell as i8` (P1=1/P2=−1),
+/// always ±1.
+pub(crate) fn validate_stone_player(q: i16, r: i16, player: i8) -> Result<(), String> {
+    if player == 1 || player == -1 {
+        Ok(())
+    } else {
+        Err(format!(
+            "push_graph_position: stone ({q}, {r}) has invalid player {player} \
+             (must be +1 or -1)"
+        ))
+    }
+}
+
 impl HexgBuffer {
     /// Write `rec` into the ring at `head`, advancing `head`/`size`. LOUD-FAILs
     /// if the record exceeds the fixed slot geometry (`MAX_STONES` /
@@ -59,10 +97,18 @@ impl HexgBuffer {
                 rec.current_player
             )));
         }
+        // FIX (ADV-A, WP5b commit-A red-team): validate outcome finiteness before
+        // any mutation of `self` — see `validate_outcome` above.
+        validate_outcome(rec.outcome).map_err(PyValueError::new_err)?;
         // FIX (N2+N3, WP-5a red-team re-verification): validate every visit prob
         // before any mutation of `self` — see `validate_visit_prob` above.
         for &(q, r, prob) in &rec.visits {
             validate_visit_prob(q, r, prob).map_err(PyValueError::new_err)?;
+        }
+        // FIX (ADV-B, WP5b commit-A red-team): validate every stone player
+        // before any mutation of `self` — see `validate_stone_player` above.
+        for &(q, r, player) in &rec.stones {
+            validate_stone_player(q, r, player).map_err(PyValueError::new_err)?;
         }
 
         let slot = self.head;

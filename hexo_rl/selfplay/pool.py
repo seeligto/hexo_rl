@@ -18,7 +18,7 @@ import uuid
 from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Union
 
 import numpy as np
 import structlog
@@ -35,7 +35,7 @@ from hexo_rl.selfplay.instrumentation import (
     PoolInstrumentation,
     _compute_stride5_metrics,
 )
-from engine import ReplayBuffer
+from engine import HexgBuffer, ReplayBuffer
 
 log = structlog.get_logger()
 
@@ -263,7 +263,7 @@ class WorkerPool:
         model: HexTacToeNet,
         config: Dict[str, Any],
         device: torch.device,
-        replay_buffer: "ReplayBuffer",
+        replay_buffer: Union["ReplayBuffer", "HexgBuffer"],
         n_workers: Optional[int] = None,
     ) -> None:
         self.model = model
@@ -295,6 +295,11 @@ class WorkerPool:
         board_size = _resolved.board_size
         trunk_size = _resolved.trunk_size
         n_kept_planes = _resolved.n_kept_planes
+        # GNN-integration WP-5b commit A (P4) — true for a `representation ==
+        # "graph"` spec. Gates the `_run_stats_loop` drain branch (P5) between
+        # the dense CNN collect_data/push_many path and the HEXG
+        # collect_graph_data/push_graph_position path.
+        self._is_graph: bool = bool(getattr(spec, "is_graph", False))
 
         # Rust inference batcher is `n_kept_planes` wide — the count the game
         # runner emits via spec.kept_plane_indices (v6 → 8, v6tp → 10 incl.
@@ -529,9 +534,17 @@ class WorkerPool:
         # (`kept_planes.len() * n_cells`). For v6 / v7full this collapses to
         # 8*19*19=2888 and for v6w25 expands to 8*25*25=5000 — the same
         # values the Rust side computes from the spec.
-        self._feat_len = n_kept_planes * trunk_size * trunk_size
+        # P4 (delta doc §1): a graph spec has `n_planes=0` / `kept_plane_indices=[]`
+        # (registry.toml gnn_axis_v1) — the dense feat/chain derivation is
+        # degenerate (not meaningful) for graph, so skip it; `_run_stats_loop`'s
+        # graph branch (P5) never reads `_feat_len`/`_chain_len`.
+        if self._is_graph:
+            self._feat_len = 0
+            self._chain_len = 0
+        else:
+            self._feat_len = n_kept_planes * trunk_size * trunk_size
+            self._chain_len = 6 * trunk_size * trunk_size
         self._pol_len = spec.policy_logit_count
-        self._chain_len = 6 * trunk_size * trunk_size
 
         _mon = config.get("monitoring", config)
         self._log_investigation_metrics = bool(_mon.get(
@@ -773,59 +786,89 @@ class WorkerPool:
         # §173 A8' — reshape NN-input tensors using trunk_size (per-cluster
         # window), not board_size (canvas). For single-window encodings the
         # two coincide; under multi-window the buffer holds per-cluster rows.
-        _in_ch = self._feat_len // (self._trunk_size * self._trunk_size)
+        # P5 (GNN-integration WP-5b commit A, delta doc §5/§6): `_in_ch` is a
+        # dense-only concept (degenerate at `_feat_len=0` for a graph spec) —
+        # computed only inside the dense arm below.
         _last_buf_emit = time.monotonic()
         while not self._stop_event.is_set():
-            # collect_data() returns 10-tuple from Rust — no Python list allocation.
-            # feats_np: (N, feat_len) f32, chain_np: (N, chain_len) f32,
-            # pols_np: (N, pol_len) f32, vals_np/plies_np: (N,),
-            # own_np/wl_np: (N, 361) u8 — per-row aux projected to cluster window.
-            # ifs_np: (N,) u8 — 1 = full-search, 0 = quick-search.
-            # pidx_np: (N,) u16 — CF-4 per-row 0-based ply index (NOT plies_np,
-            #   the game-total); feeds the ply-index aux target.
-            # vv_np: (N,) u8 — DRAW-MASK (Phase 6) per-row value-supervision flag
-            #   (1 = supervise value, 0 = ply-capped row masked from value loss).
-            feats_np, chain_np, pols_np, vals_np, plies_np, own_np, wl_np, ifs_np, pidx_np, vv_np = self._runner.collect_data()
-            n = len(vals_np)
-            if n > 0:
-                # Bulk push: one PyO3 call instead of N per-row pushes (Bucket 5 #2).
-                # Vectorised dtype cast + reshape is much cheaper than the per-row
-                # _feat_buf[:] = feats_np[i] pattern that preceded this block.
-                feats_f16 = feats_np.astype(np.float16).reshape(
-                    n, _in_ch, self._trunk_size, self._trunk_size,
-                )
-                chain_f16 = chain_np.astype(np.float16).reshape(
-                    n, 6, self._trunk_size, self._trunk_size,
-                )
-                # Per-row compound-move count; clamp into u16 range.
-                game_lengths = np.minimum(
-                    (plies_np.astype(np.int64) + 1) // 2, 65535,
-                ).astype(np.uint16)
-                self.replay_buffer.push_many(
-                    feats_f16, chain_f16, pols_np, vals_np, own_np, wl_np,
-                    game_lengths, ifs_np, pidx_np,   # CF-4: per-row ply index
-                    value_target_valid=vv_np,        # DRAW-MASK: per-row value mask
-                )
-
-                # Recent buffer still requires per-row push (Python Lock semantics).
-                # Scope of item #2 is Rust ReplayBuffer only; recent_buffer bulk
-                # push is a separate lever (not on supply critical path).
-                if self.recent_buffer is not None:
-                    for i in range(n):
-                        self.recent_buffer.push(
-                            feats_f16[i],
-                            chain_planes=chain_f16[i],
-                            policy=pols_np[i],
-                            outcome=float(vals_np[i]),
-                            ownership=own_np[i],
-                            winning_line=wl_np[i],
-                            is_full_search=bool(ifs_np[i]),
-                            value_target_valid=bool(vv_np[i]),  # DRAW-MASK: per-row value mask
-                        )
-
+            # P5 — ONE hoisted branch (WP-3 step-6 `InferenceServer.__init__`
+            # precedent). A graph spec drains via `collect_graph_data()` ->
+            # `push_graph_position` (no planes/chain/ownership/winning_line —
+            # `GnnNet` has only policy + dist65 heads, design §1.3 DROP); the
+            # dense CNN `collect_data()`/`push_many`/reshape/recent_buffer
+            # block is wrapped in the `else` arm VERBATIM — unchanged for
+            # every grid encoding.
+            if self._is_graph:
+                # collect_graph_data() returns a Python list of per-record
+                # tuples matching push_graph_position's positional signature
+                # order exactly (delta doc §6); `game_id=-1` (untagged) per
+                # §4.2 Adjudication 2 — whole-board is one row per position,
+                # no intra-position correlation to dedup, so the self-play
+                # write path never consumes `next_game_id` (resume-collision-
+                # free by construction). Adjudication 3: the record fn's
+                # `p > 0.0` filter (records.rs) makes every visit reaching
+                # here finite and positive by construction — no new push-time
+                # guard needed here (the Rust `validate_visit_prob` guard is
+                # defense-in-depth, unreachable from this live producer).
+                rows = self._runner.collect_graph_data()
+                for rec in rows:
+                    self.replay_buffer.push_graph_position(*rec, game_id=-1)
+                n = len(rows)
                 with self._lock:
                     self.positions_pushed += n
                     self.self_play_positions_pushed += n
+            else:
+                # collect_data() returns 10-tuple from Rust — no Python list allocation.
+                # feats_np: (N, feat_len) f32, chain_np: (N, chain_len) f32,
+                # pols_np: (N, pol_len) f32, vals_np/plies_np: (N,),
+                # own_np/wl_np: (N, 361) u8 — per-row aux projected to cluster window.
+                # ifs_np: (N,) u8 — 1 = full-search, 0 = quick-search.
+                # pidx_np: (N,) u16 — CF-4 per-row 0-based ply index (NOT plies_np,
+                #   the game-total); feeds the ply-index aux target.
+                # vv_np: (N,) u8 — DRAW-MASK (Phase 6) per-row value-supervision flag
+                #   (1 = supervise value, 0 = ply-capped row masked from value loss).
+                _in_ch = self._feat_len // (self._trunk_size * self._trunk_size)
+                feats_np, chain_np, pols_np, vals_np, plies_np, own_np, wl_np, ifs_np, pidx_np, vv_np = self._runner.collect_data()
+                n = len(vals_np)
+                if n > 0:
+                    # Bulk push: one PyO3 call instead of N per-row pushes (Bucket 5 #2).
+                    # Vectorised dtype cast + reshape is much cheaper than the per-row
+                    # _feat_buf[:] = feats_np[i] pattern that preceded this block.
+                    feats_f16 = feats_np.astype(np.float16).reshape(
+                        n, _in_ch, self._trunk_size, self._trunk_size,
+                    )
+                    chain_f16 = chain_np.astype(np.float16).reshape(
+                        n, 6, self._trunk_size, self._trunk_size,
+                    )
+                    # Per-row compound-move count; clamp into u16 range.
+                    game_lengths = np.minimum(
+                        (plies_np.astype(np.int64) + 1) // 2, 65535,
+                    ).astype(np.uint16)
+                    self.replay_buffer.push_many(
+                        feats_f16, chain_f16, pols_np, vals_np, own_np, wl_np,
+                        game_lengths, ifs_np, pidx_np,   # CF-4: per-row ply index
+                        value_target_valid=vv_np,        # DRAW-MASK: per-row value mask
+                    )
+
+                    # Recent buffer still requires per-row push (Python Lock semantics).
+                    # Scope of item #2 is Rust ReplayBuffer only; recent_buffer bulk
+                    # push is a separate lever (not on supply critical path).
+                    if self.recent_buffer is not None:
+                        for i in range(n):
+                            self.recent_buffer.push(
+                                feats_f16[i],
+                                chain_planes=chain_f16[i],
+                                policy=pols_np[i],
+                                outcome=float(vals_np[i]),
+                                ownership=own_np[i],
+                                winning_line=wl_np[i],
+                                is_full_search=bool(ifs_np[i]),
+                                value_target_valid=bool(vv_np[i]),  # DRAW-MASK: per-row value mask
+                            )
+
+                    with self._lock:
+                        self.positions_pushed += n
+                        self.self_play_positions_pushed += n
 
             with self._lock:
                 self.games_completed = int(self._runner.games_completed)

@@ -9,6 +9,7 @@ use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 
 use crate::inference_bridge::InferenceBatcher;
+use crate::replay_buffer::hexg::GraphRecord;
 
 use super::super::{GameResultRow, WorkerResultRow};
 
@@ -17,4 +18,8 @@ pub(super) struct WorkerChannels {
     pub(super) batcher: InferenceBatcher,
     pub(super) results_queue: Arc<Mutex<VecDeque<WorkerResultRow>>>,
     pub(super) recent_game_results: Arc<Mutex<VecDeque<GameResultRow>>>,
+    /// GNN-integration WP-5b commit A (R6): parallel graph-position results
+    /// queue. Constructed unconditionally (idle `Mutex<VecDeque>`, not on the
+    /// dense hot path); only ever locked on the `is_graph` finalize branch.
+    pub(super) graph_results_queue: Arc<Mutex<VecDeque<GraphRecord>>>,
 }

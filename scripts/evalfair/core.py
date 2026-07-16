@@ -37,16 +37,56 @@ from hexo_rl.eval.solver_backup_bot import SolverBackupBot
 from hexo_rl.training.step_coordinator import StepCoordinator
 from hexo_rl.utils.config import load_config
 
+try:
+    import structlog
+
+    log = structlog.get_logger()
+except ImportError:  # pragma: no cover
+    import logging
+
+    logging.basicConfig(level=logging.INFO)
+    log = logging.getLogger("evalfair.core")  # type: ignore[assignment]
+
 HEAD = "head"
 OPP = "sealbot"
 BOOK_PLIES = 3  # 2 TURNS: P1 places 1 stone, P2 places 2 -> turn-boundary clean
 MAX_PLIES = 200
 
+# S7 F3 (GNN-integration program, PINNED CONTROLLER RULING — reports/probes/
+# gnn_integration/S7_smoke_gate.md Part 2 / S7_blocker_fixes.md): graph
+# checkpoints resolve to the STANDARD EVALFAIR d5 book at this radius (the
+# D-LADDER instrument convention) — see `radius_from_checkpoint` below.
+GRAPH_EVALFAIR_BOOK_RADIUS = 5
+
 
 # ── radius + knobs, resolved from the checkpoint itself ──────────────────────
 
 
-def radius_from_checkpoint(ck: Dict[str, Any]) -> Optional[int]:
+def _ckpt_is_graph_representation(ck: Dict[str, Any]) -> bool:
+    """Best-effort ``representation == "graph"`` read off a checkpoint's own
+    declared encoding (``config['encoding']``, string or dict form — same
+    field `radius_from_checkpoint` already reads `config['selfplay']` off).
+    Never raises — an absent/malformed/unregistered encoding name is treated
+    as "not graph" (the conservative default that preserves the dense
+    byte-identical path); a real mismatch is still caught downstream by
+    ``load_model_with_encoding``'s declared-vs-stamped gate, which every
+    ``run_arm`` caller already runs before playing games."""
+    cfg = ck.get("config", {}) or {}
+    name = cfg.get("encoding")
+    if name is None:
+        return False
+    try:
+        spec = _lookup_encoding(_normalize_encoding(name))
+    except Exception:
+        return False
+    return getattr(spec, "representation", "grid") == "graph"
+
+
+def radius_from_checkpoint(
+    ck: Dict[str, Any],
+    *,
+    graph_eval_book_radius_override: Optional[int] = None,
+) -> Optional[int]:
     """Resolve the checkpoint's NATIVE training radius from its baked schedule + step.
 
     CONFRES 6c/6d: delegates to the ONE schedule-scan authority
@@ -56,13 +96,60 @@ def radius_from_checkpoint(ck: Dict[str, Any]) -> Optional[int]:
     HARD-ERROR (B6) is applied at the CONSUMER (``run_arm``), where a per-stage book context makes
     an unresolvable radius a correctness bug, not here (some callers legitimately tolerate ``None``,
     e.g. head-vs-head stamps the native radius for provenance only).
+
+    S7 F3 (PINNED CONTROLLER RULING): a graph-representation checkpoint
+    (``representation="graph"``, e.g. ``gnn_axis_v1``) carries NO
+    ``legal_move_radius_schedule`` BY DESIGN — a whole-board GNN has no
+    windowed radius curriculum, so the schedule-scan above always returns
+    ``None`` for one. Rather than let that ``None`` fall through to
+    ``resolve_book_for_radius``'s "no book registered for radius=None" raise
+    (or ``require_offline_radius``'s HARD-ERROR), a graph checkpoint resolves
+    EXPLICITLY here to the standard EVALFAIR d5 book radius
+    (``GRAPH_EVALFAIR_BOOK_RADIUS`` = 5, the D-LADDER instrument convention)
+    — logged as the ``graph_ckpt_evalfair_book_r5`` info event, never silent.
+    Book radius shapes opening diversity only (not model geometry — the GNN
+    reads the whole board regardless), so r=5 keeps numbers comparable with
+    the dense d5 instrument. Operator-overridable via
+    ``graph_eval_book_radius_override`` (``mantis_pull_eval.py``'s
+    ``--graph-eval-book-radius``); the caller's own book map
+    (``resolve_book_for_radius`` / ``run_arm``'s book-radius_stage guard)
+    validates the override, raising if no book is registered at that radius
+    — no separate validation duplicated here.
+
+    A DENSE checkpoint's resolution is BYTE-IDENTICAL to pre-F3: this branch
+    only fires when the schedule-scan found nothing AND the checkpoint's own
+    declared encoding is representation="graph"
+    (``_ckpt_is_graph_representation``) — a dense ckpt missing its schedule
+    (a genuine bug / bad strip) still returns ``None`` so the existing
+    HARD-ERROR gates catch it, exactly as before.
     """
     from hexo_rl.config.resolve.radius import resolve_radius_from_schedule
 
     cfg = ck.get("config", {}) or {}
     schedule = cfg.get("selfplay", {}).get("legal_move_radius_schedule")
     step = int(ck["step"])
-    return resolve_radius_from_schedule(schedule, step)
+    resolved = resolve_radius_from_schedule(schedule, step)
+    if resolved is not None:
+        return resolved
+
+    if _ckpt_is_graph_representation(ck):
+        mapped_radius = (
+            int(graph_eval_book_radius_override)
+            if graph_eval_book_radius_override is not None
+            else GRAPH_EVALFAIR_BOOK_RADIUS
+        )
+        log.info(
+            "graph_ckpt_evalfair_book_r5",
+            radius=mapped_radius,
+            overridden=graph_eval_book_radius_override is not None,
+            msg=(
+                "graph checkpoint has no legal_move_radius_schedule by design "
+                "(whole-board representation) -- resolving to the standard "
+                "EVALFAIR d5 book radius; pass --graph-eval-book-radius to override"
+            ),
+        )
+        return mapped_radius
+    return None
 
 
 def sealbot_depth_from_config(path: str = "configs/eval.yaml") -> int:
@@ -326,54 +413,61 @@ def _play_pair(args: tuple) -> List[Dict[str, Any]]:
         ckpt_path, dev, declared_encoding=encoding
     )
     eng = _build_engine_for_model(model, encoding, dev)
-    arm = ArmSpec(
-        label=arm_label,
-        n_sims_override=n_sims_override,
-        solver_backup=solver_backup,
-        window_half=window_half,
-    )
+    try:
+        arm = ArmSpec(
+            label=arm_label,
+            n_sims_override=n_sims_override,
+            solver_backup=solver_backup,
+            window_half=window_half,
+        )
 
-    n_sims_effective = n_sims_override if n_sims_override is not None else int(knobs["n_sims_full"])
-    sims_overridden = n_sims_override is not None
+        n_sims_effective = n_sims_override if n_sims_override is not None else int(knobs["n_sims_full"])
+        sims_overridden = n_sims_override is not None
 
-    games_out = []
-    for head_as_p1 in (True, False):
-        head_bot = make_head_bot(eng, knobs, arm, legal_set, encoding)
-        opp_bot = SealBotBot(time_limit=600.0, max_depth=depth)
+        games_out = []
+        for head_as_p1 in (True, False):
+            head_bot = make_head_bot(eng, knobs, arm, legal_set, encoding)
+            opp_bot = SealBotBot(time_limit=600.0, max_depth=depth)
 
-        if head_as_p1:
-            g = play_from_opening(head_bot, opp_bot, HEAD, OPP, encoding, radius, opening_moves)
-        else:
-            g = play_from_opening(opp_bot, head_bot, OPP, HEAD, encoding, radius, opening_moves)
+            if head_as_p1:
+                g = play_from_opening(head_bot, opp_bot, HEAD, OPP, encoding, radius, opening_moves)
+            else:
+                g = play_from_opening(opp_bot, head_bot, OPP, HEAD, encoding, radius, opening_moves)
 
-        sc = _solver_counters(head_bot)
-        rec = {
-            "ckpt_step": ckpt_step,
-            "ckpt_sha": ckpt_sha_val,
-            "radius": radius,
-            "book_id": book_id,
-            "arm": arm_label,
-            "opening_idx": opening_idx,
-            "head_as_p1": head_as_p1,
-            "p1": g["p1"], "p2": g["p2"],
-            "winner": g["winner"], "plies": g["plies"],
-            "moves": g["moves"],
-            "n_sims_effective": n_sims_effective,
-            "n_sims_from_ckpt": int(knobs["n_sims_full"]),
-            "sims_overridden": sims_overridden,
-            "solver_backup": solver_backup,
-            "solver_fired_win": sc["fired_win"],
-            "solver_fired_loss": sc["fired_loss"],
-            "solver_skipped_offwindow": sc["skipped_offwindow"],
-            "solver_probes": sc["probes"],
-            "head_move_wall_s": g["head_move_wall_s"],
-            "sealbot_search_wall_s": g["sealbot_search_wall_s"],
-            "sealbot_search_max_s": g["sealbot_search_max_s"],
-            "head_fired": g["head_fired"],
-            "censored": g["censored"],
-        }
-        games_out.append(rec)
-    return games_out
+            sc = _solver_counters(head_bot)
+            rec = {
+                "ckpt_step": ckpt_step,
+                "ckpt_sha": ckpt_sha_val,
+                "radius": radius,
+                "book_id": book_id,
+                "arm": arm_label,
+                "opening_idx": opening_idx,
+                "head_as_p1": head_as_p1,
+                "p1": g["p1"], "p2": g["p2"],
+                "winner": g["winner"], "plies": g["plies"],
+                "moves": g["moves"],
+                "n_sims_effective": n_sims_effective,
+                "n_sims_from_ckpt": int(knobs["n_sims_full"]),
+                "sims_overridden": sims_overridden,
+                "solver_backup": solver_backup,
+                "solver_fired_win": sc["fired_win"],
+                "solver_fired_loss": sc["fired_loss"],
+                "solver_skipped_offwindow": sc["skipped_offwindow"],
+                "solver_probes": sc["probes"],
+                "head_move_wall_s": g["head_move_wall_s"],
+                "sealbot_search_wall_s": g["sealbot_search_wall_s"],
+                "sealbot_search_max_s": g["sealbot_search_max_s"],
+                "head_fired": g["head_fired"],
+                "censored": g["censored"],
+            }
+            games_out.append(rec)
+        return games_out
+    finally:
+        # S7 round-2 review S-2: deterministic graph-InferenceServer thread
+        # teardown for this pair's engine — don't rely on GC/`__del__` timing
+        # (fragile once a future refactor holds engines in a list or forms a
+        # cycle). No-op for a dense engine (LocalInferenceEngine.close()).
+        eng.close()
 
 
 # ── main run_arm ──────────────────────────────────────────────────────────────
@@ -392,11 +486,19 @@ def run_arm(
     expect_encoding: str = "v6_live2_ls",
     n_pairs: Optional[int] = None,
     sealbot_depth: Optional[int] = None,
+    graph_eval_book_radius_override: Optional[int] = None,
 ) -> Dict[str, Any]:
     """Run one arm on one checkpoint against the book.
 
     Loads model via gated loader (raises on mis-stamp), resolves radius+knobs from ckpt,
     plays 64 pairs (colors swapped), streams games.jsonl, returns result dict.
+
+    ``graph_eval_book_radius_override`` (S7 F3): threaded verbatim into this
+    call's OWN ``radius_from_checkpoint`` below — was previously hardcoded
+    unreachable (S7 Part-2 Finding F3: "run_arm hardcodes
+    radius_stage_override=None at its one require_offline_radius call site,
+    not threaded from any caller"). ``None`` (every non-graph caller) is
+    byte-identical to pre-F3.
     """
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
@@ -404,7 +506,9 @@ def run_arm(
     dev = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     ck = torch.load(ckpt_path, map_location="cpu", weights_only=False)
     step = int(ck["step"])
-    radius = radius_from_checkpoint(ck)
+    radius = radius_from_checkpoint(
+        ck, graph_eval_book_radius_override=graph_eval_book_radius_override,
+    )
     knobs = extract_deploy_knobs(ck.get("config", {}))
     depth = sealbot_depth if sealbot_depth is not None else sealbot_depth_from_config()
     sha_val = _ckpt_sha(ckpt_path)
@@ -424,6 +528,11 @@ def run_arm(
     # old `radius is not None` short-circuit). The HARD-ERROR authority is the ONE rule
     # ``resolve.radius.require_offline_radius`` (design law #1 — no hand-inlined copy); a per-stage
     # book has no --radius-stage escape here, so an unresolvable radius raises.
+    # `radius_stage_override=None` here is correct, not a re-introduction of S7 F3's gap: `radius`
+    # (above) is ALREADY the graph-mapped concrete value for a graph ckpt (F3's mapping lives in
+    # `radius_from_checkpoint` itself, the ONE resolver, not duplicated at this call site) — this
+    # `require_offline_radius` call only needs to still HARD-ERROR the genuinely-unresolvable DENSE
+    # case (`radius is None` and this ckpt is not graph).
     book_stage = book.get("radius_stage")
     if book_stage is not None:
         from hexo_rl.config.resolve.radius import require_offline_radius

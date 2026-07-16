@@ -6,6 +6,7 @@
 
 pub mod board;
 pub mod encoding;
+pub mod graph_contract;
 pub mod mcts;
 pub mod tactics;
 pub mod utils;

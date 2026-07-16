@@ -76,12 +76,56 @@ impl HexgBuffer {
         self.rng.random_range(0..self.size)
     }
 
+    /// Newest-slots window size for the `recent_frac` selection (WP-5b §4):
+    /// head-relative `[head - window, head)` mod capacity. Mirrors the dense
+    /// `RecentBuffer`'s `max(256, capacity // 2)` sizing (standing §8.5
+    /// accepted approximation — HEXG "recent" = newest RING slots, not a
+    /// separately-sized ring), clamped to `size` so the window never reaches
+    /// into never-written slots while the ring is still filling (before it
+    /// wraps, `head == size`, so `window <= size == head` is always safe).
+    #[inline]
+    pub(crate) fn recent_window(&self) -> usize {
+        self.size.min(usize::max(256, self.capacity / 2))
+    }
+
+    /// Draw `n` indices uniformly (with replacement) from the newest-slots
+    /// window — the dense `RecentBuffer.sample`'s uniform-within-recent
+    /// semantics (no weight-schedule applied to the recent slice; recency
+    /// itself IS the selection bias).
+    pub(crate) fn sample_recent_indices(&mut self, n: usize) -> Vec<usize> {
+        let window = self.recent_window();
+        debug_assert!(window > 0, "recent_window must be >0 when size>0");
+        let start = (self.head + self.capacity - window) % self.capacity;
+        (0..n)
+            .map(|_| {
+                let offset = self.rng.random_range(0..window);
+                (start + offset) % self.capacity
+            })
+            .collect()
+    }
+
     /// Sample `batch_size` slot indices, deduping by `game_id` (the Multi-Window
     /// correlation guard; untagged −1 slots skip the guard). Mirrors
     /// `ReplayBuffer::sample_indices`.
-    fn sample_indices(&mut self, batch_size: usize) -> Vec<usize> {
+    ///
+    /// `recent_frac == 0.0` is BYTE-IDENTICAL to the pre-R1 behavior (the
+    /// whole batch weighted-sampled via `weighted_sample_one`, same RNG call
+    /// sequence). `recent_frac > 0.0` draws `round(batch_size * recent_frac)`
+    /// indices from the newest ring slots (`sample_recent_indices`) and the
+    /// remainder weighted-uniform over the full ring — a SELECTION change
+    /// only; both slices then run the SAME dedup + D6-rotate + native-rebuild
+    /// + align path below (F1 single-source preserved, WP-5b §4).
+    pub(crate) fn sample_indices(&mut self, batch_size: usize, recent_frac: f32) -> Vec<usize> {
         const MAX_RETRIES: usize = 8;
-        let mut indices: Vec<usize> = (0..batch_size).map(|_| self.weighted_sample_one()).collect();
+        let mut indices: Vec<usize> = if recent_frac > 0.0 && self.size > 0 {
+            let n_recent = ((batch_size as f32) * recent_frac).round() as usize;
+            let n_recent = n_recent.min(batch_size);
+            let mut idx = self.sample_recent_indices(n_recent);
+            idx.extend((n_recent..batch_size).map(|_| self.weighted_sample_one()));
+            idx
+        } else {
+            (0..batch_size).map(|_| self.weighted_sample_one()).collect()
+        };
         let mut seen: HashSet<i64> = HashSet::with_capacity(batch_size);
         for _ in 0..MAX_RETRIES {
             seen.clear();
@@ -114,17 +158,22 @@ impl HexgBuffer {
     }
 
     /// Rebuild + align + fuse `batch_size` sampled records. See module docs.
+    ///
+    /// `recent_frac` (WP-5b §4, default `0.0`): fraction of the batch drawn
+    /// from the newest ring slots (`sample_indices`); `0.0` is byte-identical
+    /// to the pre-R1 behavior.
     pub(crate) fn sample_graph_batch_impl(
         &mut self,
         batch_size: usize,
         augment: bool,
+        recent_frac: f32,
     ) -> PyResult<(GraphWire, GraphTargets)> {
         if self.size == 0 {
             return Err(PyValueError::new_err(
                 "Cannot sample from an empty HEXG buffer",
             ));
         }
-        let indices = self.sample_indices(batch_size);
+        let indices = self.sample_indices(batch_size, recent_frac);
 
         let mut graphs = Vec::with_capacity(batch_size);
         let mut policy_target: Vec<f32> = Vec::new();
@@ -144,14 +193,35 @@ impl HexgBuffer {
         };
 
         for &idx in &indices {
-            // D6 element for this sample (uniform per-sample; matches run2's
-            // dense `augment` semantics — one random sym per row, NOT 12-fold
-            // enumeration). sym 0 = identity when augmentation is OFF.
-            let sym = if augment { self.rng.random_range(0..N_SYMS) } else { 0 };
-
             let rec = self.record_at(idx);
             let game_id = self.game_ids[idx];
             let ply_idx = rec.ply_index;
+
+            // D6 element for this sample (uniform per-sample; matches run2's
+            // dense `augment` semantics — one random sym per row, NOT 12-fold
+            // enumeration). sym 0 = identity when augmentation is OFF.
+            //
+            // WP-1 empty-board fix follow-on: force identity for a 0-stone
+            // record. `build_axis_graph`'s empty-board fallback (WP-1) mirrors
+            // the DENSE engine's own empty-board rule EXACTLY — a fixed 5x5
+            // *rectangle* `(dq,dr) in [-2,2]x[-2,2]` (25 cells) — which, unlike
+            // a hex-ball, is NOT closed under 8 of the 12 `rotate_axial` D6
+            // elements (verified: only the identity + 180°-rotation family,
+            // sym in {0,3,6,9}, preserve the set; the other 8 map it to a
+            // DIFFERENT 25-cell rectangle). `stones` is empty here so it can
+            // never itself be "rotated" (rotating nothing is a no-op) — the
+            // rebuilt graph is therefore ALWAYS the same un-rotated fallback
+            // rectangle regardless of `sym`. Rotating the VISIT-MAP keys by a
+            // non-closed sym while the rebuilt legal set stays fixed sends
+            // visited cells outside that set, tripping `mass_drop_check`
+            // below (real self-play repro: WP1_emptyboard_fix.md). There is
+            // also no augmentation VALUE lost: an empty board carries no
+            // orientation information for the net to learn from either way.
+            let sym = if augment && !rec.stones.is_empty() {
+                self.rng.random_range(0..N_SYMS)
+            } else {
+                0
+            };
 
             // Rotate stones by the element (axial lattice automorphism).
             let mut stones: Vec<(i32, i32, i8)> = Vec::with_capacity(rec.stones.len());

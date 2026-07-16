@@ -31,6 +31,7 @@ from hexo_rl.eval.opponent_runners import OPPONENTS, _RunnerContext
 from hexo_rl.eval.reporting import plot_ratings_curve
 from hexo_rl.eval.result_types import EvalRoundResult
 from hexo_rl.eval.results_db import ResultsDB
+from hexo_rl.model.build_net import model_representation
 from hexo_rl.model.network import HexTacToeNet
 
 
@@ -340,40 +341,72 @@ class EvalPipeline:
             round_idx = train_step // max(effective_interval, 1)
             return round_idx % stride == 0
 
-        # ── Opponent dispatch ────────────────────────────────────────
-        # §176 P32 — canonical order [random, sealbot, argmax_n,
-        # bootstrap_anchor, best] preserved in
-        # ``hexo_rl.eval.opponent_runners.OPPONENTS``.  The five
-        # ``self.db.insert_match`` calls happen in that order, matching
-        # the pre-refactor sequence; pinned by
-        # ``tests/test_eval_opponent_runners.py``.
-        ctx = _RunnerContext(
-            pipeline=self,
-            evaluator=evaluator,
-            train_step=train_step,
-            ckpt_pid=ckpt_pid,
-            ckpt_name=ckpt_name,
-            best_model=best_model,
-            best_model_step=best_model_step,
-            results=results,
-            should_run=_should_run,
-            current_radius=current_radius,
-        )
-        for spec in OPPONENTS:
-            # §D-1M F2/F5 (Arm-C) — isolate each opponent: a crash in one
-            # runner (e.g. a host-side native-import failure in SealBot) must
-            # NOT abort the whole round and skip the promotion gate. A failed
-            # opponent simply leaves its metric absent in ``results`` (gating
-            # treats a missing wr_best as no-promotion — fail-safe).
-            try:
-                spec.run(ctx)
-            except Exception as exc:  # noqa: BLE001 — deliberate per-opponent isolation
-                log.error(
-                    "eval_opponent_failed",
-                    opponent=spec.name,
-                    step=train_step,
-                    error=str(exc),
-                )
+        # ── S7 F7 representation guard ──────────────────────────────────
+        # Every in-loop opponent routes the CANDIDATE side through
+        # ``build_player``/``ModelPlayer``/``LocalInferenceEngine.infer_batch``
+        # — the in-loop promotion-gate arena is dense-only by design today
+        # (gnn_integration_scope.md §C5 "mixed-representation in-loop anchor"
+        # needs dedicated work; OQ-8 stays open). Before F8's `infer_batch`
+        # graph branch, that meant all 5+ opponents individually crashed on
+        # `.in_channels` every round (S7 finding F7: 3x `eval_opponent_failed`
+        # + `eval_games=0`, indistinguishable from a genuinely-empty round).
+        # Skip the WHOLE round for a graph candidate — ONE structured log +
+        # an explicit counter — rather than resurrect a per-opponent crash
+        # loop the F8 fix would otherwise silently paper over (F8 only fixes
+        # the CNN-analogue dense/single-window decode; full cross-
+        # representation in-loop arena, incl. the anchor mismatch above,
+        # stays explicitly out of scope). Dense (grid) candidates take the
+        # unchanged path below — byte-identical.
+        _candidate_representation = model_representation(current_model)
+        if _candidate_representation == "graph":
+            log.warning(
+                "eval_round_skipped_graph_representation",
+                step=train_step,
+                representation=_candidate_representation,
+                opponents_skipped=len(OPPONENTS),
+                reason=(
+                    "in-loop promotion-gate arena is dense-only by design "
+                    "(gnn_integration_scope.md C5, OQ-8 open) — a graph "
+                    "candidate skips in-loop eval entirely rather than "
+                    "silently 0-game per opponent (S7 finding F7)"
+                ),
+            )
+            results["eval_opponents_skipped"] = len(OPPONENTS)
+        else:
+            # ── Opponent dispatch ────────────────────────────────────────
+            # §176 P32 — canonical order [random, sealbot, argmax_n,
+            # bootstrap_anchor, best] preserved in
+            # ``hexo_rl.eval.opponent_runners.OPPONENTS``.  The five
+            # ``self.db.insert_match`` calls happen in that order, matching
+            # the pre-refactor sequence; pinned by
+            # ``tests/test_eval_opponent_runners.py``.
+            ctx = _RunnerContext(
+                pipeline=self,
+                evaluator=evaluator,
+                train_step=train_step,
+                ckpt_pid=ckpt_pid,
+                ckpt_name=ckpt_name,
+                best_model=best_model,
+                best_model_step=best_model_step,
+                results=results,
+                should_run=_should_run,
+                current_radius=current_radius,
+            )
+            for spec in OPPONENTS:
+                # §D-1M F2/F5 (Arm-C) — isolate each opponent: a crash in one
+                # runner (e.g. a host-side native-import failure in SealBot) must
+                # NOT abort the whole round and skip the promotion gate. A failed
+                # opponent simply leaves its metric absent in ``results`` (gating
+                # treats a missing wr_best as no-promotion — fail-safe).
+                try:
+                    spec.run(ctx)
+                except Exception as exc:  # noqa: BLE001 — deliberate per-opponent isolation
+                    log.error(
+                        "eval_opponent_failed",
+                        opponent=spec.name,
+                        step=train_step,
+                        error=str(exc),
+                    )
 
         # ── Gating ────────────────────────────────────────────────────
         # Reads measurements written into ``results`` by the runners; the

@@ -210,6 +210,7 @@ def stage2_d5_eval(
     n_boot: int = 2000,
     expect_encoding: str = "v6_live2_ls",
     n_pairs: Optional[int] = None,
+    graph_eval_book_radius_override: Optional[int] = None,
 ) -> Dict[str, Any]:
     """Run deploy-matched d5 eval (64 pairs, 150 sims, g=0, pair-bootstrap CI).
 
@@ -217,6 +218,16 @@ def stage2_d5_eval(
     Resume-safe: if result.json exists in out_dir, returns the cached result.
 
     Workers forced to 1 (load-34 crash record at higher).
+
+    ``graph_eval_book_radius_override`` (S7 F3, PINNED CONTROLLER RULING —
+    ``scripts.evalfair.core.radius_from_checkpoint``'s
+    ``graph_ckpt_evalfair_book_r5`` mapping): ``--graph-eval-book-radius``'s
+    value, threaded verbatim into BOTH this function's own
+    ``radius_from_checkpoint`` call (book selection, below) AND ``run_arm``
+    (its own internal radius re-resolution) so the two agree — a disagreement
+    would otherwise surface as ``run_arm``'s book/ckpt radius-mismatch raise.
+    An unregistered override radius (no book loaded for it) raises via
+    ``resolve_book_for_radius`` below — no separate validation needed.
     """
     from scripts.evalfair.core import ArmSpec, extract_deploy_knobs, radius_from_checkpoint, run_arm
     from scripts.evalfair.retro_slope import resolve_book_for_radius
@@ -238,7 +249,9 @@ def stage2_d5_eval(
         raise ValueError("stage2_d5_eval: supply at least one of book_r4 / book_r5")
 
     ck = torch.load(ckpt_path, map_location="cpu", weights_only=False)
-    radius = radius_from_checkpoint(ck)
+    radius = radius_from_checkpoint(
+        ck, graph_eval_book_radius_override=graph_eval_book_radius_override,
+    )
     book = resolve_book_for_radius(radius, books_by_radius, ckpt_path)
 
     arm = ArmSpec(label="sims150")
@@ -252,6 +265,7 @@ def stage2_d5_eval(
         book_seed=book.get("seed", 20260709),
         expect_encoding=expect_encoding,
         n_pairs=n_pairs,
+        graph_eval_book_radius_override=graph_eval_book_radius_override,
     )
     return result
 
@@ -645,6 +659,7 @@ def run_pull_eval(
     strix_n_pairs: int = 32,
     strix_n_sims: int = 128,
     t7_series_out: Optional[str] = None,
+    graph_eval_book_radius_override: Optional[int] = None,
 ) -> List[Dict[str, Any]]:
     """Process each checkpoint in order: Stage 1 -> Stage 2 -> Stage 3 -> Stage 3b -> Stage 4.
 
@@ -727,6 +742,7 @@ def run_pull_eval(
             workers=workers,
             n_boot=n_boot,
             expect_encoding=expect_encoding,
+            graph_eval_book_radius_override=graph_eval_book_radius_override,
         )
         wr_d5 = d5_result.get("wr", float("nan"))
         ci_d5 = d5_result.get("pair_ci", [float("nan"), float("nan")])
@@ -909,6 +925,17 @@ def main() -> None:
     # Boot + misc
     ap.add_argument("--n-boot", type=int, default=2000, dest="n_boot")
     ap.add_argument("--expect-encoding", default="v6_live2_ls", dest="expect_encoding")
+    ap.add_argument(
+        "--graph-eval-book-radius", type=int, default=None, dest="graph_eval_book_radius",
+        help=(
+            "S7 F3: override the EVALFAIR d5 book radius a graph checkpoint "
+            "(representation='graph', e.g. gnn_axis_v1) resolves to. Default "
+            "(omitted) uses scripts.evalfair.core.GRAPH_EVALFAIR_BOOK_RADIUS "
+            "(5, the standard EVALFAIR d5 book). Ignored for dense checkpoints "
+            "(byte-identical resolution). Must name a radius with a loaded "
+            "--book-r4/--book-r5 or run_arm raises."
+        ),
+    )
 
     args = ap.parse_args()
 
@@ -969,6 +996,7 @@ def main() -> None:
         strix_n_pairs=args.strix_n_pairs,
         strix_n_sims=args.strix_n_sims,
         t7_series_out=args.t7_series_out,
+        graph_eval_book_radius_override=args.graph_eval_book_radius,
     )
 
 

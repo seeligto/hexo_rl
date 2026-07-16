@@ -455,6 +455,13 @@ class DeployStrengthEvaluator:
         eng = _build_engine_for_model(best_model, self.encoding_name, self.device)
         return self._build_deploy_head(label="best", seed=self.dcfg.seed_base + 101, engine=eng)
 
+    def close(self) -> None:
+        """Stop the candidate engine's graph InferenceServer thread (no-op for a dense
+        engine). Called from ``run()``'s ``finally`` so thread cleanup does not rely on
+        GC/``__del__`` timing (S7 round-2 review S-2). Idempotent — mirrors
+        ``LocalInferenceEngine.close``."""
+        self._engine.close()
+
     def _sealbot(self) -> BotProtocol:
         from hexo_rl.bots.sealbot_bot import SealBotBot
 
@@ -464,6 +471,10 @@ class DeployStrengthEvaluator:
 
     def run(self, best_model: Optional[HexTacToeNet]) -> DeployStrengthResult:
         if best_model is None:
+            # No confirm/screen games this round — still close the candidate engine
+            # (S-2): this branch is a terminal no-op for the round, same as every
+            # other `run()` exit.
+            self.close()
             return DeployStrengthResult(
                 wr_screen=0.0, wr_confirm=None, confirmed=False, promoted=False,
                 elo_vs_best=None, ci_lo_boot=None, ci_hi_boot=None, n_games=0,
@@ -471,103 +482,111 @@ class DeployStrengthEvaluator:
                 sealbot_wr=None, reason="no best_model — gate skipped",
             )
         best_bot = self._best_bot(best_model)
-        d = self.dcfg
+        try:
+            d = self.dcfg
 
-        # ── Screen ────────────────────────────────────────────────────────────
-        screen_games = _play_pair(
-            self._cand, best_bot, "cand", "best", self.encoding_name,
-            d.screen_n, d.opening_plies, d.seed_base,
-            legal_move_radius=self._legal_move_radius,
-        )
-        wr_screen, _, _, _ = _wr_for_label(screen_games, "cand")
-        head_frac = (
-            sum(1 for g in screen_games if g["head_fired"]) / len(screen_games)
-            if screen_games else 0.0
-        )
-
-        # ── Adaptive escalation ───────────────────────────────────────────────
-        # Confirm whenever the screen WR is promotion-ELIGIBLE (>= lo). Only the
-        # clear-reject tail (WR < lo) skips — it cannot clear the bar even with a perfect
-        # confirm, so the band CANNOT false-negative a true candidate.
-        escalate = wr_screen >= d.screen_confirm_lo
-        if not escalate:
-            return DeployStrengthResult(
-                wr_screen=wr_screen, wr_confirm=None, confirmed=False, promoted=False,
-                elo_vs_best=None, ci_lo_boot=None, ci_hi_boot=None,
-                n_games=len(screen_games), copy_multiplier=0.0,
-                distinct_per_pair_min=None, head_fired_frac=head_frac,
-                sealbot_wr=None,
-                reason=f"screen WR {wr_screen:.3f} < {d.screen_confirm_lo:.3f} bar — "
-                       f"clear non-candidate, confirm skipped",
-            )
-
-        # ── Confirm (full power) ──────────────────────────────────────────────
-        confirm_games = _play_pair(
-            self._cand, best_bot, "cand", "best", self.encoding_name,
-            d.confirm_n, d.opening_plies, d.seed_base + 7919,
-            legal_move_radius=self._legal_move_radius,
-        )
-        # Pool screen+confirm games for the BT/bootstrap (both deploy-head, same pair).
-        pooled = list(screen_games) + list(confirm_games)
-        wr_confirm, _, _, _ = _wr_for_label(pooled, "cand")
-        labels = ["best", "cand"]  # anchor = best (rotating champion) at Elo 0
-        summary = aggregate_games(pooled, ladder_order=labels, n_boot=d.n_boot,
-                                  min_distinct_per_pair=d.min_distinct_per_pair)
-        boot = bootstrap_ratings_ci(pooled, labels, n_boot=d.n_boot, seed=d.seed_base)
-        elo_cand = next((r["elo"] for r in summary["rungs"] if r["label"] == "cand"), None)
-        ci_lo_boot, ci_hi_boot = boot.get("cand", (None, None))
-        guard = effective_n_guard(pooled, labels=labels,
-                                  min_distinct_per_pair=d.min_distinct_per_pair)
-        dpp = distinct_per_pair(pooled, labels)
-        dpp_min = min(dpp.values()) if dpp else None
-
-        # ── External bar (fixed-depth SealBot) — SKIPPED when sealbot_games == 0.
-        # NOT in the promotion gate below (sealbot_wr is reported-only), and the
-        # dominant deploy-round cost, so it is droppable without touching the
-        # promotion decision. Uses its OWN game count (sealbot_games), decoupled
-        # from confirm_n. ──
-        if d.sealbot_games > 0:
-            seal_games = _play_pair(
-                self._cand, self._sealbot(), "cand", "sealbot", self.encoding_name,
-                d.sealbot_games, d.opening_plies, d.seed_base + 104729,
+            # ── Screen ────────────────────────────────────────────────────────
+            screen_games = _play_pair(
+                self._cand, best_bot, "cand", "best", self.encoding_name,
+                d.screen_n, d.opening_plies, d.seed_base,
                 legal_move_radius=self._legal_move_radius,
             )
-            sealbot_wr, _, _, _ = _wr_for_label(seal_games, "cand")
-        else:
-            sealbot_wr = None
+            wr_screen, _, _, _ = _wr_for_label(screen_games, "cand")
+            head_frac = (
+                sum(1 for g in screen_games if g["head_fired"]) / len(screen_games)
+                if screen_games else 0.0
+            )
 
-        head_frac_all = (
-            sum(1 for g in pooled if g["head_fired"]) / len(pooled) if pooled else 0.0
-        )
+            # ── Adaptive escalation ───────────────────────────────────────────
+            # Confirm whenever the screen WR is promotion-ELIGIBLE (>= lo). Only the
+            # clear-reject tail (WR < lo) skips — it cannot clear the bar even with a perfect
+            # confirm, so the band CANNOT false-negative a true candidate.
+            escalate = wr_screen >= d.screen_confirm_lo
+            if not escalate:
+                return DeployStrengthResult(
+                    wr_screen=wr_screen, wr_confirm=None, confirmed=False, promoted=False,
+                    elo_vs_best=None, ci_lo_boot=None, ci_hi_boot=None,
+                    n_games=len(screen_games), copy_multiplier=0.0,
+                    distinct_per_pair_min=None, head_fired_frac=head_frac,
+                    sealbot_wr=None,
+                    reason=f"screen WR {wr_screen:.3f} < {d.screen_confirm_lo:.3f} bar — "
+                           f"clear non-candidate, confirm skipped",
+                )
 
-        # ── Promotion decision: distinct-game bootstrap BT-Elo CI must clear ──
-        # Promote iff the candidate's distinct-game bootstrap CI lower bound vs the best
-        # anchor is > 0 Elo (candidate is stronger than the rotating champion, CI-clean on
-        # the HONEST effective-n) AND the confirm WR clears the promotion bar. The bootstrap
-        # CI (NOT the Hessian) is the gate — copies cannot narrow it (§D-ARGMAX).
-        wr_ok = wr_confirm >= d.promotion_winrate
-        ci_clean = ci_lo_boot is not None and ci_lo_boot > 0.0
-        low_power = bool(guard["low_power_warning"])
-        promoted = bool(wr_ok and ci_clean and not low_power)
-        if low_power:
-            reason = (f"confirm WR {wr_confirm:.3f}, bootstrap CI [{ci_lo_boot},{ci_hi_boot}] "
-                      f"but LOW EFFECTIVE-N (copy_mult={guard['copy_multiplier']}, "
-                      f"min distinct/pair={dpp_min}) — block (untrusted CI, §D-ARGMAX)")
-        elif promoted:
-            reason = (f"PROMOTE: confirm WR {wr_confirm:.3f} >= {d.promotion_winrate}, "
-                      f"distinct-game bootstrap Elo CI [{ci_lo_boot},{ci_hi_boot}] > 0")
-        else:
-            reason = (f"BLOCKED: confirm WR {wr_confirm:.3f} (bar {d.promotion_winrate}), "
-                      f"bootstrap Elo CI [{ci_lo_boot},{ci_hi_boot}] "
-                      f"(ci_clean={ci_clean}, wr_ok={wr_ok})")
+            # ── Confirm (full power) ──────────────────────────────────────────
+            confirm_games = _play_pair(
+                self._cand, best_bot, "cand", "best", self.encoding_name,
+                d.confirm_n, d.opening_plies, d.seed_base + 7919,
+                legal_move_radius=self._legal_move_radius,
+            )
+            # Pool screen+confirm games for the BT/bootstrap (both deploy-head, same pair).
+            pooled = list(screen_games) + list(confirm_games)
+            wr_confirm, _, _, _ = _wr_for_label(pooled, "cand")
+            labels = ["best", "cand"]  # anchor = best (rotating champion) at Elo 0
+            summary = aggregate_games(pooled, ladder_order=labels, n_boot=d.n_boot,
+                                      min_distinct_per_pair=d.min_distinct_per_pair)
+            boot = bootstrap_ratings_ci(pooled, labels, n_boot=d.n_boot, seed=d.seed_base)
+            elo_cand = next((r["elo"] for r in summary["rungs"] if r["label"] == "cand"), None)
+            ci_lo_boot, ci_hi_boot = boot.get("cand", (None, None))
+            guard = effective_n_guard(pooled, labels=labels,
+                                      min_distinct_per_pair=d.min_distinct_per_pair)
+            dpp = distinct_per_pair(pooled, labels)
+            dpp_min = min(dpp.values()) if dpp else None
 
-        return DeployStrengthResult(
-            wr_screen=wr_screen, wr_confirm=wr_confirm, confirmed=True, promoted=promoted,
-            elo_vs_best=elo_cand, ci_lo_boot=ci_lo_boot, ci_hi_boot=ci_hi_boot,
-            n_games=len(pooled), copy_multiplier=float(guard["copy_multiplier"]),
-            distinct_per_pair_min=dpp_min, head_fired_frac=head_frac_all,
-            sealbot_wr=sealbot_wr, reason=reason,
-        )
+            # ── External bar (fixed-depth SealBot) — SKIPPED when sealbot_games == 0.
+            # NOT in the promotion gate below (sealbot_wr is reported-only), and the
+            # dominant deploy-round cost, so it is droppable without touching the
+            # promotion decision. Uses its OWN game count (sealbot_games), decoupled
+            # from confirm_n. ──
+            if d.sealbot_games > 0:
+                seal_games = _play_pair(
+                    self._cand, self._sealbot(), "cand", "sealbot", self.encoding_name,
+                    d.sealbot_games, d.opening_plies, d.seed_base + 104729,
+                    legal_move_radius=self._legal_move_radius,
+                )
+                sealbot_wr, _, _, _ = _wr_for_label(seal_games, "cand")
+            else:
+                sealbot_wr = None
+
+            head_frac_all = (
+                sum(1 for g in pooled if g["head_fired"]) / len(pooled) if pooled else 0.0
+            )
+
+            # ── Promotion decision: distinct-game bootstrap BT-Elo CI must clear ──
+            # Promote iff the candidate's distinct-game bootstrap CI lower bound vs the best
+            # anchor is > 0 Elo (candidate is stronger than the rotating champion, CI-clean on
+            # the HONEST effective-n) AND the confirm WR clears the promotion bar. The bootstrap
+            # CI (NOT the Hessian) is the gate — copies cannot narrow it (§D-ARGMAX).
+            wr_ok = wr_confirm >= d.promotion_winrate
+            ci_clean = ci_lo_boot is not None and ci_lo_boot > 0.0
+            low_power = bool(guard["low_power_warning"])
+            promoted = bool(wr_ok and ci_clean and not low_power)
+            if low_power:
+                reason = (f"confirm WR {wr_confirm:.3f}, bootstrap CI [{ci_lo_boot},{ci_hi_boot}] "
+                          f"but LOW EFFECTIVE-N (copy_mult={guard['copy_multiplier']}, "
+                          f"min distinct/pair={dpp_min}) — block (untrusted CI, §D-ARGMAX)")
+            elif promoted:
+                reason = (f"PROMOTE: confirm WR {wr_confirm:.3f} >= {d.promotion_winrate}, "
+                          f"distinct-game bootstrap Elo CI [{ci_lo_boot},{ci_hi_boot}] > 0")
+            else:
+                reason = (f"BLOCKED: confirm WR {wr_confirm:.3f} (bar {d.promotion_winrate}), "
+                          f"bootstrap Elo CI [{ci_lo_boot},{ci_hi_boot}] "
+                          f"(ci_clean={ci_clean}, wr_ok={wr_ok})")
+
+            return DeployStrengthResult(
+                wr_screen=wr_screen, wr_confirm=wr_confirm, confirmed=True, promoted=promoted,
+                elo_vs_best=elo_cand, ci_lo_boot=ci_lo_boot, ci_hi_boot=ci_hi_boot,
+                n_games=len(pooled), copy_multiplier=float(guard["copy_multiplier"]),
+                distinct_per_pair_min=dpp_min, head_fired_frac=head_frac_all,
+                sealbot_wr=sealbot_wr, reason=reason,
+            )
+        finally:
+            # S7 round-2 review S-2: deterministic graph-InferenceServer thread
+            # teardown for BOTH engines this round built — don't rely on
+            # GC/`__del__` timing (fragile once a future refactor holds engines
+            # in a list or forms a cycle). No-op for a dense engine.
+            best_bot._engine.close()
+            self.close()
 
 
 __all__ = [

@@ -1,0 +1,168 @@
+# ── RUN4-GNN-SMOKE — S7 gate smoke profile ────────────────────────────────
+#
+# S7 gate smoke profile — run4 production batch_size stays 256, OPEN pending
+# 5080 OQ-2 train-step memory rider. This file is a FULL DUPLICATE of
+# configs/variants/run4_gnn.yaml (no variant-of-variant inheritance mechanism
+# exists in this repo — every variant merges onto the same _BASE_CONFIGS,
+# `hexo_rl/training/orchestrator.py`) plus the LABELED smoke overrides below.
+# Any change to run4_gnn.yaml's production content must be mirrored here by
+# hand; the launch-path test (tests/test_run4_gnn_launch_path.py) pins that
+# the forbidden §6.3 weights + corpus-mix-off + namespacing all still resolve
+# clean through THIS file too.
+#
+# WHY THIS FILE EXISTS (S7 F6, pinned ruling): the S7 round-2 re-run found
+# run4_gnn.yaml's inherited `batch_size: 256` OOMs at the FIRST train step on
+# the dev laptop (RTX 4060 Max-Q, 8 GiB) — self-play-distribution graphs (mean
+# ~490/2932 nodes/edges) × GINE E×H message intermediates retained for
+# backward, CONCURRENT with the live inference server, exceeds capacity. The
+# 5080 (16 GiB, the actual run4 launch host) is UNMEASURED for this
+# concurrency (WP-A's "torch runs bs=256 in 213 ms" was inference-only, no
+# backward, no concurrent self-play) — that's OQ-2's open train-step memory
+# rider, NOT resolved by this file. At `batch_size: 64` every S7 gate
+# criterion PASSED clean on the laptop (3 steps finite losses, watchdog
+# armed+live, ckpt@3 reloads 50/50 allclose, clean self-stop, zero shared-
+# artifact writes) — this file pins that as the labeled laptop gate profile.
+# See reports/probes/gnn_integration/S7_smoke_gate.md "Re-run after blocker
+# fixes" Part 1 Attempt 3 for the exact evidence.
+#
+# ── Everything below this point mirrors run4_gnn.yaml verbatim except the
+# clearly-labeled SMOKE OVERRIDE blocks. ──────────────────────────────────
+
+# The ONLY representation="graph" encoding today (engine/src/encoding/
+# registry.toml [encodings.gnn_axis_v1]).
+encoding: gnn_axis_v1
+
+# See run4_gnn.yaml's own comment: configs/model.yaml's base
+# value_head_type: scalar is never actually absent from the merged config, so
+# this must be declared explicitly (inert/correct either way).
+value_head_type: dist65
+
+# configs/model.yaml's base in_channels: 8 disagrees with gnn_axis_v1's
+# registry n_planes=0 — override to satisfy the scattered-key consistency
+# gate (build_net never reads in_channels on the graph path).
+in_channels: 0
+
+# ── §178 outcome levers — DECLARED, not inherited (F1 preserve-ckpt-baked).
+# Same values as run4_gnn.yaml — a smoke profile must bake the SAME outcome
+# semantics as production, only throughput/capacity knobs differ.
+draw_value: -0.5
+ply_cap_value: 0.0
+
+# ── bot-mix OFF (operator retirement ruling). F1 preserve-ckpt-baked.
+bot_batch_share: 0
+
+# ── §6.3 loss-weight zeros — GnnNet ships policy + dist65 only. Same as
+# run4_gnn.yaml; inherited nonzero base defaults hit the FIRST train step's
+# GRAPH_FORBIDDEN_NONZERO_WEIGHTS loud-raise regardless of batch_size.
+aux_opp_reply_weight: 0.0
+uncertainty_weight: 0.0
+ownership_weight: 0.0
+threat_weight: 0.0
+aux_chain_weight: 0.0
+ply_index_weight: 0.0
+entropy_reg_weight: 0.0
+
+# ── amp_dtype (S7 F9, informational, same as run4_gnn.yaml) — the graph
+# path is pinned to bf16 in CODE (`build_net.py::amp_dtype_for`), not via
+# this config's `amp_dtype` key; see run4_gnn.yaml's comment for the full
+# rationale. Nothing to declare here.
+
+# ── recency — same as run4_gnn.yaml.
+recency_weight: 0.75
+
+# ── SMOKE OVERRIDE (S7 F6, labeled; tightened post-F9): training batch_size.
+# Base configs/training.yaml default is 256 — confirmed OOMs at the first
+# train step on the laptop 4060 (8 GiB) under concurrent self-play. 64 was
+# the original S7 gate-proven value — but that proof ran on fp16-artifact
+# SHORT games (26-29 plies, ~490/2932 mean nodes/edges); post-F9 (bf16, sane
+# values) games genuinely run 88+ plies and late-game graph positions are
+# several times larger, and bs=64 training + backward CONCURRENT with the
+# live inference server OOM'd the 4060 at the very first train step on real
+# data (S7_f9_bf16_fix.md, proof-run attempt 2). 32 was the post-F9 value —
+# but the S7 run-4 as-pinned witness showed bs=32 STILL OOMs `loss.backward()`
+# at step 3 once the buffer carries genuinely-played games: real graphs run
+# ~1494 legal-nodes/graph vs the ~525-node fp16-artifact basis every prior
+# sizing iteration used (S7_smoke_gate.md "Re-run 4" Part-1 attempt 1).
+# 16 is the run-4-witnessed value (3 finite steps + ckpt + clean stop,
+# S7 run-4 attempt 2). Production run4_gnn.yaml stays silent on this key
+# (inherits 256; the 5080 OQ-2 rider owns the real capacity knee) — do NOT
+# copy this override back.
+batch_size: 16
+
+# ── SMOKE OVERRIDE (S7 F6, labeled): minimal buffer pool sizing for a laptop
+# 3-step gate run. Base configs/training.yaml min_buffer_size default is 256
+# (sized for a real production launch); at batch_size 64 a 3-iteration gate
+# run needs only enough self-play positions to fill ONE batch, not 256 — the
+# S7 rerun proof-run used --min-buffer-size 64 on the CLI for exactly this
+# reason. Declared here so the gate needs no CLI override to reproduce.
+# buffer_capacity likewise shrunk from the 500_000 production default — a
+# smoke run never approaches that fill level and a smaller cap is a cheaper
+# HexgBuffer allocation on a memory-constrained laptop host.
+min_buffer_size: 64
+buffer_capacity: 4096
+
+# ── BC-prefit warm-start — same seam/checkpoint as run4_gnn.yaml (the gate
+# must exercise the REAL warm-start path, OQ-5's landed-verify).
+gnn_warm_start:
+  enabled: true
+  checkpoint: checkpoints/probes/gnn_bc/gnn_bc_040000.pt
+
+selfplay:
+  # WP-1 empty-board fix landed — same as run4_gnn.yaml.
+  random_opening_plies: 0
+
+  # ── SMOKE OVERRIDE (S7 F9 follow-up, labeled, capacity-class): leaf-batch
+  # width for the live inference server. Base default 64: on real (bf16,
+  # genuinely-played) late-game positions a 64-leaf graph batch spiked a
+  # 1.35 GiB single allocation inside `RepresentationNetwork` concurrent
+  # with the first train step and OOM'd the 4060 (S7_f9_bf16_fix.md,
+  # proof-run attempt 2). 32 halved the inference-side spike but S7 run-4
+  # attempt 1 still logged 5 inference-server 1.0-1.2 GiB OOM events on
+  # genuine late-game waves concurrent with training (S7_smoke_gate.md
+  # "Re-run 4"); 16 matches the run-4-witnessed training batch_size.
+  # Throughput/capacity knob only — per-leaf outputs are batch-size-
+  # invariant. Production run4_gnn.yaml inherits 64 (5080 envelope = OQ-2
+  # rider owns the real capacity knee).
+  inference_batch_size: 16
+
+mixing:
+  # S7 F1 — corpus-mix OFF (real null, not "<auto>"). Same as run4_gnn.yaml;
+  # see that file's comment for the full sha-pin-gate rationale.
+  pretrained_buffer_path: null
+
+  # ── SMOKE OVERRIDE (S7 F6, labeled, §RUN3-STEP0 law): a DISTINCT namespaced
+  # path from run4_gnn.yaml's own `replay_buffer_run4_gnn.hexg`. Duplicating
+  # run4_gnn.yaml's path verbatim here would let a smoke gate run and a real
+  # run4_gnn production launch silently share (and corrupt) the same buffer
+  # file — exactly the cross-lineage collision class §RUN3-STEP0 and S7 F5a
+  # exist to prevent, just at variant-vs-variant granularity instead of
+  # run-vs-run.
+  buffer_persist_path: "checkpoints/replay_buffer_run4_gnn_smoke.hexg"
+
+# ── SMOKE OVERRIDE (S7 F9 follow-up, labeled, capacity-class like batch_size
+# above): stall-watchdog window sized for the 4060's REAL first-game wall.
+# The watchdog fires on "no new game for N sec since pool start"
+# (`step_coordinator._fire_stall_watchdog`). Pre-F9, fp16's NaN-saturated
+# values ended games in 26-29 plies as artifact organic-draws (run-2/run-3
+# "fast fills" — re-adjudicated in S7_f9_bf16_fix.md), so 1800s looked ample.
+# Post-F9 (bf16, sane values) games genuinely play out toward the 150-ply
+# cap: 14 concurrent games x 150 plies x ~350 avg sims at the 4060's
+# measured ~700 leaf-evals/s seam throughput ≈ 25-35 min to the first
+# completed wave — the F9 proof-run hit the 1800s watchdog at games=0 while
+# healthy (GPU busy, zero non-finite events). Capacity knob, NOT semantics:
+# production run4_gnn.yaml keeps 1800s for the ~3x-faster 5080 (OQ-2 rider
+# should confirm first-wave wall < 1800s there).
+selfplay_stall_timeout_sec: 5400.0
+
+# ── promotion-gate CUDA isolation — ride verbatim from run3/run4_gnn.yaml.
+promotion_gate_subprocess_isolation: true
+
+# ── SMOKE OVERRIDE (S7 F6, labeled, §RUN3-STEP0 law): a DISTINCT namespaced
+# anchor path — same reasoning as mixing.buffer_persist_path above. This is
+# the fix for the EXACT trap the S7 blocker-fix proof-run hit (F5a): a smoke
+# gate run must never write its fresh-init step-0 weights where a real
+# run4_gnn production launch (or another smoke run) could pick them up as its
+# resolved anchor.
+eval_pipeline:
+  gating:
+    best_model_path: checkpoints/best_model_run4_gnn_smoke.pt

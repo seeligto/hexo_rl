@@ -1,0 +1,168 @@
+# ── RUN4 — GNN production launch config (minimal) ────────────────────────────
+#
+# BINDING: docs/designs/gnn_wp5b_commitB_delta.md §9 ("run4_gnn.yaml — ruled
+# IN, minimal contents"). This is the CONFIG ARTIFACT the training-path commit
+# ships — it closes reviewer-F3 (the launch config exists on disk) and gives
+# the S7 integration smoke gate a real on-disk config to exercise (stronger
+# than the inline `SelfPlayRunnerConfig` commit-A's own smoke used). It is
+# NOT the launch decision: the 5080 throughput-floor rider (OQ-2), the DS-1/
+# 2/3 divergence thresholds, and the actual launch act are explicitly OUT of
+# WP-5b commit B's scope — see docs/designs/run4_gnn_design.md for those.
+#
+# Everything NOT listed below (batch_size, checkpoint_interval, log_interval,
+# ...) inherits the representation-agnostic base defaults from
+# configs/training.yaml verbatim — GnnNet ignores the grid-only geometry
+# kwargs (board_size/filters/res_blocks) build_net forwards on the grid path
+# (hexo_rl/model/build_net.py `_build_gnn_net` reads only value_head_type /
+# n_value_bins off them), so nothing here needs to shadow them.
+
+# The ONLY representation="graph" encoding today (engine/src/encoding/
+# registry.toml [encodings.gnn_axis_v1]).
+encoding: gnn_axis_v1
+
+# DEVIATION from the delta doc's §9 literal wording ("value_head_type may be
+# OMITTED — resolved from the encoding"), flagged + verified empirically:
+# `configs/model.yaml` (a base file every launch merges, `orchestrator.py`
+# `_BASE_CONFIGS`) unconditionally declares `value_head_type: scalar` — so
+# the key is NEVER actually absent from the merged config a real launch
+# builds. `resolve_value_head_type`'s "declared config value always wins"
+# branch (`build_net.py`) therefore fires on the BASE's "scalar" default, not
+# the representation-aware "dist65" default — omitting it here raises
+# `RepresentationMismatch: ... only ships GnnDist65ValueHead; got
+# value_head_type='scalar'` at `build_net` time (verified: reproduced against
+# the real base+variant merge chain,
+# `configs/{model,training,selfplay,game_replay,monitoring,monitors}.yaml` +
+# this file). Declare it explicitly instead — inert/correct either way
+# (GnnNet ships ONLY GnnDist65ValueHead; a declared dist65 is a no-op against
+# the representation-aware default, just no longer silently absent).
+value_head_type: dist65
+
+# configs/model.yaml's base `in_channels: 8` (the v6-default grid plane
+# count) disagrees with gnn_axis_v1's registry `n_planes=0` (a graph carries
+# no dense planes) — the scattered-key consistency check
+# (hexo_rl.encoding.resolvers._check_scattered_keys) raises on that
+# disagreement at `resolve_from_config` time. Override explicitly (`build_net`
+# never reads `in_channels` on the graph path — build_net.py: "the rest are
+# grid-only geometry and are ignored" — this declaration exists ONLY to
+# satisfy the scattered-key consistency gate).
+in_channels: 0
+
+# ── §178 outcome levers — DECLARED, not inherited (F1 preserve-ckpt-baked:
+# a future change to configs/training.yaml's base default must never
+# silently alter what THIS run's checkpoint bakes). Values match the
+# CURRENT base defaults (configs/training.yaml draw_value/ply_cap_value) —
+# run4 introduces no new outcome-lever tuning, it only PINS the existing
+# default explicitly. Feeds `finalize_graph_outcome` identically to the CNN
+# (WP-5a, INV26-verbatim; delta doc §3).
+draw_value: -0.5
+ply_cap_value: 0.0
+
+# ── bot-mix OFF (operator retirement ruling, memory
+# bot-mix-retired-s178-useless). F1 preserve-ckpt-baked: DECLARE 0, do not
+# leave it to inherit a nonzero base default.
+bot_batch_share: 0
+
+# ── §6.3 loss-weight zeros (S7 follow-up): GnnNet ships policy + dist65 only
+# (design §1.3 DROP — no ownership/threat/chain/opp-reply/uncertainty/
+# ply-index heads, no entropy regularizer on the graph loss). The base
+# training.yaml defaults are nonzero for most of these; inherited, they hit
+# `_train_on_graph_batch`'s GRAPH_FORBIDDEN_NONZERO_WEIGHTS loud-raise at
+# the FIRST train step. Declare every guard-listed key 0 explicitly (F1
+# preserve-ckpt-baked: declare, don't inherit — ply_index_weight's base is
+# already 0 but is pinned here for the same reason).
+aux_opp_reply_weight: 0.0
+uncertainty_weight: 0.0
+ownership_weight: 0.0
+threat_weight: 0.0
+aux_chain_weight: 0.0
+ply_index_weight: 0.0
+entropy_reg_weight: 0.0
+
+# ── amp_dtype (S7 F9, informational — NOT a key to set here): the base
+# configs/training.yaml `amp_dtype: "fp16"` default is NOT consulted for a
+# graph run. `hexo_rl/model/build_net.py::amp_dtype_for` pins the graph
+# (GnnNet) autocast dtype to bf16 unconditionally in CODE — fp16's GINE
+# sum-aggregation overflowed on production-scale self-play graphs
+# (reports/probes/gnn_integration/S7_smoke_gate.md "Re-run 3" F9). Declaring
+# `amp_dtype: bf16` here would be a harmless no-op (the graph branch ignores
+# the config value either way) — left undeclared on purpose so a reader
+# doesn't mistake this for a tunable knob.
+
+# ── recency — commit B lands the sample-side sampler
+# (`HexgBuffer.sample_graph_batch(recent_frac=...)`, delta doc §4); the real
+# value now applies (commit-A's "declare recency_weight:0 until the sampler
+# lands" flag is CLEARED by this commit).
+recency_weight: 0.75
+
+# ── BC-prefit warm-start (delta doc §8) — the FRESH-INIT bootstrap seam
+# (hexo_rl.training.gnn_warmstart.maybe_warmstart_gnn_from_bc), NOT
+# `--checkpoint` (WP-4's assert_full_gnn_checkpoint_or_raise correctly
+# refuses a BC-prefit-only state dict on the resume path — this seam is what
+# WP-5b built to route around that guard on purpose). Launch this variant
+# WITHOUT --checkpoint; a fresh GnnNet is built, then this block transfers
+# representation.*/policy_head.* from the banked BC-prefit probe checkpoint.
+# The dist65 value head stays FRESH either way (E1 REVIVE: dist65 warm-starts
+# fine from an absent value head).
+gnn_warm_start:
+  enabled: true
+  checkpoint: checkpoints/probes/gnn_bc/gnn_bc_040000.pt
+
+selfplay:
+  # WP-1 empty-board fix (8dacf6f) landed — organic ply-0 graph self-play now
+  # starts through the live worker loop, so 0 is safe (no longer forced to
+  # >=1 as the commit-A workaround required).
+  random_opening_plies: 0
+
+mixing:
+  # S7 F1 (smoke-gate blocker, closed here): run4_gnn_design.md Decision 1
+  # rules INIT=BC-prefit, **corpus-mix OFF** (§1.2: "the F1 preserve-ckpt-
+  # baked warning means the run4 variant must DECLARE `bot_batch_share: 0`
+  # AND corpus-mix weights explicitly, not inherit"). Without an explicit
+  # declaration here this key silently inherited configs/training.yaml's
+  # base `"<auto>"` default, which `expand_auto_paths` resolves to
+  # `data/gnn_corpus_v1.hexg` (registered in `_CORPUS_PATHS`, WP-5b
+  # export target) and stamps `_pretrained_buffer_path_auto_resolved: true`
+  # — `load_pretrained_buffer` then hard-raises because `gnn_axis_v1` has
+  # deliberately NO registered sha pin yet (`_CORPUS_SHA_PINS` — "add an
+  # entry once a real gnn_corpus_v1.hexg is minted"). That crash (S7 Part-1
+  # Finding F1) fires BEFORE self-play even starts, independent of any
+  # smoke-harness isolation. Declaring `null` here (not the `"<auto>"`
+  # literal) skips `expand_auto_paths`'s expansion entirely, so
+  # `load_pretrained_buffer` takes its `if not pretrained_path: return None`
+  # no-op branch — real corpus-mix OFF, matching Decision 1, not a
+  # sha-pin-gated auto-resolve. The other mixing weights
+  # (initial_pretrained_weight/min_pretrained_weight/decay_steps/
+  # pretrain_max_samples) are inert whenever `pretrained_buffer_path` is
+  # falsy (step_coordinator.py's mixed-batch branch requires
+  # `pretrained_buffer is not None`) — no separate declaration needed.
+  pretrained_buffer_path: null
+
+  # Namespaced buffer_persist_path (§RUN3-STEP0 law) — a shared
+  # un-namespaced path across lineages silently auto-restored a stale
+  # cross-lineage buffer in run3 (STEP0-FAIL). commit-A's HexgBuffer restore
+  # loud-fails a cross-format/cross-lineage file
+  # (orchestrator.restore_buffer_from_checkpoint, Adjudication 1) — but that
+  # guard only fires on a GENUINE mismatch when the path itself is
+  # per-lineage. `.hexg` extension per the HEXG v1 persist format (WP-5a §3;
+  # the loader detects format via the magic bytes, not the extension, but
+  # `.hexg` is the documented convention).
+  buffer_persist_path: "checkpoints/replay_buffer_run4_gnn.hexg"
+
+# ── watchdog + promotion-gate CUDA isolation — ride verbatim from run3
+# (run4_gnn_design.md §6.3); no new machinery, no graph-specific change.
+selfplay_stall_timeout_sec: 1800.0
+promotion_gate_subprocess_isolation: true
+
+# ── S7 F5a (round-2 blocker, §RUN3-STEP0 law): namespace the anchor path —
+# same law as mixing.buffer_persist_path above. Without this the base
+# configs/eval.yaml default (checkpoints/best_model.pt) is SHARED across every
+# variant/lineage; the S7 blocker-fix proof-run itself planted the trap (wrote
+# its fresh-init step-0 GnnNet weights to the shared path), and the very next
+# run4_gnn launch found that file and took the anchor-exists branch —
+# `resolve_anchor` then AttributeError'd on `.in_channels` (F5b, a SEPARATE
+# code fix in anchor.py) trying to arch-sync a GnnNet against whatever
+# lineage's weights happen to be sitting at the shared path. Per-lineage path,
+# exact run3_dist65.yaml:172 template.
+eval_pipeline:
+  gating:
+    best_model_path: checkpoints/best_model_run4_gnn.pt

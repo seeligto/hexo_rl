@@ -364,11 +364,46 @@ fn node_threat_features(
 
 /// `strix_v1_graph.py::legal_moves_from_stones` — empty cells within
 /// hex-distance ≤ radius of any stone, sorted lexicographically `(q, r)`.
+///
+/// WP-1 empty-board fallback (launch-blocker fix): the Python graph oracle
+/// this fn ports has NO empty-board case (`stone_map` empty → the `for (sq,
+/// sr) in stone_map.keys()` loop never runs → vacuous `[]`) because the
+/// oracle is only ever invoked by `strix_v1_bot.py`, which short-circuits
+/// its own opening move before calling the graph builder at all — the
+/// empty board is genuinely out-of-domain for that call site, not a tested
+/// oracle behavior. Live graph self-play has no such short-circuit: MCTS
+/// roots a search at ply 0 and calls straight into this fn, so a vacuous
+/// `[]` starves the root of any legal node and `EmptyLegalSet` fires before
+/// the game can start (`reports/probes/gnn_integration/WP5b_commitA_impl.md`
+/// "Concerns / findings"). The authority for what a 0-stone board's legal
+/// set IS is the dense engine's own board-legality rule, not the graph
+/// oracle's untested vacuous default — so this mirrors
+/// `Board::legal_moves_set()`'s empty-board special case EXACTLY
+/// (`engine/src/board/moves.rs:95-101`): a fixed 5×5 region `(dq, dr) ∈
+/// [-2,2]×[-2,2]` (25 cells) around the absolute origin, a hardcoded
+/// literal that — like the dense fn it mirrors — does NOT scale with
+/// `radius` (dense ignores `Board.legal_move_radius` in this branch too).
+/// This is a DELIBERATE, DOCUMENTED divergence from the Python graph
+/// oracle for n_stones==0 only; every stone-bearing board is untouched and
+/// stays byte-exact against the oracle (`tests/test_hexo_graph_parity.py`).
 fn legal_moves_from_stones(
     stone_map: &FnvMap<i64, i8>,
     stones: &[(i32, i32, i8)],
     radius: i32,
 ) -> Vec<(i32, i32)> {
+    if stones.is_empty() {
+        let mut legal: Vec<(i32, i32)> = Vec::with_capacity(25);
+        for dq in -2i32..=2 {
+            for dr in -2i32..=2 {
+                legal.push((dq, dr));
+            }
+        }
+        // Already lexicographic (dq ascending outer, dr ascending inner) but
+        // sort explicitly to keep the ordering contract obvious/robust, same
+        // as the general branch below.
+        legal.sort_unstable();
+        return legal;
+    }
     // offsets: hex-ball of the given radius
     let mut offsets: Vec<(i32, i32)> = Vec::with_capacity((3 * radius * (radius + 1) + 1) as usize);
     for dq in -radius..=radius {
@@ -743,12 +778,16 @@ fn verify_contract(g: &AxisGraph, n_stones: usize, n_legal: usize, params: &Buil
     );
     assert!(g.builder_impl == BUILDER_IMPL_NATIVE, "NonNativeSampleBuilder: impl tag != 1");
     // EmptyLegalSet — a non-terminal position must produce >= 1 legal node.
-    // Terminal-input escape hatch (EXPLICIT): the EMPTY BOARD (n_stones == 0)
-    // is the ONLY input with a legitimately empty legal set — the oracle
-    // derives legal cells from stones, so a stoneless board has none (the
-    // strix bot short-circuits this case before the net, strix_v1_bot.py:182).
-    // Any stone-bearing board on the infinite lattice ALWAYS has empty
-    // neighbors, so n_legal == 0 with n_stones > 0 is a builder bug.
+    // WP-1 empty-board fix: `legal_moves_from_stones` now special-cases
+    // n_stones == 0 with the dense-engine-mirrored 5×5 fallback (25 cells,
+    // see that fn's doc comment), so n_legal > 0 holds UNCONDITIONALLY —
+    // the `|| n_stones == 0` disjunct below is now vacuous in practice
+    // (never needed to fire) but kept as a defensive belt-and-suspenders:
+    // if a future edit ever reintroduces a stoneless vacuous path, this
+    // assert degrades gracefully to the old "escape hatch" behavior rather
+    // than a confusing panic. Any stone-bearing board on the infinite
+    // lattice ALWAYS has empty neighbors, so n_legal == 0 with n_stones > 0
+    // is still, unconditionally, a builder bug.
     assert!(
         n_legal > 0 || n_stones == 0,
         "EmptyLegalSet: {n_stones} stones but zero legal nodes"
@@ -880,14 +919,90 @@ mod tests {
     }
 
     #[test]
-    fn empty_board_builds_dummy_only() {
-        // No stones → no legal nodes → 1 dummy node, 0 axis edges, 0 dummy edges.
+    fn empty_board_matches_dense_5x5_fallback() {
+        // WP-1 launch-blocker fix: n_stones == 0 must mirror
+        // `Board::legal_moves_set()`'s empty-board special case EXACTLY
+        // (`engine/src/board/moves.rs:95-101`) — a fixed 5x5 region
+        // `(dq, dr) in [-2,2]x[-2,2]`, 25 cells around the origin, NOT the
+        // vacuous `[]` the Python graph oracle returns for a stoneless
+        // `stone_map` (that fn is never exercised at n_stones==0 in real
+        // oracle usage — see `legal_moves_from_stones`'s doc comment).
         let g = build_axis_graph(&StoneList::default(), &BuildParams::default());
-        assert_eq!(g.num_nodes(), 1);
         assert_eq!(g.n_stones, 0);
-        assert_eq!(g.num_edges(), 0);
-        assert!(g.legal_node_gather.is_empty());
+        assert_eq!(g.legal_node_gather.len(), 25, "empty board must yield the dense 5x5 = 25 legal cells");
+        assert_eq!(g.num_nodes(), 25 + 1); // 25 legal + 1 dummy, no stones
+        // Axis-window edges DO form among the 25 (all-Empty-kind) legal
+        // nodes themselves — the empty-kind walk-stop rule only stops on a
+        // Stone neighbor (there are none here), so adjacent legal cells
+        // within the win_length-1 window link up. This is unrelated to the
+        // legal-move-derivation fix (unchanged edge-building code); just
+        // documenting it's expected, not a regression.
+        assert!(g.num_edges() > 0);
         assert_eq!(g.window_center, (0, 0));
+
+        let mut expected: Vec<(i32, i32)> = Vec::with_capacity(25);
+        for dq in -2i32..=2 {
+            for dr in -2i32..=2 {
+                expected.push((dq, dr));
+            }
+        }
+        expected.sort_unstable();
+        let mut got: Vec<(i32, i32)> = g
+            .legal_node_gather
+            .iter()
+            .map(|&row| (g.node_coords[row as usize * 2], g.node_coords[row as usize * 2 + 1]))
+            .collect();
+        got.sort_unstable();
+        assert_eq!(got, expected, "empty-board legal cell set must byte-match dense's 5x5 fallback");
+
+        // Radius-independence (review of the dense reference: that branch
+        // ignores `Board.legal_move_radius` entirely) — a very different
+        // `radius` must NOT change the empty-board fallback shape.
+        let g2 = build_axis_graph(
+            &StoneList::default(),
+            &BuildParams { radius: 1, ..BuildParams::default() },
+        );
+        assert_eq!(g2.legal_node_gather.len(), 25, "empty-board fallback must be radius-independent, like dense");
+    }
+
+    #[test]
+    fn single_stone_legal_set_matches_dense_ball_formula() {
+        // WP-1 verification (NOT a fix — this general per-stone branch was
+        // already correct, only the n_stones==0 branch was broken): dense's
+        // non-empty branch (`Board::legal_moves_set()`,
+        // `engine/src/board/moves.rs:102-146`) computes, for every existing
+        // stone, all empty cells within hex-distance <= radius via the same
+        // axial hex-ball loop (`dq in -r..=r`, `dr` clamped so the ball
+        // constraint `|dq|,|dr|,|dq+dr| <= r` holds). For a 1-stone board
+        // that's a single ball around that one stone. Replicate dense's OWN
+        // loop shape here (not `legal_moves_from_stones`'s hex-ball filter —
+        // that would just be comparing the fn to itself) so a real
+        // divergence between the two independent formulas would be caught.
+        let radius = 5i32; // dense DEFAULT_LEGAL_MOVE_RADIUS (moves.rs)
+        let (sq, sr) = (3i32, -2i32);
+        let mut expected: Vec<(i32, i32)> = Vec::new();
+        for dq in -radius..=radius {
+            let dr_min = (-radius).max(-radius - dq);
+            let dr_max = radius.min(radius - dq);
+            for dr in dr_min..=dr_max {
+                let pos = (sq + dq, sr + dr);
+                if pos != (sq, sr) {
+                    expected.push(pos);
+                }
+            }
+        }
+        expected.sort_unstable();
+
+        let params = BuildParams { radius: radius as u16, ..BuildParams::default() };
+        let g = build_axis_graph(&StoneList { stones: vec![(sq, sr, 1)] }, &params);
+        assert_eq!(g.n_stones, 1);
+        let mut got: Vec<(i32, i32)> = g
+            .legal_node_gather
+            .iter()
+            .map(|&row| (g.node_coords[row as usize * 2], g.node_coords[row as usize * 2 + 1]))
+            .collect();
+        got.sort_unstable();
+        assert_eq!(got, expected, "1-stone legal cell set must match dense's own hex-ball formula");
     }
 
     #[test]

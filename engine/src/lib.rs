@@ -40,6 +40,7 @@ pub use crate::pyo3::mcts::PyMCTSTree;
 fn engine(m: &Bound<'_, PyModule>) -> PyResult<()> {
     crate::pyo3::board::register(m)?;
     crate::pyo3::encoding::register(m)?;
+    crate::pyo3::graph_contract::register(m)?;
     crate::pyo3::mcts::register(m)?;
     crate::pyo3::tactics::register(m)?;
     crate::pyo3::utils::register(m)?;
