@@ -78,6 +78,16 @@ aux_chain_weight: 0.0
 ply_index_weight: 0.0
 entropy_reg_weight: 0.0
 
+# ── amp_dtype (S7 F9, informational — NOT a key to set here): the base
+# configs/training.yaml `amp_dtype: "fp16"` default is NOT consulted for a
+# graph run. `hexo_rl/model/build_net.py::amp_dtype_for` pins the graph
+# (GnnNet) autocast dtype to bf16 unconditionally in CODE — fp16's GINE
+# sum-aggregation overflowed on production-scale self-play graphs
+# (reports/probes/gnn_integration/S7_smoke_gate.md "Re-run 3" F9). Declaring
+# `amp_dtype: bf16` here would be a harmless no-op (the graph branch ignores
+# the config value either way) — left undeclared on purpose so a reader
+# doesn't mistake this for a tunable knob.
+
 # ── recency — commit B lands the sample-side sampler
 # (`HexgBuffer.sample_graph_batch(recent_frac=...)`, delta doc §4); the real
 # value now applies (commit-A's "declare recency_weight:0 until the sampler
@@ -142,3 +152,17 @@ mixing:
 # (run4_gnn_design.md §6.3); no new machinery, no graph-specific change.
 selfplay_stall_timeout_sec: 1800.0
 promotion_gate_subprocess_isolation: true
+
+# ── S7 F5a (round-2 blocker, §RUN3-STEP0 law): namespace the anchor path —
+# same law as mixing.buffer_persist_path above. Without this the base
+# configs/eval.yaml default (checkpoints/best_model.pt) is SHARED across every
+# variant/lineage; the S7 blocker-fix proof-run itself planted the trap (wrote
+# its fresh-init step-0 GnnNet weights to the shared path), and the very next
+# run4_gnn launch found that file and took the anchor-exists branch —
+# `resolve_anchor` then AttributeError'd on `.in_channels` (F5b, a SEPARATE
+# code fix in anchor.py) trying to arch-sync a GnnNet against whatever
+# lineage's weights happen to be sitting at the shared path. Per-lineage path,
+# exact run3_dist65.yaml:172 template.
+eval_pipeline:
+  gating:
+    best_model_path: checkpoints/best_model_run4_gnn.pt

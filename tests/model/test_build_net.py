@@ -16,7 +16,9 @@ from hexo_rl.encoding import lookup
 from hexo_rl.model.build_net import (
     GNN_CONFIG_DEFAULTS,
     RepresentationMismatch,
+    amp_dtype_for,
     build_net,
+    model_representation,
     resolve_value_head_type,
 )
 from hexo_rl.model.gnn_net import GnnNet
@@ -168,3 +170,78 @@ def test_graph_dispatch_launch_config_without_value_head_type_builds():
     config: dict = {}
     net = build_net(spec, config, value_head_type=resolve_value_head_type(spec, config))
     assert isinstance(net, GnnNet)
+
+
+# ── model_representation — the S7 F5b/F7/F8 shared isinstance guard ────────
+#
+# The dense-only `.in_channels` AttributeError bug class (S7 round-2:
+# anchor.py's arch-sync, eval_pipeline's in-loop opponent dispatch,
+# selfplay/inference.py's infer_batch) is fixed via this ONE shared
+# primitive rather than three independent isinstance checks. Pinned here so
+# any of the three call sites drifting from this helper is a visible diff,
+# not a silent re-divergence.
+
+
+def test_model_representation_graph_gnn_net():
+    assert model_representation(GnnNet()) == "graph"
+
+
+def test_model_representation_grid_hex_tac_toe_net():
+    net = HexTacToeNet(board_size=19, res_blocks=1, filters=8, in_channels=8)
+    assert model_representation(net) == "grid"
+
+
+def test_model_representation_unwraps_torch_compile_orig_mod():
+    """A torch.compile OptimizedModule wraps the real net under `_orig_mod`
+    (inference_server.py / anchor.py's own convention) — must classify by
+    the WRAPPED model, not the wrapper's own (irrelevant) type."""
+
+    class _FakeOptimizedModule:
+        def __init__(self, wrapped):
+            self._orig_mod = wrapped
+
+    assert model_representation(_FakeOptimizedModule(GnnNet())) == "graph"
+    dense = HexTacToeNet(board_size=19, res_blocks=1, filters=8, in_channels=8)
+    assert model_representation(_FakeOptimizedModule(dense)) == "grid"
+
+
+# ── amp_dtype_for — S7 F9 fix, representation-aware autocast dtype ─────────
+#
+# fp16 GINE sum-aggregation overflowed fp16's 65504 ceiling on
+# production-scale self-play graphs (S7_smoke_gate.md "Re-run 3" F9 — see
+# `amp_dtype_for`'s own docstring for the full mechanism). The graph branch
+# is pinned to bf16 in CODE, unconditionally — not config-tunable, matching
+# the pinned controller ruling. The grid branch is byte-identical to the
+# pre-F9 `Trainer._resolve_amp_dtype` it replaces (same default/parse/raise
+# semantics, now shared with `InferenceServer`).
+
+
+def test_amp_dtype_for_graph_is_bf16_regardless_of_config():
+    assert amp_dtype_for("graph", {}) == torch.bfloat16
+    assert amp_dtype_for("graph", None) == torch.bfloat16
+    # Pinned: even an explicit fp16 declaration on a graph config is ignored
+    # — the whole point of the fix is that F9 cannot come back via a stale
+    # or forgotten yaml override (this repo already paid for that ambiguity
+    # class once, F1/F5a — "declare, don't rely on inherited defaults").
+    assert amp_dtype_for("graph", {"amp_dtype": "fp16"}) == torch.bfloat16
+    assert amp_dtype_for("graph", {"amp_dtype": "bf16"}) == torch.bfloat16
+
+
+def test_amp_dtype_for_grid_defaults_fp16():
+    assert amp_dtype_for("grid", {}) == torch.float16
+    assert amp_dtype_for("grid", None) == torch.float16
+
+
+def test_amp_dtype_for_grid_honors_explicit_bf16_override():
+    assert amp_dtype_for("grid", {"amp_dtype": "bf16"}) == torch.bfloat16
+    assert amp_dtype_for("grid", {"amp_dtype": "bfloat16"}) == torch.bfloat16
+
+
+def test_amp_dtype_for_grid_case_insensitive_aliases():
+    assert amp_dtype_for("grid", {"amp_dtype": "FLOAT16"}) == torch.float16
+    assert amp_dtype_for("grid", {"amp_dtype": "Half"}) == torch.float16
+
+
+def test_amp_dtype_for_grid_invalid_raises():
+    with pytest.raises(ValueError, match="amp_dtype must be"):
+        amp_dtype_for("grid", {"amp_dtype": "fp8"})

@@ -8,6 +8,9 @@ Architecture spec (docs/01_architecture.md §2):
                 L_value      = BCE(sigmoid(v_logit), (z+1)/2)
                 L_opp_reply  = -sum(π_opp · log π_opp_net)  (auxiliary)
     Mixed prec: torch.autocast(device_type, dtype=float16) + GradScaler
+                (dense/grid representation only — the graph representation's
+                `_train_on_graph_batch` autocasts at bf16 unconditionally,
+                GradScaler bypassed; S7 F9, see `amp_dtype_for`)
 
 Checkpointing every N steps:
     checkpoint_<step>.pt     — full state (model + optimizer + meta)
@@ -33,6 +36,7 @@ from torch.amp import GradScaler, autocast  # type: ignore[attr-defined]
 
 import structlog
 
+from hexo_rl.model.build_net import amp_dtype_for, model_representation
 from hexo_rl.model.network import HexTacToeNet
 from hexo_rl.utils.device import best_device
 # Perf probes use structlog directly (log.info) so they persist to JSONL even
@@ -84,19 +88,6 @@ GRAPH_FORBIDDEN_NONZERO_WEIGHTS: tuple = (
     "threat_weight", "aux_chain_weight", "ply_index_weight",
     "entropy_reg_weight",
 )
-
-
-def _resolve_amp_dtype(config: Dict[str, Any]) -> torch.dtype:
-    """Map config ``amp_dtype`` string to a torch.dtype. Default fp16."""
-    raw = str(config.get("amp_dtype", "fp16")).lower()
-    if raw in ("fp16", "float16", "half"):
-        return torch.float16
-    if raw in ("bf16", "bfloat16"):
-        return torch.bfloat16
-    raise ValueError(
-        f"amp_dtype must be 'fp16' or 'bf16', got {raw!r}. "
-        "Set in configs/training.yaml or a variant override."
-    )
 
 
 def prune_policy_targets(
@@ -332,11 +323,17 @@ class Trainer:
             fp16_requested = False
         self.fp16 = fp16_requested
 
-        # Autocast dtype selection — fp16 vs bf16. bf16 has wider dynamic
-        # range (no GradScaler needed on Ampere+/Ada) at the cost of less
-        # mantissa precision. Default fp16 preserves legacy behaviour.
-        self.amp_dtype = _resolve_amp_dtype(config)
-        # GradScaler is only meaningful for fp16; bf16 has sufficient range.
+        # Autocast dtype selection — fp16 vs bf16, REPRESENTATION-AWARE (S7 F9
+        # fix, see `amp_dtype_for` docstring): the graph (GnnNet) path is
+        # pinned to bf16 unconditionally (fp16 GINE sum-aggregation overflows
+        # on production-scale self-play graphs); the grid (dense/CNN) path is
+        # unchanged — reads the `amp_dtype` config knob, default fp16,
+        # byte-identical to pre-F9 behaviour (live run3 rides this branch).
+        self.amp_dtype = amp_dtype_for(model_representation(self.model), config)
+        # GradScaler is only meaningful for fp16; bf16 has sufficient range
+        # (and per torch convention should not be scaled) — this correctly
+        # disables/bypasses the scaler on the graph branch too, since
+        # `amp_dtype_for` never returns float16 there.
         scaler_enabled = self.fp16 and self.amp_dtype == torch.float16
 
         self.config = config

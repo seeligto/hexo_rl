@@ -19,6 +19,7 @@ from typing import Any, Optional
 import structlog
 import torch
 
+from hexo_rl.model.build_net import RepresentationMismatch, model_representation
 from hexo_rl.training.trainer import Trainer
 
 log = structlog.get_logger(__name__)
@@ -514,28 +515,73 @@ def resolve_anchor(
         # when architectures match. Sweep variants train a reduced-channel model
         # against an 18-channel anchor; syncing architectures is impossible and
         # wrong (sweep inf_model should start from trainer.model, not the anchor).
+        #
+        # S7 F5b (GNN-integration round-2 fix): the arch-sync used to read
+        # ``.in_channels`` unconditionally — a dense-only attribute absent on
+        # ``GnnNet`` (``AttributeError``, fires on every graph session that
+        # resolves an EXISTING anchor, i.e. every run4 session after the very
+        # first). Representation-aware now: a cross-representation anchor
+        # (inf_model graph, resolved best_model.pt grid, or vice versa) is a
+        # genuine misconfiguration (namespace the per-lineage best_model_path,
+        # §RUN3-STEP0 / F5a) and dies LOUD via RepresentationMismatch — never a
+        # bare AttributeError. Within one representation: grid keeps the
+        # byte-identical in_channels/value_head_type compare; graph compares its
+        # OWN arch fields (GnnNet has no in_channels/value_head_type — the
+        # representation trunk's output width + the dist65 head's bin count are
+        # the graph-analogue "does this state_dict even fit" descriptors; a
+        # would-be net-scale variant, WP-C Cost 1, is explicitly out of scope
+        # for run4 and would correctly skip-log here, not silently misload).
         _inf_base = getattr(inf_model, "_orig_mod", inf_model)
-        _inf_vht = getattr(_inf_base, "value_head_type", "scalar")
-        _anc_vht = getattr(best_model, "value_head_type", "scalar")
-        if _inf_base.in_channels == best_model.in_channels and _inf_vht == _anc_vht:
-            _best_sd = best_model.state_dict()
-            # Anchor is always loaded without input_channels (see _try_load_anchor
-            # config_overrides). If _inf_base was built with input_channels, inject
-            # its own buffer so load_state_dict sees a consistent state_dict.
-            _inf_idx = getattr(_inf_base, "input_channel_index", None)
-            if "input_channel_index" not in _best_sd and _inf_idx is not None:
-                _best_sd = dict(_best_sd)
-                _best_sd["input_channel_index"] = _inf_idx.detach().clone()
-            _inf_base.load_state_dict(_best_sd)
-        else:
-            log.info(
-                "inf_model_anchor_arch_mismatch_skip_sync",
-                inf_in_channels=_inf_base.in_channels,
-                anchor_in_channels=best_model.in_channels,
-                inf_value_head_type=_inf_vht,
-                anchor_value_head_type=_anc_vht,
-                msg="inf_model starts from trainer.model (arch mismatch: sweep variant or head-type change)",
+        _inf_repr = model_representation(_inf_base)
+        _anc_repr = model_representation(best_model)
+        if _inf_repr != _anc_repr:
+            raise RepresentationMismatch(
+                f"resolve_anchor: inf_model is representation={_inf_repr!r} but the "
+                f"resolved anchor at {best_model_path} is representation={_anc_repr!r}. "
+                "Cannot sync weights across representations — this is almost always a "
+                "shared/un-namespaced eval_pipeline.gating.best_model_path picking up "
+                "another lineage's anchor (§RUN3-STEP0 law); namespace the path in the "
+                "launch variant instead of cross-loading."
             )
+        if _inf_repr == "graph":
+            _inf_out = _inf_base.representation.output_dim
+            _anc_out = best_model.representation.output_dim
+            _inf_bins = _inf_base.value_head.fc2_bins.out_features
+            _anc_bins = best_model.value_head.fc2_bins.out_features
+            if _inf_out == _anc_out and _inf_bins == _anc_bins:
+                _inf_base.load_state_dict(best_model.state_dict())
+            else:
+                log.info(
+                    "inf_model_anchor_arch_mismatch_skip_sync",
+                    representation="graph",
+                    inf_representation_output_dim=_inf_out,
+                    anchor_representation_output_dim=_anc_out,
+                    inf_n_value_bins=_inf_bins,
+                    anchor_n_value_bins=_anc_bins,
+                    msg="inf_model starts from trainer.model (graph net-scale mismatch)",
+                )
+        else:
+            _inf_vht = getattr(_inf_base, "value_head_type", "scalar")
+            _anc_vht = getattr(best_model, "value_head_type", "scalar")
+            if _inf_base.in_channels == best_model.in_channels and _inf_vht == _anc_vht:
+                _best_sd = best_model.state_dict()
+                # Anchor is always loaded without input_channels (see _try_load_anchor
+                # config_overrides). If _inf_base was built with input_channels, inject
+                # its own buffer so load_state_dict sees a consistent state_dict.
+                _inf_idx = getattr(_inf_base, "input_channel_index", None)
+                if "input_channel_index" not in _best_sd and _inf_idx is not None:
+                    _best_sd = dict(_best_sd)
+                    _best_sd["input_channel_index"] = _inf_idx.detach().clone()
+                _inf_base.load_state_dict(_best_sd)
+            else:
+                log.info(
+                    "inf_model_anchor_arch_mismatch_skip_sync",
+                    inf_in_channels=_inf_base.in_channels,
+                    anchor_in_channels=best_model.in_channels,
+                    inf_value_head_type=_inf_vht,
+                    anchor_value_head_type=_anc_vht,
+                    msg="inf_model starts from trainer.model (arch mismatch: sweep variant or head-type change)",
+                )
         log.info("best_model_loaded", path=str(best_model_path), step=best_model_step)
         # M2: warn if resumed trainer.model and loaded anchor diverge on step.
         # Either side may legitimately be ahead (anchor rollback, or training

@@ -31,6 +31,7 @@ from __future__ import annotations
 
 from typing import Any, Mapping, Optional
 
+import torch
 import torch.nn as nn
 
 from hexo_rl.model.gnn_net import GnnNet
@@ -50,6 +51,30 @@ class RepresentationMismatch(ValueError):
 
     def __init__(self, msg: str) -> None:
         super().__init__(f"RepresentationMismatch: {msg}")
+
+
+def model_representation(model: nn.Module) -> str:
+    """``"grid"`` | ``"graph"`` for a LIVE model instance (``HexTacToeNet`` vs
+    ``GnnNet``) — the ``isinstance``-based counterpart to ``spec.representation``.
+
+    S7 round-2 fix-class (F5b/F7/F8, ``S7_smoke_gate.md`` "Re-run after blocker
+    fixes"): every one of those findings was a dense-only ``.in_channels`` read
+    reached on a live ``GnnNet`` object (``AttributeError``, never a clean
+    ``RepresentationMismatch``). ``spec.representation`` (the string on the
+    resolved ``EncodingSpec``) is the right discriminant when a trustworthy spec
+    is already bound to the object in hand (``build_net`` itself, ``lifecycle.py``
+    ``cuda_warmup`` via ``_arch.spec``). It is NOT reliable where two
+    INDEPENDENTLY-loaded model objects must be compared (e.g. ``anchor.py``
+    resolving a possibly-stale/cross-lineage ``best_model.pt`` against the live
+    ``inf_model`` — the whole point of that code is defending against an anchor
+    that does NOT match the run's own declared config) or where a call site has
+    no spec in scope at all (``LocalInferenceEngine.infer_batch`` is one
+    exception: it always carries ``self.encoding_spec`` and should prefer that).
+    Unwraps ``torch.compile``'s ``_orig_mod`` wrapper, same convention as every
+    other call site in this codebase (``anchor.py``, ``inference_server.py``).
+    """
+    base = getattr(model, "_orig_mod", model)
+    return "graph" if isinstance(base, GnnNet) else "grid"
 
 
 def resolve_value_head_type(spec: Any, config: Optional[Mapping[str, Any]] = None) -> str:
@@ -81,6 +106,60 @@ def resolve_value_head_type(spec: Any, config: Optional[Mapping[str, Any]] = Non
         return "dist65"
     from hexo_rl.training.model_defaults import MODEL_HPARAM_DEFAULTS
     return str(MODEL_HPARAM_DEFAULTS["value_head_type"])
+
+
+def amp_dtype_for(representation: str, config: Optional[Mapping[str, Any]] = None) -> torch.dtype:
+    """Representation-aware autocast dtype — the ONE resolver both the
+    trainer's graph training step (``Trainer._train_on_graph_batch``) and the
+    self-play/eval graph inference seam (``InferenceServer.__init__``, which
+    ``LocalInferenceEngine``'s offline EVALFAIR/deploy-eval graph leg also
+    constructs internally) consult (S7 F9 fix,
+    ``reports/probes/gnn_integration/S7_smoke_gate.md`` "Re-run 3" / F9 —
+    "fp16 GNN forward is non-finite on production-scale self-play graphs").
+
+    Mechanism: ``_GINEConv``'s sum-aggregation (``agg.index_add_(0, dst,
+    msg)``, ``hexo_rl/bots/strix_v1_net.py``) accumulates one ReLU'd message
+    per incoming edge into each destination node. On production-scale
+    self-play graphs (ply-cap-deep games, ~500-node late-game positions —
+    far past the BC-corpus distribution every prior fp16 test leg lived
+    under) this sum tips select batches past fp16's 65504 ceiling
+    (diagnosed absmax 5.56e4 vs the 6.55e4 max on real run-3 data) ->
+    ``inf`` -> ``LayerNorm`` -> NaN through the value/embedding path. Same
+    ceiling explained the 26 live ``NonFiniteModelOutput`` self-play
+    inference hits in the same report.
+
+    GRAPH representation: **bfloat16, unconditionally** — not config-tunable
+    here. bf16 keeps fp32's 8-bit exponent (~1e38 range) at the same 2-byte
+    width, eliminating the overflow class outright; native on both the dev
+    4060 (Ada, sm_89) and the vast 5080 (Blackwell, sm_120) tensor cores, no
+    extra memory. A graph run's ``amp_dtype`` config key (present via the
+    shared ``configs/training.yaml`` root default ``amp_dtype: "fp16"``
+    unless a variant overrides it) is intentionally NOT consulted for this
+    branch: this repo already paid once for the "declared vs. silently
+    inherited" ambiguity class (F1 corpus-sha, F5a shared ``best_model.pt``
+    — a forgotten/stale yaml default silently reintroducing the exact bug a
+    fix just closed). Pinning it in code means F9 cannot come back via a
+    dropped or stale variant override. ``Trainer.scaler``'s
+    ``GradScaler(enabled=...)`` already keys off ``amp_dtype == float16``
+    (``trainer.py`` ``scaler_enabled``), so bf16 here correctly disables/
+    bypasses the scaler too — GradScaler is unnecessary (and, per torch
+    convention, should not be used) for bf16's full exponent range.
+
+    GRID (dense) representation: delegates to the existing ``amp_dtype``
+    config knob (default ``"fp16"``) — BYTE-IDENTICAL to pre-F9 behaviour.
+    The live run3 CNN lineage rides this branch untouched.
+    """
+    if representation == "graph":
+        return torch.bfloat16
+    raw = str((config or {}).get("amp_dtype", "fp16")).lower()
+    if raw in ("fp16", "float16", "half"):
+        return torch.float16
+    if raw in ("bf16", "bfloat16"):
+        return torch.bfloat16
+    raise ValueError(
+        f"amp_dtype must be 'fp16' or 'bf16', got {raw!r}. "
+        "Set in configs/training.yaml or a variant override."
+    )
 
 
 # GNN hparam config keys, with defaults mirroring GnnNet's own ctor defaults

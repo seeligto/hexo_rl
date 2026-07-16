@@ -202,7 +202,14 @@ def cuda_warmup(
         _t_warmup = time.time()
         _representation = getattr(spec, "representation", "grid")
         with torch.no_grad():
-            with torch.autocast(device_type="cuda"):
+            # S7 F9: warmup autocast dtype must match what the production
+            # loops actually run, else the warmup compiles the WRONG kernels
+            # (graph = bf16 per `amp_dtype_for`'s pin; grid keeps the
+            # pre-existing bare-autocast default, fp16 on CUDA —
+            # byte-identical to the pre-F9 grid behaviour).
+            from hexo_rl.model.build_net import amp_dtype_for as _amp_dtype_for
+            with torch.autocast(device_type="cuda",
+                                dtype=_amp_dtype_for(_representation, None)):
                 if _representation == "graph":
                     # S7 F2: GnnNet ships only `forward_batch` (no bare
                     # `forward()` — nn.Module's default raises

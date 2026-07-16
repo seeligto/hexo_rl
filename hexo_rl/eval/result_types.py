@@ -38,6 +38,10 @@ Conditional — Bradley-Terry ratings block:
   - ``ratings``: ``{player_name: {"rating": float, "ci": (lo, hi)}}``
   - ``elo_estimate``: current checkpoint's BT rating point estimate
 
+S7 F7 — graph-representation round skip:
+  - ``eval_opponents_skipped``: count of in-loop opponents skipped because
+    the candidate is representation="graph" (dense-only in-loop arena)
+
 Error path — set by ``step_coordinator._run_eval`` when the threaded
 evaluation raises:
   - ``error``: bool flag for crash-on-eval
@@ -128,6 +132,12 @@ class EvalRoundResult(TypedDict, total=False):
     # Bradley-Terry ratings block
     ratings: dict[str, dict[str, object]]
     elo_estimate: float
+
+    # S7 F7 — graph-representation round skip (gnn_integration_scope.md C5,
+    # OQ-8 open): count of in-loop opponents skipped this round because the
+    # candidate model is representation="graph" (the in-loop promotion-gate
+    # arena is dense-only by design). Absent on every dense (grid) round.
+    eval_opponents_skipped: int
 
     # Error path (step_coordinator._run_eval fallback)
     error: bool

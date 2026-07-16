@@ -87,44 +87,71 @@ def test_dist65_verbatim_import_identity():
 
 
 @pytest.mark.parametrize(
-    "fp16",
+    "autocast_enabled",
     [
         False,
         pytest.param(
             True,
             marks=pytest.mark.skipif(
                 not torch.cuda.is_available(),
-                reason="fp16 autocast is disabled off CUDA (Trainer.__init__ "
-                       "downgrades it silently) — the True leg needs a real "
-                       "CUDA device to exercise the run4 regime.",
+                reason="autocast is disabled off CUDA (Trainer.__init__ "
+                       "downgrades `fp16` to False silently) — the True leg "
+                       "needs a real CUDA device to exercise the run4 regime.",
             ),
         ),
     ],
 )
-def test_three_steps_fresh_init_finite_losses_and_step_advances(fp16, tmp_path):
+def test_three_steps_fresh_init_finite_losses_and_step_advances(autocast_enabled, tmp_path):
     """The OQ-7 part-3 train-leg: 3 steps on a fresh-init GnnNet, all losses
     + grads finite, `trainer.step` advances by exactly 3, the sampled wire
     is native-built (F7).
 
-    Parametrized over fp16 True/False (WP5b commit-B red-team BREAK-1): the
-    prior fp16=False-only coverage never exercised run4's actual launch
+    Parametrized over the `fp16` CONFIG KEY True/False (WP5b commit-B
+    red-team BREAK-1; renamed `autocast_enabled` here — S7 F9, see below):
+    the prior fp16=False-only coverage never exercised run4's actual launch
     regime (`fp16: True`, inherited from `configs/training.yaml`), which
     crashed `ragged_policy_ce`'s `segment_softmax` scatter on step 0
     (dtype mismatch: `torch.exp` autopromotes to fp32 under CUDA autocast,
     `denom` stayed fp16) — see `hexo_rl/training/losses.py::ragged_policy_ce`
     fp32-cast-at-entry fix. The True leg is the regression guard for that fix
-    and requires CUDA (fp16 is a silent no-op on CPU).
+    and requires CUDA (autocast is a silent no-op on CPU).
 
-    `grad_norm` is checked non-negative/non-NaN rather than strictly finite
-    under fp16: a transient `inf` from `GradScaler` detecting an overflow and
-    backing off the scale is expected, documented fp16 behaviour (repo
-    convention: `tests/test_trainer.py::test_train_step_returns_grad_norm`),
-    unrelated to the scatter-dtype-crash/log-underflow-NaN class BREAK-1
-    actually names — `loss`/`policy_loss`/`value_loss` (the values that class
-    corrupts) stay strictly-finite-checked for both legs."""
+    S7 F9 UPDATE: the `fp16` config key only controls whether MIXED
+    PRECISION is enabled at all (`Trainer.fp16`) — it no longer controls the
+    actual autocast DTYPE on this (graph) representation. `amp_dtype_for`
+    (`hexo_rl/model/build_net.py`) pins a GnnNet Trainer to **bf16**
+    unconditionally (fp16 GINE sum-aggregation overflowed on
+    production-scale self-play graphs, `S7_smoke_gate.md` "Re-run 3" F9;
+    `tests/model/test_gnn_net_f9_bf16.py` reproduces the mechanism directly).
+    Renamed the parametrize axis to `autocast_enabled` to stop implying the
+    True leg exercises fp16 — it exercises bf16 autocast now. Because bf16
+    needs no `GradScaler` overflow-backoff (`Trainer._scaler_enabled` is
+    False whenever `amp_dtype != float16`), `grad_norm` is asserted
+    STRICTLY finite on BOTH legs now — the old fp16-GradScaler-backoff
+    exception (a transient `inf` on an early step, repo convention:
+    `tests/test_trainer.py::test_train_step_returns_grad_norm`) no longer
+    applies to this representation, so grads are checked finite
+    unconditionally too (previously CPU/fp16=False-only)."""
     buf = _filled_buffer(48)
-    device = torch.device("cuda") if fp16 else torch.device("cpu")
-    trainer = Trainer(GnnNet(), _fast_config(fp16=fp16), checkpoint_dir=tmp_path, device=device)
+    device = torch.device("cuda") if autocast_enabled else torch.device("cpu")
+    trainer = Trainer(
+        GnnNet(), _fast_config(fp16=autocast_enabled), checkpoint_dir=tmp_path, device=device,
+    )
+
+    # S7 F9: a graph Trainer selects bf16 UNCONDITIONALLY (never fp16),
+    # regardless of the `fp16` config key or device — `amp_dtype_for`
+    # ignores config for representation="graph" by design (pinned fix, not
+    # tunable). `fp16`/`_scaler_enabled` track whether autocast/GradScaler
+    # actually engage, which DOES depend on the parametrized leg.
+    assert trainer.amp_dtype == torch.bfloat16, (
+        "a GnnNet Trainer must select bf16 autocast dtype unconditionally (S7 F9 pin)"
+    )
+    assert trainer.fp16 is autocast_enabled
+    assert trainer._scaler_enabled is False, (
+        "GradScaler must be disabled/bypassed for bf16 — no scaling needed "
+        "(torch convention; bf16's exponent range doesn't overflow the way "
+        "fp16's does)"
+    )
 
     assert trainer.step == 0
     for expected_step in (1, 2, 3):
@@ -132,14 +159,13 @@ def test_three_steps_fresh_init_finite_losses_and_step_advances(fp16, tmp_path):
         assert trainer.step == expected_step
         for key in ("loss", "policy_loss", "value_loss"):
             assert math.isfinite(loss_info[key]), f"step {expected_step}: {key}={loss_info[key]!r} not finite"
-        assert loss_info["grad_norm"] >= 0.0
-        assert not math.isnan(loss_info["grad_norm"]), (
-            f"step {expected_step}: grad_norm is NaN"
+        assert math.isfinite(loss_info["grad_norm"]), (
+            f"step {expected_step}: grad_norm={loss_info['grad_norm']!r} not finite — "
+            "bf16 (no GradScaler backoff) must not produce the old fp16 transient-inf class"
         )
-        if not fp16:
-            for p in trainer.model.parameters():
-                if p.grad is not None:
-                    assert torch.isfinite(p.grad).all(), "all grads must be finite"
+        for p in trainer.model.parameters():
+            if p.grad is not None:
+                assert torch.isfinite(p.grad).all(), "all grads must be finite"
 
     # checkpoint_interval=3 -> exactly one checkpoint written, at step 3.
     ckpts = sorted(tmp_path.glob("checkpoint_*.pt"))

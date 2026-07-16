@@ -413,54 +413,61 @@ def _play_pair(args: tuple) -> List[Dict[str, Any]]:
         ckpt_path, dev, declared_encoding=encoding
     )
     eng = _build_engine_for_model(model, encoding, dev)
-    arm = ArmSpec(
-        label=arm_label,
-        n_sims_override=n_sims_override,
-        solver_backup=solver_backup,
-        window_half=window_half,
-    )
+    try:
+        arm = ArmSpec(
+            label=arm_label,
+            n_sims_override=n_sims_override,
+            solver_backup=solver_backup,
+            window_half=window_half,
+        )
 
-    n_sims_effective = n_sims_override if n_sims_override is not None else int(knobs["n_sims_full"])
-    sims_overridden = n_sims_override is not None
+        n_sims_effective = n_sims_override if n_sims_override is not None else int(knobs["n_sims_full"])
+        sims_overridden = n_sims_override is not None
 
-    games_out = []
-    for head_as_p1 in (True, False):
-        head_bot = make_head_bot(eng, knobs, arm, legal_set, encoding)
-        opp_bot = SealBotBot(time_limit=600.0, max_depth=depth)
+        games_out = []
+        for head_as_p1 in (True, False):
+            head_bot = make_head_bot(eng, knobs, arm, legal_set, encoding)
+            opp_bot = SealBotBot(time_limit=600.0, max_depth=depth)
 
-        if head_as_p1:
-            g = play_from_opening(head_bot, opp_bot, HEAD, OPP, encoding, radius, opening_moves)
-        else:
-            g = play_from_opening(opp_bot, head_bot, OPP, HEAD, encoding, radius, opening_moves)
+            if head_as_p1:
+                g = play_from_opening(head_bot, opp_bot, HEAD, OPP, encoding, radius, opening_moves)
+            else:
+                g = play_from_opening(opp_bot, head_bot, OPP, HEAD, encoding, radius, opening_moves)
 
-        sc = _solver_counters(head_bot)
-        rec = {
-            "ckpt_step": ckpt_step,
-            "ckpt_sha": ckpt_sha_val,
-            "radius": radius,
-            "book_id": book_id,
-            "arm": arm_label,
-            "opening_idx": opening_idx,
-            "head_as_p1": head_as_p1,
-            "p1": g["p1"], "p2": g["p2"],
-            "winner": g["winner"], "plies": g["plies"],
-            "moves": g["moves"],
-            "n_sims_effective": n_sims_effective,
-            "n_sims_from_ckpt": int(knobs["n_sims_full"]),
-            "sims_overridden": sims_overridden,
-            "solver_backup": solver_backup,
-            "solver_fired_win": sc["fired_win"],
-            "solver_fired_loss": sc["fired_loss"],
-            "solver_skipped_offwindow": sc["skipped_offwindow"],
-            "solver_probes": sc["probes"],
-            "head_move_wall_s": g["head_move_wall_s"],
-            "sealbot_search_wall_s": g["sealbot_search_wall_s"],
-            "sealbot_search_max_s": g["sealbot_search_max_s"],
-            "head_fired": g["head_fired"],
-            "censored": g["censored"],
-        }
-        games_out.append(rec)
-    return games_out
+            sc = _solver_counters(head_bot)
+            rec = {
+                "ckpt_step": ckpt_step,
+                "ckpt_sha": ckpt_sha_val,
+                "radius": radius,
+                "book_id": book_id,
+                "arm": arm_label,
+                "opening_idx": opening_idx,
+                "head_as_p1": head_as_p1,
+                "p1": g["p1"], "p2": g["p2"],
+                "winner": g["winner"], "plies": g["plies"],
+                "moves": g["moves"],
+                "n_sims_effective": n_sims_effective,
+                "n_sims_from_ckpt": int(knobs["n_sims_full"]),
+                "sims_overridden": sims_overridden,
+                "solver_backup": solver_backup,
+                "solver_fired_win": sc["fired_win"],
+                "solver_fired_loss": sc["fired_loss"],
+                "solver_skipped_offwindow": sc["skipped_offwindow"],
+                "solver_probes": sc["probes"],
+                "head_move_wall_s": g["head_move_wall_s"],
+                "sealbot_search_wall_s": g["sealbot_search_wall_s"],
+                "sealbot_search_max_s": g["sealbot_search_max_s"],
+                "head_fired": g["head_fired"],
+                "censored": g["censored"],
+            }
+            games_out.append(rec)
+        return games_out
+    finally:
+        # S7 round-2 review S-2: deterministic graph-InferenceServer thread
+        # teardown for this pair's engine — don't rely on GC/`__del__` timing
+        # (fragile once a future refactor holds engines in a list or forms a
+        # cycle). No-op for a dense engine (LocalInferenceEngine.close()).
+        eng.close()
 
 
 # ── main run_arm ──────────────────────────────────────────────────────────────
